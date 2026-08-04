@@ -287,7 +287,14 @@ pub(crate) fn thread_history_messages(
             protocol::types::ChatMessage {
                 role: role.to_string(),
                 content: message.content.clone(),
-                tool_calls: message.tool_calls.clone(),
+                // Decoded here rather than passed through: see
+                // `ToolCallRecord`. A `Value` on the bincode wire encodes and
+                // then cannot be decoded, and this is the other frame that
+                // carries a transcript.
+                tool_calls: message
+                    .tool_calls
+                    .as_ref()
+                    .map(rustyclaw_core::gateway::ToolCallRecord::from_stored_json),
                 tool_call_id: message.tool_call_id.clone(),
                 media: None,
             }

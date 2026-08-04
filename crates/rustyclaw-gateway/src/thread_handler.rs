@@ -314,7 +314,12 @@ pub(crate) async fn handle_thread_history(
                     ChatMessage {
                         role: role.to_string(),
                         content: m.content.clone(),
-                        tool_calls: m.tool_calls.clone(),
+                        // Threads persist as JSON and can hold a bare `Value`;
+                        // the bincode wire cannot. Decode here, at the boundary.
+                        tool_calls: m
+                            .tool_calls
+                            .as_ref()
+                            .map(rustyclaw_core::gateway::ToolCallRecord::from_stored_json),
                         tool_call_id: m.tool_call_id.clone(),
                         media: None,
                     }

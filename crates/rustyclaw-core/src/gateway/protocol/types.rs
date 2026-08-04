@@ -78,6 +78,67 @@ fn format_size(bytes: usize) -> String {
     }
 }
 
+/// A tool call recorded in a transcript.
+///
+/// Deliberately native rather than a `serde_json::Value`. Frames are encoded
+/// with bincode, which is not self-describing, and `Value` decodes through
+/// `deserialize_any` — so a transcript carrying one encodes on the gateway and
+/// then fails to decode on the client, with the thread simply never arriving.
+/// Threads that have run a tool are exactly the ones worth opening, so the
+/// failure lands on the transcripts that matter and spares the trivial ones.
+///
+/// Mirrors the live [`ServerPayload::ToolCall`] frame, which has always used
+/// these three fields: a transcript and the stream that produced it now
+/// describe a call the same way.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ToolCallRecord {
+    /// Provider-assigned id, used to pair a call with its result.
+    pub id: String,
+    /// Tool name as the model asked for it.
+    pub name: String,
+    /// Arguments as JSON text, opaque to the protocol — the shape is the
+    /// tool's business, and carrying it as text keeps it decodable.
+    pub arguments: String,
+}
+
+impl ToolCallRecord {
+    /// Decode the stored `[{id, name, arguments}, …]` JSON into native records.
+    ///
+    /// Threads persist as JSON, which is self-describing and can hold a bare
+    /// `Value` quite happily; the wire cannot. This is that boundary. Anything
+    /// unrecognised degrades to empty strings rather than dropping the call:
+    /// a tool call rendered with a missing name still tells the user their
+    /// turn ran a tool, where a vanished one does not.
+    pub fn from_stored_json(value: &serde_json::Value) -> Vec<Self> {
+        let Some(items) = value.as_array() else {
+            return Vec::new();
+        };
+        items
+            .iter()
+            .map(|tc| Self {
+                id: tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                name: tc
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                // Already-text arguments stay as they are; anything else is
+                // re-rendered. Going through `to_string` blindly would wrap a
+                // string in a second set of quotes every trip.
+                arguments: match tc.get("arguments") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                },
+            })
+            .collect()
+    }
+}
+
 /// A single message in a chat conversation.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -86,7 +147,7 @@ pub struct ChatMessage {
     pub content: String,
     /// Tool calls requested by the assistant.
     #[serde(default)]
-    pub tool_calls: Option<serde_json::Value>,
+    pub tool_calls: Option<Vec<ToolCallRecord>>,
     /// Tool call ID this message is responding to.
     #[serde(default)]
     pub tool_call_id: Option<String>,

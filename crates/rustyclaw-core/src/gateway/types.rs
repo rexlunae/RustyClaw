@@ -7,7 +7,7 @@ use tracing::warn;
 use std::path::PathBuf;
 
 pub use crate::gateway::protocol::types::{
-    ChatMessage, MediaRef, ModelResponse, ParsedToolCall, ToolCallResult,
+    ChatMessage, MediaRef, ModelResponse, ParsedToolCall, ToolCallRecord, ToolCallResult,
 };
 
 #[derive(Debug, Clone)]

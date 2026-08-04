@@ -199,27 +199,11 @@ impl From<&rustyclaw_core::gateway::protocol::types::ChatMessage> for DisplayMes
         let mut data = Self::new(role, msg.content.clone());
         // Surface tool calls embedded in an assistant turn so the
         // history view shows the same activity that was visible live.
-        // We accept the normalized form `[{id, name, arguments}, ...]`
-        // emitted by the gateway when persisting tool rounds.
+        // The gateway decodes its stored JSON into these records before
+        // sending, so the shape is fixed rather than guessed at here.
         if let Some(tcs) = &msg.tool_calls {
-            if let Some(arr) = tcs.as_array() {
-                for tc in arr {
-                    let id = tc
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let name = tc
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let arguments = tc
-                        .get("arguments")
-                        .map(|v| v.to_string())
-                        .unwrap_or_default();
-                    data.add_tool_call(id, name, arguments);
-                }
+            for tc in tcs {
+                data.add_tool_call(tc.id.clone(), tc.name.clone(), tc.arguments.clone());
             }
         }
         data

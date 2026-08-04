@@ -1471,23 +1471,12 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
     };
 
     let mut tool_calls: Vec<ToolCallInfo> = Vec::new();
-    if let Some(tcs) = message.tool_calls.as_ref().and_then(|v| v.as_array()) {
+    if let Some(tcs) = message.tool_calls.as_ref() {
         for tc in tcs {
             tool_calls.push(ToolCallInfo {
-                id: tc
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                name: tc
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                arguments: tc
-                    .get("arguments")
-                    .map(|v| v.to_string())
-                    .unwrap_or_default(),
+                id: tc.id.clone(),
+                name: tc.name.clone(),
+                arguments: tc.arguments.clone(),
                 result: None,
                 is_error: false,
                 collapsed: true,
