@@ -220,14 +220,6 @@ pub(crate) async fn handle_thread_switch(
         // foreground (where the next typed message goes) stays put. The old
         // behaviour was an error frame, which left rows with hundreds of
         // messages that could never be opened.
-        send_info(
-            writer,
-            &format!(
-                "'{label}' is a background session — showing its transcript read-only. \
-                 New messages still go to your active thread."
-            ),
-        )
-        .await?;
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadSwitched,
             payload: ServerPayload::ThreadSwitched {
@@ -244,6 +236,24 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
+        // The client treats `ThreadSwitched` as authoritative: it repoints
+        // its foreground at the session pseudo-id and gates every streaming
+        // frame on that pointer, so leaving it there would silently drop the
+        // reply to whatever the user types next. Re-assert the manager's
+        // (unchanged) foreground so the pointer snaps back while the
+        // transcript stays on screen.
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+        // The note goes last: each of the frames above replaces the visible
+        // message list, so anything sent earlier is wiped before it can be
+        // read. Sent here it lands on top of the transcript it explains.
+        send_info(
+            writer,
+            &format!(
+                "'{label}' is a background session — showing its transcript read-only. \
+                 New messages still go to your active thread."
+            ),
+        )
+        .await?;
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
@@ -850,6 +860,74 @@ mod tests {
                 .iter()
                 .any(|f| format!("{:?}", f.payload).contains("Compacting")),
             "the busy thread must not be compacted mid-turn"
+        );
+    }
+
+    /// Opening a sub-agent/cron session row is a read-only preview: the
+    /// transcript is served, but the manager's foreground — where the next
+    /// typed message goes — must not move, and the client's view of it must
+    /// not be left pointing at the pseudo-id. The client repoints on
+    /// `ThreadSwitched` and gates every streaming frame on that pointer, so
+    /// the true foreground is re-asserted after the transcript; and every
+    /// frame before the note replaces the visible message list, so the note
+    /// goes last or it is wiped unread.
+    #[tokio::test]
+    async fn a_session_row_is_a_preview_that_leaves_the_foreground_alone() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let threads_path = tmp.path().join("threads.json");
+
+        let mut manager = ThreadManager::new();
+        let chat = manager.create_chat("chat");
+        manager.switch_foreground(chat);
+        let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let shared_model_ctx: SharedModelCtx = Arc::new(tokio::sync::RwLock::new(None));
+
+        let key = {
+            let mut mgr = rustyclaw_core::sessions::session_manager().lock().unwrap();
+            let key = mgr.spawn_subagent("main", "preview task", Some("previewer".into()), None);
+            let session = mgr.get_mut(&key).unwrap();
+            session.add_message("assistant", "background progress");
+            key
+        };
+        let pseudo_id = crate::thread_updates::session_row_id(&key);
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_switch(
+            &mut writer,
+            &thread_mgr,
+            &task_mgr,
+            &threads_path,
+            &shared_model_ctx,
+            &reqwest::Client::new(),
+            pseudo_id,
+            &[],
+        )
+        .await
+        .expect("viewing a session row should succeed");
+
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert_eq!(
+            thread_mgr.lock().await.foreground_id(),
+            Some(chat),
+            "a read-only preview must not move where the next message goes"
+        );
+
+        let kinds: Vec<ServerFrameType> = writer.frames.iter().map(|f| f.frame_type).collect();
+        let pos = |t: ServerFrameType| kinds.iter().position(|k| *k == t);
+        let switched = pos(ServerFrameType::ThreadSwitched).expect("transcript view announced");
+        let transcript = pos(ServerFrameType::ThreadMessages).expect("transcript sent");
+        let reassert = pos(ServerFrameType::ThreadsUpdate)
+            .expect("the true foreground must be re-asserted after the pseudo-switch");
+        let note = pos(ServerFrameType::Info).expect("the read-only note is sent");
+        assert!(
+            switched < transcript && transcript < reassert && reassert < note,
+            "order: switch, transcript, foreground re-assert, note; got {kinds:?}"
+        );
+        assert_eq!(
+            note,
+            kinds.len() - 1,
+            "the note is the last frame so nothing wipes it; got {kinds:?}"
         );
     }
 }
