@@ -669,7 +669,14 @@ pub(crate) async fn handle_connection(
         Box::new(rustyclaw_core::gateway::QueuedWriter::new(out_tx.clone()));
 
     let reader_cancel = cancel.clone();
-    let reader_thread_mgr = agent_session.thread_mgr.clone();
+    // Deliberately a cell rather than a handle: switching agents replaces the
+    // session wholesale, thread store included, and the reader answers history
+    // for the life of the connection. Keeping the store it saw at connect
+    // would answer from the previous agent after a switch — and ids restart
+    // low in each store, so the likely result is not an empty transcript but
+    // another agent's conversation under a plausible-looking id.
+    let thread_mgr_cell = Arc::new(std::sync::RwLock::new(agent_session.thread_mgr.clone()));
+    let reader_thread_mgr = thread_mgr_cell.clone();
     let reader_out_tx = out_tx.clone();
     let reader_handle = tokio::spawn(async move {
         loop {
@@ -774,6 +781,12 @@ pub(crate) async fn handle_connection(
                             if frame.frame_type == ClientFrameType::ThreadHistoryRequest {
                                 if let ClientPayload::ThreadHistoryRequest { thread_id } = frame.payload {
                                     let mut history_writer = rustyclaw_core::gateway::QueuedWriter::new(reader_out_tx.clone());
+                                    // Read per request, so a switch that
+                                    // happened since the last one is honoured.
+                                    let thread_mgr_now = reader_thread_mgr
+                                        .read()
+                                        .expect("thread manager cell poisoned")
+                                        .clone();
                                     // Bounded, because the thread manager lock
                                     // is held across turn work and this task
                                     // also serves Stop — blocking here to wait
@@ -785,7 +798,7 @@ pub(crate) async fn handle_connection(
                                         std::time::Duration::from_secs(5),
                                         thread_handler::handle_thread_history(
                                             &mut history_writer,
-                                            &reader_thread_mgr,
+                                            &thread_mgr_now,
                                             thread_id,
                                         ),
                                     )
@@ -1520,6 +1533,14 @@ pub(crate) async fn handle_connection(
                                     // The thread manager was replaced — follow
                                     // the new one's sidebar events.
                                     thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
+                                    // And point the reader at it too. It
+                                    // answers history without coming through
+                                    // here, so a store left unpublished is one
+                                    // it would keep answering from.
+                                    *thread_mgr_cell
+                                        .write()
+                                        .expect("thread manager cell poisoned") =
+                                        agent_session.thread_mgr.clone();
                                 }
                             }
                             ClientPayload::AgentCreate { name, agent_id, description } => {
