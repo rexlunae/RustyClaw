@@ -893,6 +893,26 @@ use crate::gateway::{
 };
 
 impl GatewayCommand {
+    /// The variant's name, carrying none of its fields.
+    ///
+    /// Deliberately not `{:?}`. Commands carry TOTP codes, vault passwords,
+    /// credential answers and secret values, so debug-formatting one into a
+    /// log writes the secret to disk. This keeps only the leading identifier,
+    /// which is all a diagnostic needs.
+    ///
+    /// Taken from the debug rendering rather than matched variant by variant:
+    /// there are 77 of them, and a match would be one `_ => "Unknown"` away
+    /// from silently mislabelling whichever command was added last.
+    pub fn name(&self) -> String {
+        // `Debug` renders `Name { .. }` for a struct variant, `Name(..)` for a
+        // tuple variant and bare `Name` for a unit one, so the identifier
+        // always ends at the first space, brace or paren.
+        let mut rendered = format!("{self:?}");
+        let end = rendered.find([' ', '{', '(']).unwrap_or(rendered.len());
+        rendered.truncate(end);
+        rendered
+    }
+
     /// Convert this command into the wire frame the gateway expects.
     pub fn into_frame(self) -> ClientFrame {
         match self {
@@ -2001,4 +2021,43 @@ pub struct AgentInfoDto {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+}
+
+#[cfg(test)]
+mod command_name_tests {
+    use super::*;
+
+    /// Naming a command must never carry its payload.
+    ///
+    /// The whole reason `name` exists rather than `{:?}` is that these
+    /// commands hold TOTP codes, vault passwords and credential answers, and
+    /// they are named on a failure path that writes to the log. A regression
+    /// here writes secrets to disk, so it is worth a test rather than a
+    /// comment.
+    #[test]
+    fn naming_a_command_never_carries_its_secrets() {
+        let auth = GatewayCommand::Auth {
+            code: "867530".to_string(),
+        };
+        assert_eq!(auth.name(), "Auth");
+        assert!(
+            !auth.name().contains("867530"),
+            "the TOTP code must not appear in the name"
+        );
+
+        let unlock = GatewayCommand::VaultUnlock {
+            password: "correct-horse-battery-staple".to_string(),
+        };
+        assert_eq!(unlock.name(), "VaultUnlock");
+        assert!(
+            !unlock.name().contains("horse"),
+            "the vault password must not appear in the name"
+        );
+    }
+
+    /// A unit variant has no delimiter to stop at, so it is its own name.
+    #[test]
+    fn a_unit_command_names_itself() {
+        assert_eq!(GatewayCommand::ThreadList.name(), "ThreadList");
+    }
 }

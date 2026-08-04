@@ -368,7 +368,7 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let _ = client.send(GatewayCommand::EngineList).await;
+                client.send_or_log(GatewayCommand::EngineList).await;
                 if let Some(engine) = selected {
                     let _ = client
                         .send(GatewayCommand::EngineModelList { engine })
@@ -413,7 +413,7 @@ pub fn App() -> Element {
         if let Some(client) = gw {
             spawn(async move {
                 if cron {
-                    let _ = client.send(GatewayCommand::CronList).await;
+                    client.send_or_log(GatewayCommand::CronList).await;
                 }
                 if memory {
                     let _ = client
@@ -424,13 +424,13 @@ pub fn App() -> Element {
                         .await;
                 }
                 if mcp {
-                    let _ = client.send(GatewayCommand::McpList).await;
+                    client.send_or_log(GatewayCommand::McpList).await;
                 }
                 if channels {
-                    let _ = client.send(GatewayCommand::ChannelStatus).await;
+                    client.send_or_log(GatewayCommand::ChannelStatus).await;
                 }
                 if tools {
-                    let _ = client.send(GatewayCommand::ToolConfigList).await;
+                    client.send_or_log(GatewayCommand::ToolConfigList).await;
                 }
             });
         }
@@ -998,7 +998,9 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let _ = client.send(GatewayCommand::ThreadClose { thread_id }).await;
+                client
+                    .send_or_log(GatewayCommand::ThreadClose { thread_id })
+                    .await;
             });
         }
     };
@@ -1015,7 +1017,9 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
+                client
+                    .send_or_log(GatewayCommand::Cancel { thread_id })
+                    .await;
             });
         }
     };
@@ -1102,7 +1106,7 @@ pub fn App() -> Element {
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
                     spawn(async move {
-                        let _ = client.send(GatewayCommand::MessengerConfig).await;
+                        client.send_or_log(GatewayCommand::MessengerConfig).await;
                     });
                 }
             } else if event.id == ids.secrets {
@@ -1110,8 +1114,8 @@ pub fn App() -> Element {
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
                     spawn(async move {
-                        let _ = client.send(GatewayCommand::SecretsList).await;
-                        let _ = client.send(GatewayCommand::SecretsHasTotp).await;
+                        client.send_or_log(GatewayCommand::SecretsList).await;
+                        client.send_or_log(GatewayCommand::SecretsHasTotp).await;
                     });
                 }
             } else if event.id == ids.pair {
@@ -1134,9 +1138,9 @@ pub fn App() -> Element {
                     if let Some(client) = gw {
                         spawn(async move {
                             if need_host {
-                                let _ = client.send(GatewayCommand::HostInfoRequest).await;
+                                client.send_or_log(GatewayCommand::HostInfoRequest).await;
                             }
-                            let _ = client.send(GatewayCommand::LoadStatusRequest).await;
+                            client.send_or_log(GatewayCommand::LoadStatusRequest).await;
                         });
                     }
                 }
@@ -1148,7 +1152,7 @@ pub fn App() -> Element {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::ServiceList).await;
+                            client.send_or_log(GatewayCommand::ServiceList).await;
                         });
                     }
                 }
@@ -1162,9 +1166,9 @@ pub fn App() -> Element {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::EngineList).await;
+                            client.send_or_log(GatewayCommand::EngineList).await;
                             if need_host {
-                                let _ = client.send(GatewayCommand::HostInfoRequest).await;
+                                client.send_or_log(GatewayCommand::HostInfoRequest).await;
                             }
                         });
                     }
@@ -1176,7 +1180,7 @@ pub fn App() -> Element {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::CronList).await;
+                            client.send_or_log(GatewayCommand::CronList).await;
                         });
                     }
                 }
@@ -1203,7 +1207,7 @@ pub fn App() -> Element {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::McpList).await;
+                            client.send_or_log(GatewayCommand::McpList).await;
                         });
                     }
                 }
@@ -1214,7 +1218,7 @@ pub fn App() -> Element {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::ChannelStatus).await;
+                            client.send_or_log(GatewayCommand::ChannelStatus).await;
                         });
                     }
                 }
@@ -1225,7 +1229,7 @@ pub fn App() -> Element {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::ToolConfigList).await;
+                            client.send_or_log(GatewayCommand::ToolConfigList).await;
                         });
                     }
                 }
@@ -1385,8 +1389,8 @@ pub fn App() -> Element {
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
                                 spawn(async move {
-                                    let _ = client.send(GatewayCommand::SecretsList).await;
-                        let _ = client.send(GatewayCommand::SecretsHasTotp).await;
+                                    client.send_or_log(GatewayCommand::SecretsList).await;
+                        client.send_or_log(GatewayCommand::SecretsHasTotp).await;
                                 });
                             }
                         },
@@ -1454,8 +1458,8 @@ pub fn App() -> Element {
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
                                 spawn(async move {
-                                    let _ = client.send(GatewayCommand::SecretsList).await;
-                        let _ = client.send(GatewayCommand::SecretsHasTotp).await;
+                                    client.send_or_log(GatewayCommand::SecretsList).await;
+                        client.send_or_log(GatewayCommand::SecretsHasTotp).await;
                                 });
                             }
                         },
@@ -1466,9 +1470,9 @@ pub fn App() -> Element {
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
                                 spawn(async move {
-                                    let _ = client.send(GatewayCommand::EngineList).await;
+                                    client.send_or_log(GatewayCommand::EngineList).await;
                                     if need_host {
-                                        let _ = client.send(GatewayCommand::HostInfoRequest).await;
+                                        client.send_or_log(GatewayCommand::HostInfoRequest).await;
                                     }
                                 });
                             }
