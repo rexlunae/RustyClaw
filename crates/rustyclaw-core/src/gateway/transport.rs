@@ -138,6 +138,90 @@ pub trait TransportWriter: Send + Sync {
     async fn close(&mut self) -> Result<()>;
 }
 
+/// A write handed to the connection's writer task.
+pub enum Outbound {
+    /// A frame to write on a logical stream.
+    Frame {
+        /// Logical stream the frame belongs to.
+        stream_id: u64,
+        /// The frame to write.
+        frame: Box<ServerFrame>,
+    },
+    /// Close the transport, once everything queued ahead of this has gone out.
+    Close,
+}
+
+/// Writer that hands frames to the connection's writer task instead of
+/// touching the transport.
+///
+/// The transport permits one writer, which historically meant the connection
+/// loop owned it and everything wanting to answer the client had to reach that
+/// loop first. Read-only queries then waited on whatever the loop was doing —
+/// a model call, a tool, a lock — and a client asking for a thread's history
+/// could sit unanswered indefinitely, showing an empty transcript.
+///
+/// Cloning this hands out another mouth for the same queue, so a task that
+/// needs to answer without the loop can. Serialisation moves to the queue,
+/// which is what keeps a reply from interleaving into a streaming turn's
+/// frames: order is the order things were enqueued, and there is still exactly
+/// one task writing.
+#[derive(Clone)]
+pub struct QueuedWriter {
+    tx: tokio::sync::mpsc::Sender<Outbound>,
+}
+
+impl QueuedWriter {
+    /// Build a writer that enqueues onto the connection's writer task.
+    pub fn new(tx: tokio::sync::mpsc::Sender<Outbound>) -> Self {
+        Self { tx }
+    }
+}
+
+#[async_trait]
+impl TransportWriter for QueuedWriter {
+    async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
+        self.tx
+            .send(Outbound::Frame {
+                stream_id,
+                frame: Box::new(frame.clone()),
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("connection writer has gone away"))
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        // Through the queue rather than straight to the transport, so frames
+        // already enqueued still go out ahead of the close.
+        self.tx
+            .send(Outbound::Close)
+            .await
+            .map_err(|_| anyhow::anyhow!("connection writer has gone away"))
+    }
+}
+
+/// Drain `rx` onto `writer` until the queue closes or the transport fails.
+///
+/// The single point where frames meet the transport: every producer holds a
+/// [`QueuedWriter`], so this is what makes concurrent senders safe.
+pub async fn drive_writer(
+    mut writer: Box<dyn TransportWriter>,
+    mut rx: tokio::sync::mpsc::Receiver<Outbound>,
+) {
+    while let Some(outbound) = rx.recv().await {
+        match outbound {
+            Outbound::Frame { stream_id, frame } => {
+                if writer.send_on_stream(stream_id, &frame).await.is_err() {
+                    break;
+                }
+            }
+            Outbound::Close => {
+                let _ = writer.close().await;
+                break;
+            }
+        }
+    }
+}
+
 /// Writer adapter that pins all writes to one logical stream.
 pub struct ScopedTransportWriter<'a> {
     inner: &'a mut dyn TransportWriter,
@@ -183,6 +267,7 @@ pub trait TransportAcceptor: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::{ServerFrameType, ServerPayload};
 
     #[test]
     fn test_transport_type_display() {
@@ -200,5 +285,107 @@ mod tests {
         };
         assert_eq!(info.username.as_deref(), Some("test"));
         assert_eq!(info.transport_type, TransportType::Ssh);
+    }
+
+    /// Records what actually reached the transport, in order.
+    struct RecordingWriter {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl TransportWriter for RecordingWriter {
+        async fn send_on_stream(&mut self, stream_id: u64, _frame: &ServerFrame) -> Result<()> {
+            self.seen
+                .lock()
+                .expect("recorder poisoned")
+                .push(format!("frame:{stream_id}"));
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            self.seen
+                .lock()
+                .expect("recorder poisoned")
+                .push("close".to_string());
+            Ok(())
+        }
+    }
+
+    fn empty_frame() -> ServerFrame {
+        ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Empty,
+        }
+    }
+
+    /// Concurrent producers reach the transport in the order they enqueued.
+    ///
+    /// This is what lets a task other than the connection loop answer the
+    /// client: the transport still has exactly one writer, so a reply cannot
+    /// land in the middle of another task's frame.
+    #[tokio::test]
+    async fn queued_writes_reach_the_transport_in_enqueue_order() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx, rx) = tokio::sync::mpsc::channel::<Outbound>(64);
+        let driver = tokio::spawn(drive_writer(
+            Box::new(RecordingWriter { seen: seen.clone() }),
+            rx,
+        ));
+
+        // Two independent handles, as the connection loop and the reader task
+        // hold — interleaved deliberately.
+        let mut loop_writer = QueuedWriter::new(tx.clone());
+        let mut reader_writer = QueuedWriter::new(tx.clone());
+        for stream_id in 0..4u64 {
+            let writer: &mut dyn TransportWriter = if stream_id % 2 == 0 {
+                &mut loop_writer
+            } else {
+                &mut reader_writer
+            };
+            writer
+                .send_on_stream(stream_id, &empty_frame())
+                .await
+                .expect("queued send should succeed");
+        }
+
+        drop(loop_writer);
+        drop(reader_writer);
+        drop(tx);
+        driver.await.expect("writer task should finish");
+
+        let seen = seen.lock().expect("recorder poisoned").clone();
+        assert_eq!(
+            seen,
+            vec!["frame:0", "frame:1", "frame:2", "frame:3"],
+            "frames must reach the transport in the order they were enqueued"
+        );
+    }
+
+    /// `close` travels the queue, so frames enqueued before it still go out.
+    ///
+    /// Closing the transport directly would cut off whatever was already
+    /// waiting — including a connection's final close-out.
+    #[tokio::test]
+    async fn close_is_ordered_behind_pending_frames() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx, rx) = tokio::sync::mpsc::channel::<Outbound>(64);
+        let driver = tokio::spawn(drive_writer(
+            Box::new(RecordingWriter { seen: seen.clone() }),
+            rx,
+        ));
+
+        let mut writer = QueuedWriter::new(tx.clone());
+        writer
+            .send_on_stream(7, &empty_frame())
+            .await
+            .expect("queued send should succeed");
+        writer.close().await.expect("queued close should succeed");
+
+        drop(writer);
+        drop(tx);
+        driver.await.expect("writer task should finish");
+
+        let seen = seen.lock().expect("recorder poisoned").clone();
+        assert_eq!(seen, vec!["frame:7", "close"]);
     }
 }

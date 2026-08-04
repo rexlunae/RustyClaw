@@ -39,8 +39,8 @@ pub use types::{
 
 // Re-export transport types
 pub use transport::{
-    PeerInfo, ScopedTransportWriter, Transport, TransportAcceptor, TransportReader, TransportType,
-    TransportWriter,
+    Outbound, PeerInfo, QueuedWriter, ScopedTransportWriter, Transport, TransportAcceptor,
+    TransportReader, TransportType, TransportWriter, drive_writer,
 };
 
 // Re-export protocol server helpers used by the gateway server crate and by

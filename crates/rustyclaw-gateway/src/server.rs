@@ -651,7 +651,33 @@ pub(crate) async fn handle_connection(
         }
     }
 
+    // ── Outbound queue ─────────────────────────────────────────────
+    //
+    // The transport takes one writer, and the loop below owned it — so
+    // answering the client at all meant reaching that loop first, and a
+    // read-only query waited on whatever it was doing. A client asking for a
+    // thread's history could go unanswered indefinitely and be shown an empty
+    // transcript for a thread with hundreds of messages.
+    //
+    // With the transport moved into a task of its own, a handle on this queue
+    // is enough to answer, and the reader below can serve such queries
+    // directly. One task still writes, so frames cannot interleave; the queue
+    // fixes their order.
+    let (out_tx, out_rx) = tokio::sync::mpsc::channel::<rustyclaw_core::gateway::Outbound>(256);
+    let writer_handle = tokio::spawn(rustyclaw_core::gateway::drive_writer(writer, out_rx));
+    let mut writer: Box<dyn transport::TransportWriter> =
+        Box::new(rustyclaw_core::gateway::QueuedWriter::new(out_tx.clone()));
+
     let reader_cancel = cancel.clone();
+    // Deliberately a cell rather than a handle: switching agents replaces the
+    // session wholesale, thread store included, and the reader answers history
+    // for the life of the connection. Keeping the store it saw at connect
+    // would answer from the previous agent after a switch — and ids restart
+    // low in each store, so the likely result is not an empty transcript but
+    // another agent's conversation under a plausible-looking id.
+    let thread_mgr_cell = Arc::new(std::sync::RwLock::new(agent_session.thread_mgr.clone()));
+    let reader_thread_mgr = thread_mgr_cell.clone();
+    let reader_out_tx = out_tx.clone();
     let reader_handle = tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -742,6 +768,83 @@ pub(crate) async fn handle_connection(
                                 if let ClientPayload::DomQueryResponse { id, result, is_error } = frame.payload {
                                     if !reader_dom_queries.deliver(&id, (result, is_error)) {
                                         trace!(%id, "DOM result for a call nobody is waiting on");
+                                    }
+                                    continue;
+                                }
+                            }
+                            // Thread history, answered here rather than queued
+                            // behind whatever the main loop is awaiting. It is
+                            // a read-only query, and going unanswered is not a
+                            // delay the user sees as a delay: the client shows
+                            // an empty transcript for a thread whose sidebar
+                            // row says it has hundreds of messages.
+                            if frame.frame_type == ClientFrameType::ThreadHistoryRequest {
+                                if let ClientPayload::ThreadHistoryRequest { thread_id } = frame.payload {
+                                    let mut history_writer = rustyclaw_core::gateway::QueuedWriter::new(reader_out_tx.clone());
+                                    // Read per request, so a switch that
+                                    // happened since the last one is honoured.
+                                    let thread_mgr_now = reader_thread_mgr
+                                        .read()
+                                        .expect("thread manager cell poisoned")
+                                        .clone();
+                                    // Bounded, because the thread manager lock
+                                    // is held across turn work and this task
+                                    // also serves Stop — blocking here to wait
+                                    // out a turn would cost the user the one
+                                    // control that stops it. Answering "could
+                                    // not read it" beats going quiet, which is
+                                    // the silence being fixed.
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(5),
+                                        thread_handler::handle_thread_history(
+                                            &mut history_writer,
+                                            &thread_mgr_now,
+                                            thread_id,
+                                        ),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(e)) => warn!(thread_id, error = %e, "Thread history reply failed to send"),
+                                        Err(_) => {
+                                            warn!(thread_id, "Thread history timed out waiting for the thread log");
+                                            let reply = ServerFrame {
+                                                frame_type: ServerFrameType::ThreadHistoryReply,
+                                                payload: ServerPayload::ThreadHistoryReply {
+                                                    thread_id,
+                                                    ok: false,
+                                                    messages: Vec::new(),
+                                                    error: Some(
+                                                        "Timed out reading the thread log; it is busy with a running turn"
+                                                            .to_string(),
+                                                    ),
+                                                },
+                                            };
+                                            // Bounded too. Enqueuing waits when
+                                            // the outbound queue is full, which
+                                            // is exactly the state a wedged
+                                            // transport produces — so the
+                                            // apology for one stall could park
+                                            // this task forever and cost the
+                                            // user Stop. Shorter than the
+                                            // lookup above: this is a courtesy
+                                            // notice, and a queue with no room
+                                            // means the client is not receiving
+                                            // anything anyway.
+                                            if tokio::time::timeout(
+                                                std::time::Duration::from_secs(2),
+                                                send_frame(&mut history_writer, &reply),
+                                            )
+                                            .await
+                                            .is_err()
+                                            {
+                                                warn!(
+                                                    thread_id,
+                                                    "Gave up enqueuing the thread history timeout notice; \
+                                                     the outbound queue is not draining"
+                                                );
+                                            }
+                                        }
                                     }
                                     continue;
                                 }
@@ -1445,13 +1548,19 @@ pub(crate) async fn handle_connection(
                                     &mut config,
                                     &base_system_prompt,
                                     &mut agent_session,
+                                    &thread_mgr_cell,
                                     &task_mgr,
                                     agent_id,
                                 )
                                 .await?;
                                 if switched {
                                     // The thread manager was replaced — follow
-                                    // the new one's sidebar events.
+                                    // the new one's sidebar events. The reader's
+                                    // cell was repointed inside the switch, before
+                                    // the client heard about it; doing it here
+                                    // would be after the new agent's thread list
+                                    // had already gone out, and the client asks
+                                    // for a transcript as soon as it sees one.
                                     thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
                                 }
                             }
@@ -1745,6 +1854,14 @@ pub(crate) async fn handle_connection(
 
     // Clean up reader task
     reader_handle.abort();
+    // The writer task ends on its own once every queue handle is dropped, but
+    // the reader task holds one and has just been aborted — so drop this
+    // function's handles and let the drain finish before the connection goes.
+    // Aborting it instead would discard frames already queued, including the
+    // close-out written just above.
+    drop(writer);
+    drop(out_tx);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), writer_handle).await;
 
     // Persist thread state on disconnect. This is the last write of the
     // session and carries everything said during it, so a failure here is
