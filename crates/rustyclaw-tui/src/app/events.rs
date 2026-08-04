@@ -58,7 +58,7 @@ pub(crate) fn emit(tx: &std::sync::mpsc::Sender<GwEvent>, event: GwEvent) {
 /// layer that produced it, so the diagnostic names the user's action and not
 /// only the send that happened to fail last.
 pub(crate) fn report(tx: &std::sync::mpsc::Sender<GwEvent>, e: rustyclaw_view::anyhow::Error) {
-    rustyclaw_view::tracing::error!("{e:?}");
+    rustyclaw_view::tracing::error!(error = ?e, "Action failed");
     emit(
         tx,
         GwEvent::Error {
