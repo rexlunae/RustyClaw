@@ -981,7 +981,10 @@ impl GatewayCommand {
                     messenger_type,
                     enabled,
                     fields,
-                    secrets,
+                    secrets: secrets
+                        .into_iter()
+                        .map(|(field, value)| (field, value.into()))
+                        .collect(),
                     display_name,
                     bio,
                     avatar_path,

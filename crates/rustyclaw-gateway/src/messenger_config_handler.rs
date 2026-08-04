@@ -87,6 +87,12 @@ pub async fn handle_messenger_config(
             avatar_path,
             agent_id,
         } => {
+            // Out of the redacting wire type and into plain pairs; from here
+            // the values only travel toward the vault.
+            let secrets = secrets
+                .into_iter()
+                .map(|(field, value)| (field, value.into_inner()))
+                .collect();
             let outcome = save_account(
                 config,
                 vault,
@@ -576,7 +582,7 @@ async fn save_account(
                 description: Some(format!("{} credential for messenger '{name}'", spec.label)),
                 disabled: false,
             };
-            if let Err(e) = mgr.store_credential(&cred, &secret_entry, value, None) {
+            if let Err(e) = mgr.store_service_credential(&cred, &secret_entry, value) {
                 for cred in &created {
                     let _ = mgr.delete_credential(cred);
                 }
@@ -788,7 +794,7 @@ async fn rename_credentials(
         if !existing.contains(&format!("val:{new}")) {
             created.push(new.clone());
         }
-        if let Err(e) = mgr.store_credential(&new, &secret_entry, &value, None) {
+        if let Err(e) = mgr.store_service_credential(&new, &secret_entry, &value) {
             for cred in &created {
                 let _ = mgr.delete_credential(cred);
             }
@@ -895,7 +901,7 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
             if !existing.contains(&format!("val:{cred}")) {
                 created.push(cred.clone());
             }
-            if let Err(e) = mgr.store_credential(&cred, &secret_entry, &value, None) {
+            if let Err(e) = mgr.store_service_credential(&cred, &secret_entry, &value) {
                 for cred in &created {
                     let _ = mgr.delete_credential(cred);
                 }
@@ -1989,7 +1995,7 @@ mod tests {
                 messenger_type: "telegram".to_string(),
                 enabled: true,
                 fields: Vec::new(),
-                secrets: vec![("token".to_string(), "123:secret".to_string())],
+                secrets: vec![("token".to_string(), "123:secret".to_string().into())],
                 display_name: None,
                 bio: None,
                 avatar_path: None,

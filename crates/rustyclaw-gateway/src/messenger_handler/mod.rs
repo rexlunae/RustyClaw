@@ -321,19 +321,25 @@ fn resolve_routing(
         // Keyed by thread, not by channel: two channels routed to one thread
         // share a conversation, which is the point of routing them together.
         //
-        // Direct messages are the exception. They carry no channel, so an
-        // account-wide route claims all of them — and keying purely by thread
-        // would put every correspondent into one history, replaying one
-        // person's private messages as context for answering another. They
-        // keep a per-sender key and take only the thread's working directory.
-        conv_key: match channel {
-            Some(_) => format!("thread:{}:{}", route.agent(), route.thread_id),
-            None => format!(
+        // Direct messages are the exception: keying purely by thread would
+        // put every correspondent into one history, replaying one person's
+        // private messages as context for answering another. They keep a
+        // per-sender key and take only the thread's working directory.
+        //
+        // "Direct" is the backend's `is_direct` flag OR a missing channel —
+        // not the channel alone. Telegram and friends give private chats a
+        // chat id, so a DM there arrives with `channel: Some(..)`, and
+        // testing only the channel merged exactly the conversations this
+        // split exists to keep apart.
+        conv_key: if msg.is_direct || channel.is_none() {
+            format!(
                 "thread:{}:{}:dm:{}",
                 route.agent(),
                 route.thread_id,
                 msg.sender
-            ),
+            )
+        } else {
+            format!("thread:{}:{}", route.agent(), route.thread_id)
         },
         workspace_dir: thread
             .working_dir
@@ -1223,6 +1229,22 @@ mod tests {
         assert_ne!(
             alice.conv_key, bob.conv_key,
             "two people's private messages must not share a history"
+        );
+
+        // Telegram-style DMs carry a chat id, so `channel` is Some — the
+        // backend's `is_direct` flag is what marks them private. They must
+        // split per sender exactly like channel-less DMs.
+        let flagged_dm_from = |sender: &str, chat_id: &str| {
+            let mut msg = message(Some(chat_id));
+            msg.sender = sender.to_string();
+            msg.is_direct = true;
+            resolve_routing(&config, "acct", "telegram", &msg)
+        };
+        let carol = flagged_dm_from("carol", "1111");
+        let dave = flagged_dm_from("dave", "2222");
+        assert_ne!(
+            carol.conv_key, dave.conv_key,
+            "a DM with a chat id is still a DM — is_direct decides, not the channel"
         );
         // The route still applies: both run in the thread's directory.
         assert_eq!(alice.workspace_dir, project);

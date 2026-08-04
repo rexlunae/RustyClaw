@@ -978,7 +978,12 @@ pub enum ClientPayload {
         /// Non-secret field values, keyed by schema field name.
         fields: Vec<(String, String)>,
         /// Secret field values to store in the vault.
-        secrets: Vec<(String, String)>,
+        ///
+        /// `SecretString`, not `String`: this enum's derived `Debug` is one
+        /// stray `warn!(?payload, ..)` away from a log line, and these are
+        /// live bot tokens and passwords. The wire encoding is identical —
+        /// redaction is a formatting property of the type.
+        secrets: Vec<(String, crate::secrets::SecretString)>,
         /// Profile overrides. An empty string clears an override.
         display_name: Option<String>,
         bio: Option<String>,

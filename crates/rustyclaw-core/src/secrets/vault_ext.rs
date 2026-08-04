@@ -63,6 +63,29 @@ impl SecretsManager {
         self.get_secret(&format!("val:{name}"), true)
     }
 
+    /// Store a service credential the gateway provisions on the user's
+    /// behalf — the ONLY write path allowed inside a service namespace.
+    ///
+    /// `store_secret` and `store_credential` refuse reserved names outright,
+    /// so the invariant `read_service_credential` depends on — nothing but
+    /// gateway provisioning writes there — is enforced at the vault, not by
+    /// convention across every handler. The name must have the exact
+    /// provisioned shape; anything else is refused.
+    pub fn store_service_credential(
+        &mut self,
+        name: &str,
+        entry: &SecretEntry,
+        value: &str,
+    ) -> Result<()> {
+        if !Self::is_service_credential_name(name) {
+            anyhow::bail!(
+                "'{name}' is not a valid service-credential name \
+                 (expected <namespace><account>/<field>)"
+            );
+        }
+        self.store_credential_unchecked(name, entry, value, None)
+    }
+
     /// Whether `name` has the exact shape of a provisioned service credential.
     ///
     /// A prefix check alone would let any string that merely *starts with* a
@@ -755,11 +778,48 @@ mod service_credential_tests {
             description: None,
             disabled: false,
         };
-        mgr.store_credential("messenger/tg/token", &entry("bot"), "123:secret", None)
+        mgr.store_service_credential("messenger/tg/token", &entry("bot"), "123:secret")
             .unwrap();
         mgr.store_credential("anthropic", &entry("api"), "sk-ant-live", None)
             .unwrap();
         mgr
+    }
+
+    #[test]
+    fn the_general_store_paths_refuse_service_namespaces_at_the_vault() {
+        // The invariant read_service_credential rests on — only gateway
+        // provisioning writes inside a service namespace — is enforced here
+        // at the vault, not just by the per-handler guards upstream.
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = SecretsManager::new(dir.path());
+        let entry = SecretEntry {
+            label: "planted".to_string(),
+            kind: SecretKind::Token,
+            policy: AccessPolicy::Always,
+            description: None,
+            disabled: false,
+        };
+        assert!(
+            mgr.store_credential("messenger/tg/token", &entry, "planted", None)
+                .is_err(),
+            "typed store must refuse reserved names"
+        );
+        assert!(
+            mgr.store_secret("val:messenger/tg/token", "planted")
+                .is_err(),
+            "raw store must refuse reserved keys"
+        );
+        assert_eq!(
+            mgr.read_service_credential("messenger/tg/token").unwrap(),
+            None,
+            "nothing may have landed"
+        );
+
+        // And the provisioning path itself only accepts the exact shape.
+        assert!(
+            mgr.store_service_credential("messenger/tg", &entry, "x")
+                .is_err()
+        );
     }
 
     #[test]

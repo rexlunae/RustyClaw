@@ -1044,7 +1044,13 @@ fn messenger_display_name(m: &rustyclaw_core::config::MessengerConfig) -> String
 
 /// Whether a messenger entry has the credentials its backend needs.
 fn messenger_has_credentials(m: &rustyclaw_core::config::MessengerConfig) -> bool {
-    m.token.is_some()
+    // A vaulted account's only record of its credential is `secret_refs` —
+    // migration deliberately blanks the plaintext twin. Ignoring it made
+    // this panel report every account saved or migrated through the
+    // messenger setup panel as unpaired and offline while it was connected
+    // and working.
+    !m.secret_refs.is_empty()
+        || m.token.is_some()
         || m.webhook_url.is_some()
         || m.access_token.is_some()
         || m.password.is_some()

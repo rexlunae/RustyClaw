@@ -55,6 +55,23 @@ impl std::fmt::Debug for SecretString {
     }
 }
 
+// On the wire and on disk a `SecretString` is exactly its inner string —
+// redaction is a *formatting* property, not an encoding one. This is what
+// lets credential-carrying protocol frames use the type without changing
+// their bincode layout: a derived `Debug` on the enum then prints
+// `[REDACTED]` instead of the live token.
+impl Serialize for SecretString {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self)
+    }
+}
+
 impl std::fmt::Display for SecretString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[REDACTED]")
