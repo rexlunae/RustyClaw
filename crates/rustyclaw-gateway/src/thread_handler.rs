@@ -213,6 +213,37 @@ pub(crate) async fn handle_thread_switch(
         send_thread_messages_update_shared(writer, target_id, thread_mgr).await?;
         // Persist thread state (includes compaction summary)
         crate::helpers::persist_threads(&mut *thread_mgr.lock().await, threads_path);
+    } else if let Some((label, messages)) = crate::thread_updates::session_transcript(thread_id) {
+        // A sub-agent/cron session row. Sessions are not threads — there is
+        // no foreground to move — so this is a read-only view: the client is
+        // told it "switched" so it renders the transcript, but the manager's
+        // foreground (where the next typed message goes) stays put. The old
+        // behaviour was an error frame, which left rows with hundreds of
+        // messages that could never be opened.
+        send_info(
+            writer,
+            &format!(
+                "'{label}' is a background session — showing its transcript read-only. \
+                 New messages still go to your active thread."
+            ),
+        )
+        .await?;
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ThreadSwitched,
+            payload: ServerPayload::ThreadSwitched {
+                thread_id,
+                context_summary: None,
+            },
+        };
+        send_frame(writer, &frame).await?;
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ThreadMessages,
+            payload: ServerPayload::ThreadMessages {
+                thread_id,
+                messages,
+            },
+        };
+        send_frame(writer, &frame).await?;
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
@@ -279,11 +310,25 @@ pub(crate) async fn handle_thread_history(
             );
             (true, wire, None)
         }
-        None => (
-            false,
-            Vec::new(),
-            Some(format!("Thread {} not found", thread_id)),
-        ),
+        // Not a thread — but sidebar rows for sub-agent and cron *sessions*
+        // carry pseudo-ids, and a row whose count says "300 messages" must
+        // not open onto nothing. Serve the session's transcript.
+        None => match crate::thread_updates::session_transcript(thread_id) {
+            Some((label, messages)) => {
+                info!(
+                    thread_id,
+                    caption = %label,
+                    message_count = messages.len(),
+                    "Serving session transcript for sidebar row"
+                );
+                (true, messages, None)
+            }
+            None => (
+                false,
+                Vec::new(),
+                Some(format!("Thread {} not found", thread_id)),
+            ),
+        },
     };
     drop(tm);
     let frame = ServerFrame {

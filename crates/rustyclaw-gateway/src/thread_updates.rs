@@ -11,6 +11,51 @@ use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, proto
 use crate::{SharedTaskManager, SharedThreadMgr};
 use protocol::server::send_frame;
 
+/// The sidebar pseudo-id for a session row.
+///
+/// Sessions are not threads — they have no `ThreadId` — but they share the
+/// sidebar, so each gets a stable id derived from its key. Anything that
+/// hands these ids to a client must also be able to resolve them back; see
+/// [`session_transcript`]. Handing out ids nothing could resolve was how the
+/// sidebar showed rows with hundreds of messages that opened empty.
+pub(crate) fn session_row_id(key: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Resolve a sidebar pseudo-id back to its session's label and transcript.
+///
+/// `None` when the id names no known session (or a real thread — callers try
+/// the thread manager first). Finished sessions resolve too: a row clicked
+/// moments after its cron run completed should still open.
+pub(crate) fn session_transcript(id: u64) -> Option<(String, Vec<protocol::types::ChatMessage>)> {
+    use rustyclaw_core::sessions::{SessionKind, session_manager};
+    let sess_mgr = session_manager().lock().ok()?;
+    let kinds = [SessionKind::Subagent, SessionKind::Cron];
+    let session = sess_mgr
+        .list(Some(&kinds), false, usize::MAX)
+        .into_iter()
+        .find(|s| session_row_id(&s.key) == id)?;
+    let label = session
+        .label
+        .clone()
+        .unwrap_or_else(|| "Sub-agent".to_string());
+    let messages = session
+        .messages
+        .iter()
+        .map(|m| protocol::types::ChatMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+            media: None,
+        })
+        .collect();
+    Some((label, messages))
+}
+
 /// The client-facing view of the thread list, taken from the manager in one
 /// synchronous pass.
 ///
@@ -25,6 +70,12 @@ fn thread_dtos(
     let threads = thread_mgr
         .list_info()
         .iter()
+        // A thread with no messages has nothing to open: it is a row whose
+        // click shows an empty transcript. Existence in the sidebar should
+        // mean there is a conversation behind it — the foreground stays
+        // (that is where the user is about to type) and so does anything
+        // mid-turn (its first messages are being written right now).
+        .filter(|t| t.message_count > 0 || t.is_foreground || t.status == "Streaming")
         .map(|t| protocol::ThreadInfoDto {
             id: t.id.0,
             label: t.label.clone(),
@@ -122,13 +173,9 @@ async fn send_threads_update_from(
         let active_sessions = sess_mgr.list(Some(&subagent_kinds), true, 50);
 
         for session in active_sessions {
-            // Generate a unique ID based on session key hash
-            let id = {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                session.key.hash(&mut hasher);
-                hasher.finish()
-            };
+            // Stable pseudo-id derived from the session key; resolvable back
+            // through `session_transcript` when the client opens the row.
+            let id = session_row_id(&session.key);
 
             let status_str = match session.status {
                 SessionStatus::Active => "Running",
@@ -367,5 +414,61 @@ mod tests {
         .expect("send should succeed");
 
         assert_eq!(writer.frames, 1);
+    }
+
+    #[test]
+    fn empty_threads_stay_out_of_the_sidebar() {
+        let mut tm = rustyclaw_core::threads::ThreadManager::new();
+        let foreground = tm.create_chat("Fresh");
+        let abandoned = tm.create_chat("Abandoned");
+        let used = tm.create_chat("Used");
+        if let Some(t) = tm.get_mut(used) {
+            t.add_message(rustyclaw_core::threads::MessageRole::User, "hello");
+        }
+        tm.switch_foreground(foreground);
+
+        let (threads, _) = thread_dtos(&tm);
+        let listed: Vec<u64> = threads.iter().map(|t| t.id).collect();
+        assert!(
+            listed.contains(&foreground.0),
+            "the foreground is where the user types next; it stays even when empty"
+        );
+        assert!(
+            listed.contains(&used.0),
+            "a thread with messages is a conversation and must be listed"
+        );
+        assert!(
+            !listed.contains(&abandoned.0),
+            "an empty background thread is a row that opens onto nothing"
+        );
+    }
+
+    #[test]
+    fn a_session_row_id_resolves_back_to_its_transcript() {
+        use rustyclaw_core::sessions::session_manager;
+        let key = {
+            let mut mgr = session_manager().lock().unwrap();
+            let key = mgr.spawn_subagent(
+                "main",
+                "long research task",
+                Some("researcher".into()),
+                None,
+            );
+            let session = mgr.get_mut(&key).unwrap();
+            session.add_message("user", "start digging");
+            session.add_message("assistant", "found three leads");
+            key
+        };
+
+        let (label, messages) = session_transcript(session_row_id(&key))
+            .expect("the id the sidebar hands out must resolve to the transcript behind it");
+        assert_eq!(label, "researcher");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].content, "found three leads");
+
+        assert!(
+            session_transcript(0xDEAD_BEEF).is_none(),
+            "an unknown id is not a session"
+        );
     }
 }
