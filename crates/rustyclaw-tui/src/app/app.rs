@@ -29,6 +29,7 @@ use super::GwEvent;
 use super::command_action::handle_command_action;
 use super::tui_component;
 use super::tui_component::TuiRoot;
+use rustyclaw_view::anyhow::Context;
 
 /// Messages from the iocraft render component back to tokio.
 #[derive(Debug, Clone)]
@@ -384,7 +385,11 @@ impl App {
                         .await;
                 }
                 Ok(UserInput::AuthResponse(code)) => {
-                    client.send_or_log(GatewayCommand::Auth { code }).await;
+                    client
+                        .send(GatewayCommand::Auth { code })
+                        .await
+                        .context("sending Auth")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::ToolApprovalResponse { id, approved }) => {
                     let _ = client
@@ -395,8 +400,10 @@ impl App {
                     // Unlock locally so /secrets can read the vault
                     secrets_manager.set_password(password.clone());
                     client
-                        .send_or_log(GatewayCommand::VaultUnlock { password })
-                        .await;
+                        .send(GatewayCommand::VaultUnlock { password })
+                        .await
+                        .context("sending VaultUnlock")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::UserPromptResponse {
                     id,
@@ -426,8 +433,10 @@ impl App {
                 }
                 Ok(UserInput::CancelCurrentRequest { thread_id }) => {
                     client
-                        .send_or_log(GatewayCommand::Cancel { thread_id })
-                        .await;
+                        .send(GatewayCommand::Cancel { thread_id })
+                        .await
+                        .context("sending Cancel")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::ProcessControl { pid, action }) => {
                     let _ = client
@@ -607,7 +616,11 @@ impl App {
                         .await;
                 }
                 Ok(UserInput::RefreshSecrets) => {
-                    client.send_or_log(GatewayCommand::SecretsList).await;
+                    client
+                        .send(GatewayCommand::SecretsList)
+                        .await
+                        .context("sending SecretsList")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::RefreshPanel(panel)) => {
                     let cmd = match panel {
@@ -619,10 +632,18 @@ impl App {
                         crate::app::PanelKind::Mcp => GatewayCommand::McpList,
                         crate::app::PanelKind::Channels => GatewayCommand::ChannelStatus,
                     };
-                    client.send_or_log(cmd).await;
+                    client
+                        .send(cmd)
+                        .await
+                        .context("sending cmd")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::MessengerCommand(cmd)) => {
-                    client.send_or_log(cmd).await;
+                    client
+                        .send(cmd)
+                        .await
+                        .context("sending cmd")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::RefreshTasks) => {
                     let _ = client
@@ -636,8 +657,10 @@ impl App {
                 }
                 Ok(UserInput::AgentSwitch(agent_id)) => {
                     client
-                        .send_or_log(GatewayCommand::AgentSwitch { agent_id })
-                        .await;
+                        .send(GatewayCommand::AgentSwitch { agent_id })
+                        .await
+                        .context("sending AgentSwitch")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::RequestThreadHistory(thread_id)) => {
                     // A dropped error here reads as an empty thread: the view
@@ -654,7 +677,11 @@ impl App {
                     }
                 }
                 Ok(UserInput::RefreshThreads) => {
-                    client.send_or_log(GatewayCommand::ThreadList).await;
+                    client
+                        .send(GatewayCommand::ThreadList)
+                        .await
+                        .context("sending ThreadList")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::HatchingComplete(payload)) => {
                     // Parse "name\tpersonality" or just "name"
@@ -703,7 +730,11 @@ impl App {
                                 });
                                 crate::app::events::persist_config(config, &gw_tx);
                                 // Reload gateway
-                                client.send_or_log(GatewayCommand::Reload).await;
+                                client
+                                    .send(GatewayCommand::Reload)
+                                    .await
+                                    .context("sending Reload")
+                                    .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                                 // Trigger model selector (show loading)
                                 let display = def.display.to_string();
                                 let pid = provider_id.clone();
@@ -774,7 +805,11 @@ impl App {
                                             ),
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
-                                    client.send_or_log(GatewayCommand::Reload).await;
+                                    client
+                                        .send(GatewayCommand::Reload)
+                                        .await
+                                        .context("sending Reload")
+                                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                                     let display = def.display.to_string();
                                     let pid = provider_id.clone();
                                     let key = has_key;
@@ -851,7 +886,11 @@ impl App {
                                             ),
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
-                                    client.send_or_log(GatewayCommand::Reload).await;
+                                    client
+                                        .send(GatewayCommand::Reload)
+                                        .await
+                                        .context("sending Reload")
+                                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                                     let display = def.display.to_string();
                                     let pid = provider_id.clone();
                                     let token = has_token;
@@ -1026,7 +1065,11 @@ impl App {
                     });
                     crate::app::events::persist_config(config, &gw_tx);
                     // Reload gateway
-                    client.send_or_log(GatewayCommand::Reload).await;
+                    client
+                        .send(GatewayCommand::Reload)
+                        .await
+                        .context("sending Reload")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                     // Now fetch models
                     let pid = provider.clone();
                     crate::app::events::emit(
@@ -1088,7 +1131,11 @@ impl App {
                             )),
                         );
                         // Reload gateway so the new provider + model take effect
-                        client.send_or_log(GatewayCommand::Reload).await;
+                        client
+                            .send(GatewayCommand::Reload)
+                            .await
+                            .context("sending Reload")
+                            .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                     }
                 }
                 Ok(UserInput::CancelProviderFlow) => {
@@ -1104,10 +1151,18 @@ impl App {
                         .send(GatewayCommand::EngineAction { engine, action })
                         .await;
                     // Refresh the list so status changes show up.
-                    client.send_or_log(GatewayCommand::EngineList).await;
+                    client
+                        .send(GatewayCommand::EngineList)
+                        .await
+                        .context("sending EngineList")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::EngineRefresh) => {
-                    client.send_or_log(GatewayCommand::EngineList).await;
+                    client
+                        .send(GatewayCommand::EngineList)
+                        .await
+                        .context("sending EngineList")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 #[allow(unused_variables)]
                 Ok(UserInput::PairingConnect {

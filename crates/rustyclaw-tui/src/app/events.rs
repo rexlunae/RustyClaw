@@ -46,6 +46,28 @@ pub(crate) fn emit(tx: &std::sync::mpsc::Sender<GwEvent>, event: GwEvent) {
     }
 }
 
+/// Report a failed action to the log and to the user, without ending the loop.
+///
+/// The event loop lives in `run() -> Result<()>`, so a bare `?` there would
+/// propagate out and take the whole session down because one command did not
+/// go out. `?` is still the right way to *carry* the failure — this is just
+/// the boundary it is allowed to stop at, which for a loop is one iteration
+/// rather than the process.
+///
+/// The chain goes to the log via `{:?}`, which prints every `.context(..)`
+/// layer that produced it, so the diagnostic names the user's action and not
+/// only the send that happened to fail last.
+pub(crate) fn report(tx: &std::sync::mpsc::Sender<GwEvent>, e: rustyclaw_view::anyhow::Error) {
+    rustyclaw_view::tracing::error!("{e:?}");
+    emit(
+        tx,
+        GwEvent::Error {
+            summary: format!("{e}"),
+            details: Some(format!("{e:?}")),
+        },
+    );
+}
+
 /// Persist config, telling the user if it did not stick.
 ///
 /// A failed save is invisible while the session lasts: the setting is already
@@ -70,7 +92,7 @@ pub(crate) fn persist_config(
 }
 
 /// Events pushed from the gateway reader into the iocraft render component.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, strum::IntoStaticStr)]
 pub(crate) enum GwEvent {
     Disconnected(String),
     Connected,
@@ -414,11 +436,12 @@ impl GwEvent {
     /// a log writes user content to disk. Derived from the debug rendering
     /// rather than matched arm by arm so it cannot drift as variants are
     /// added.
-    pub(crate) fn name(&self) -> String {
-        let mut rendered = format!("{self:?}");
-        let end = rendered.find([' ', '{', '(']).unwrap_or(rendered.len());
-        rendered.truncate(end);
-        rendered
+    pub(crate) fn name(&self) -> &'static str {
+        // A generated match over the variants, so the payload is never
+        // rendered. `{:?}` here would materialise model output, prompts and
+        // credential messages into a temporary just to read the identifier
+        // off the front of it.
+        self.into()
     }
 }
 
