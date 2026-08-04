@@ -586,10 +586,28 @@ pub fn App() -> Element {
                                         previous = ?last_foreground_history_request,
                                         "Desktop requesting thread history after ThreadsUpdate"
                                     );
-                                    let _ = client_ui
+                                    // Only a request that actually went out
+                                    // counts as made. The guard exists to stop
+                                    // re-asking for the same thread, but a send
+                                    // can fail — a write-dead connection fails
+                                    // every one — and recording those left the
+                                    // thread marked "already fetched" forever:
+                                    // the sidebar kept its server-pushed
+                                    // message count while the transcript that
+                                    // was never requested stayed empty for the
+                                    // rest of the session.
+                                    match client_ui
                                         .send(GatewayCommand::ThreadHistoryRequest { thread_id })
-                                        .await;
-                                    last_foreground_history_request = Some(thread_id);
+                                        .await
+                                    {
+                                        Ok(()) => last_foreground_history_request = Some(thread_id),
+                                        Err(e) => tracing::error!(
+                                            thread_id,
+                                            error = %e,
+                                            "Thread history request failed to send; \
+                                             leaving it to be retried"
+                                        ),
+                                    }
                                 }
                             }
                             BufferEntry::Chunks {
@@ -851,16 +869,30 @@ pub fn App() -> Element {
                 // `switch_thread` resets the view itself.
                 if let Some(client) = gw {
                     spawn(async move {
-                        let _ = client
+                        if let Err(e) = client
                             .send(GatewayCommand::ThreadSwitch { thread_id })
-                            .await;
+                            .await
+                        {
+                            tracing::error!(thread_id, error = %e, "ThreadSwitch send failed");
+                        }
                         tracing::info!(
                             thread_id,
                             "Desktop requesting thread history after ThreadSwitch"
                         );
-                        let _ = client
+                        // Discarding this error is how clicking a thread came
+                        // to do nothing at all: the view had already been
+                        // reset for the incoming thread, and the request that
+                        // would have filled it never left the process.
+                        if let Err(e) = client
                             .send(GatewayCommand::ThreadHistoryRequest { thread_id })
-                            .await;
+                            .await
+                        {
+                            tracing::error!(
+                                thread_id,
+                                error = %e,
+                                "Thread history request failed to send"
+                            );
+                        }
                     });
                 }
                 state.write().switch_thread(thread_id);

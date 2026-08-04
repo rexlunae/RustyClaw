@@ -280,6 +280,39 @@ impl SshConnection {
         ))
     }
 
+    /// Split an already-spawned child into transport halves.
+    ///
+    /// Test-only. Lets a test drive the client's reader and writer tasks
+    /// against real pipes — including a half-open one, where the write side
+    /// is broken while the read side is still healthy — without needing an
+    /// SSH host or a gateway.
+    #[cfg(test)]
+    pub(crate) fn from_child(
+        mut child: tokio::process::Child,
+    ) -> Result<(Self, SshWriter, SshReader)> {
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("child stdin unavailable"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("child stdout unavailable"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("child stderr unavailable"))?;
+        Ok((
+            Self { child },
+            SshWriter { stdin },
+            SshReader {
+                stdout,
+                stderr,
+                peeked: None,
+            },
+        ))
+    }
+
     /// Wait for the child process to exit.
     pub async fn wait(mut self) -> Result<std::process::ExitStatus> {
         self.child.wait().await.context("Failed to wait for SSH")

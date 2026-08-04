@@ -125,6 +125,7 @@ impl GatewayClient {
         let next_stream_id_tx = next_stream_id.clone();
         let active_stream_id_tx = active_stream_id.clone();
         let stream_threads_tx = stream_threads.clone();
+        let connected_tx = connected.clone();
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 let stream_id = match &cmd {
@@ -162,6 +163,15 @@ impl GatewayClient {
                     break;
                 }
             }
+
+            // This task owns the only receiver for `cmd_tx`, so once it ends
+            // every later `send` fails — the connection is write-dead even
+            // when the reader is still delivering frames. Saying so here is
+            // what stops that from being invisible: the flag used to be
+            // cleared only by the reader, so a client whose writer had died
+            // still reported itself connected while silently dropping every
+            // request the user made.
+            connected_tx.store(false, std::sync::atomic::Ordering::SeqCst);
         });
 
         // ── Spawn task to handle incoming messages ─────────────────────
@@ -422,5 +432,85 @@ impl GatewayClient {
     pub async fn respond_tool_approval(&self, id: String, approved: bool) -> Result<()> {
         self.send(GatewayCommand::ToolApprove { id, approved })
             .await
+    }
+}
+
+// The writer task owns the only receiver for the command channel, so its
+// death is total: every later request fails. These tests pin that such a
+// connection stops claiming to be connected — the reader half staying
+// healthy is exactly the case that used to hide it.
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// Spawn a child whose stdin is closed but whose stdout stays open: the
+    /// write side breaks while the read side is still perfectly healthy.
+    fn half_open_child() -> tokio::process::Child {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("exec 0<&-; sleep 30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawning a shell should succeed")
+    }
+
+    /// A connection whose writer has died must report itself disconnected.
+    ///
+    /// The flag used to be cleared only by the reader task, so a client that
+    /// could no longer send anything still answered "connected" for as long
+    /// as frames kept arriving. Nothing retried, nothing reconnected, and
+    /// every request the user made was dropped on the floor in silence.
+    #[tokio::test]
+    async fn a_write_dead_connection_stops_claiming_to_be_connected() {
+        let (conn, writer, reader) =
+            SshConnection::from_child(half_open_child()).expect("splitting the child");
+        let client = GatewayClient::from_transport(conn, writer, reader, None);
+        assert!(client.is_connected(), "a fresh client starts connected");
+
+        // Writing to the closed read end fails; the writer task ends. The
+        // reader is still blocked on a live stdout the whole time, so only
+        // the writer's own bookkeeping can report this.
+        for _ in 0..100 {
+            if !client.is_connected() {
+                break;
+            }
+            let _ = client.send(GatewayCommand::ThreadList).await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            !client.is_connected(),
+            "a client that can no longer send must not report itself connected"
+        );
+    }
+
+    /// And once it is write-dead, `send` says so rather than succeeding.
+    ///
+    /// This is the error the history-request call sites discard: a request
+    /// that never left the process leaves the view waiting for a reply that
+    /// cannot come, which is what an empty thread with a populated sidebar
+    /// row actually is.
+    #[tokio::test]
+    async fn sending_on_a_write_dead_connection_reports_the_failure() {
+        let (conn, writer, reader) =
+            SshConnection::from_child(half_open_child()).expect("splitting the child");
+        let client = GatewayClient::from_transport(conn, writer, reader, None);
+
+        let mut last = Ok(());
+        for _ in 0..100 {
+            last = client.send(GatewayCommand::ThreadList).await;
+            if last.is_err() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            last.is_err(),
+            "a send on a dead command channel must surface an error, not vanish"
+        );
     }
 }
