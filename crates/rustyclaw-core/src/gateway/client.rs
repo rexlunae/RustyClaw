@@ -408,6 +408,29 @@ impl GatewayClient {
         }
     }
 
+    /// Send a command, logging the loss rather than discarding it.
+    ///
+    /// For the callers that genuinely cannot act on a failure — a spawned
+    /// task with no route back to the view, a fire-and-forget refresh. A
+    /// dropped command is not a harmless no-op: the click happened, the
+    /// request never left the process, and whatever it would have filled in
+    /// stays empty while the user waits for a reply that was never asked for.
+    /// Every one of these was `let _ = client.send(..)`, which is the same
+    /// thing without the log line.
+    ///
+    /// Prefer [`send`](Self::send) wherever the caller can tell the user, or
+    /// retry, or mark the view failed. This is the floor, not the goal.
+    pub async fn send_or_log(&self, cmd: GatewayCommand) {
+        let name = cmd.name();
+        if let Err(e) = self.send(cmd).await {
+            tracing::error!(
+                command = %name,
+                error = %e,
+                "Gateway command was not sent; whatever it would have done has not happened"
+            );
+        }
+    }
+
     /// Send a command to the gateway.
     pub async fn send(&self, cmd: GatewayCommand) -> Result<()> {
         self.cmd_tx

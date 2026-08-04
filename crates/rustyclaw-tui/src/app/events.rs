@@ -25,6 +25,50 @@ pub(crate) enum DeviceFlowOwner {
     Local,
 }
 
+/// Deliver an event to the render component, logging the loss rather than
+/// discarding it.
+///
+/// Every one of these is something the user is meant to see — an error, a
+/// warning, a dialog opening, a list arriving. The send fails when the render
+/// component is gone, which at shutdown is unremarkable and at any other time
+/// means the user asked for something and got nothing back, with no
+/// explanation available to them or to us. Each call site was
+/// `let _ = gw_tx.send(..)`.
+pub(crate) fn emit(tx: &std::sync::mpsc::Sender<GwEvent>, event: GwEvent) {
+    // Named, not debug-formatted: these carry prompts, model output and
+    // credential messages, none of which belong in a log line.
+    let name = event.name();
+    if tx.send(event).is_err() {
+        rustyclaw_view::tracing::debug!(
+            event = %name,
+            "UI event dropped; the render component is gone (expected during shutdown)"
+        );
+    }
+}
+
+/// Persist config, telling the user if it did not stick.
+///
+/// A failed save is invisible while the session lasts: the setting is already
+/// applied in memory, so the toggle moves, the panel redraws, and everything
+/// looks right until a restart brings the old value back. The user is the only
+/// one who can act on it — check the disk, fix permissions — so unlike most of
+/// these this warrants saying out loud, not just logging.
+pub(crate) fn persist_config(
+    config: &rustyclaw_core::config::Config,
+    tx: &std::sync::mpsc::Sender<GwEvent>,
+) {
+    if let Err(e) = config.save(None) {
+        rustyclaw_view::tracing::error!(error = %e, "Failed to save config");
+        emit(
+            tx,
+            GwEvent::Warning {
+                summary: "Setting changed for this session only — saving it failed".to_string(),
+                details: Some(e.to_string()),
+            },
+        );
+    }
+}
+
 /// Events pushed from the gateway reader into the iocraft render component.
 #[derive(Debug, Clone)]
 pub(crate) enum GwEvent {
@@ -360,6 +404,22 @@ pub(crate) enum GwEvent {
     ServiceActionResult {
         service: Option<rustyclaw_view::ServiceInfoData>,
     },
+}
+
+impl GwEvent {
+    /// The variant's name, carrying none of its payload.
+    ///
+    /// Same reasoning as `GatewayCommand::name`: these events hold model
+    /// output, prompts and credential messages, so debug-formatting one into
+    /// a log writes user content to disk. Derived from the debug rendering
+    /// rather than matched arm by arm so it cannot drift as variants are
+    /// added.
+    pub(crate) fn name(&self) -> String {
+        let mut rendered = format!("{self:?}");
+        let end = rendered.find([' ', '{', '(']).unwrap_or(rendered.len());
+        rendered.truncate(end);
+        rendered
+    }
 }
 
 /// Which gateway panel a [`GwEvent::PanelActionResult`] belongs to.

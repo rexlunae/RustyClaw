@@ -270,8 +270,14 @@ impl App {
                 return Ok(());
             }
             Err(e) => {
-                let _ = gw_tx.send(GwEvent::error(format!("SSH connection failed: {}", e)));
-                let _ = gw_tx.send(GwEvent::Disconnected(format!("Failed to connect: {}", e)));
+                crate::app::events::emit(
+                    &gw_tx,
+                    GwEvent::error(format!("SSH connection failed: {}", e)),
+                );
+                crate::app::events::emit(
+                    &gw_tx,
+                    GwEvent::Disconnected(format!("Failed to connect: {}", e)),
+                );
                 return Ok(());
             }
         };
@@ -364,9 +370,12 @@ impl App {
                 Ok(UserInput::Chat { text, thread_id }) => {
                     let prompt = build_prompt_with_attachments(&text, &prompt_attachments);
                     prompt_attachments.clear();
-                    let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
-                        attachments: prompt_attachments.clone(),
-                    });
+                    crate::app::events::emit(
+                        &gw_tx,
+                        GwEvent::PromptAttachmentsChanged {
+                            attachments: prompt_attachments.clone(),
+                        },
+                    );
                     let _ = client
                         .send(GatewayCommand::Chat {
                             message: prompt,
@@ -375,7 +384,7 @@ impl App {
                         .await;
                 }
                 Ok(UserInput::AuthResponse(code)) => {
-                    let _ = client.send(GatewayCommand::Auth { code }).await;
+                    client.send_or_log(GatewayCommand::Auth { code }).await;
                 }
                 Ok(UserInput::ToolApprovalResponse { id, approved }) => {
                     let _ = client
@@ -385,7 +394,9 @@ impl App {
                 Ok(UserInput::VaultUnlock(password)) => {
                     // Unlock locally so /secrets can read the vault
                     secrets_manager.set_password(password.clone());
-                    let _ = client.send(GatewayCommand::VaultUnlock { password }).await;
+                    client
+                        .send_or_log(GatewayCommand::VaultUnlock { password })
+                        .await;
                 }
                 Ok(UserInput::UserPromptResponse {
                     id,
@@ -414,7 +425,9 @@ impl App {
                         .await;
                 }
                 Ok(UserInput::CancelCurrentRequest { thread_id }) => {
-                    let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
+                    client
+                        .send_or_log(GatewayCommand::Cancel { thread_id })
+                        .await;
                 }
                 Ok(UserInput::ProcessControl { pid, action }) => {
                     let _ = client
@@ -488,7 +501,7 @@ impl App {
                     let resp: CommandResponse = handle_command(&cmd, &mut ctx);
                     // Send feedback to UI via gateway channel
                     for msg in &resp.messages {
-                        let _ = gw_tx.send(GwEvent::Info(msg.clone()));
+                        crate::app::events::emit(&gw_tx, GwEvent::Info(msg.clone()));
                     }
                     if handle_command_action(
                         resp.action,
@@ -519,9 +532,12 @@ impl App {
                                 enabled: s.enabled,
                             })
                             .collect();
-                        let _ = gw_tx.send(GwEvent::ShowSkills {
-                            skills: skills_list,
-                        });
+                        crate::app::events::emit(
+                            &gw_tx,
+                            GwEvent::ShowSkills {
+                                skills: skills_list,
+                            },
+                        );
                     }
                 }
                 Ok(UserInput::CycleToolPermission { name }) => {
@@ -532,7 +548,7 @@ impl App {
                         .unwrap_or_default();
                     let next = current.cycle();
                     config.tool_permissions.insert(name.clone(), next);
-                    let _ = config.save(None);
+                    crate::app::events::persist_config(config, &gw_tx);
                     // Re-send updated tool perms list
                     let tool_names = rustyclaw_core::tools::all_tool_names();
                     let tools: Vec<_> = tool_names
@@ -550,7 +566,7 @@ impl App {
                             }
                         })
                         .collect();
-                    let _ = gw_tx.send(GwEvent::ShowToolPerms { tools });
+                    crate::app::events::emit(&gw_tx, GwEvent::ShowToolPerms { tools });
                 }
                 Ok(UserInput::CycleSecretPolicy {
                     name,
@@ -591,7 +607,7 @@ impl App {
                         .await;
                 }
                 Ok(UserInput::RefreshSecrets) => {
-                    let _ = client.send(GatewayCommand::SecretsList).await;
+                    client.send_or_log(GatewayCommand::SecretsList).await;
                 }
                 Ok(UserInput::RefreshPanel(panel)) => {
                     let cmd = match panel {
@@ -603,10 +619,10 @@ impl App {
                         crate::app::PanelKind::Mcp => GatewayCommand::McpList,
                         crate::app::PanelKind::Channels => GatewayCommand::ChannelStatus,
                     };
-                    let _ = client.send(cmd).await;
+                    client.send_or_log(cmd).await;
                 }
                 Ok(UserInput::MessengerCommand(cmd)) => {
-                    let _ = client.send(cmd).await;
+                    client.send_or_log(cmd).await;
                 }
                 Ok(UserInput::RefreshTasks) => {
                     let _ = client
@@ -619,7 +635,9 @@ impl App {
                         .await;
                 }
                 Ok(UserInput::AgentSwitch(agent_id)) => {
-                    let _ = client.send(GatewayCommand::AgentSwitch { agent_id }).await;
+                    client
+                        .send_or_log(GatewayCommand::AgentSwitch { agent_id })
+                        .await;
                 }
                 Ok(UserInput::RequestThreadHistory(thread_id)) => {
                     // A dropped error here reads as an empty thread: the view
@@ -636,7 +654,7 @@ impl App {
                     }
                 }
                 Ok(UserInput::RefreshThreads) => {
-                    let _ = client.send(GatewayCommand::ThreadList).await;
+                    client.send_or_log(GatewayCommand::ThreadList).await;
                 }
                 Ok(UserInput::HatchingComplete(payload)) => {
                     // Parse "name\tpersonality" or just "name"
@@ -683,16 +701,19 @@ impl App {
                                             config.model.as_ref().and_then(|m| m.base_url.clone()),
                                         ),
                                 });
-                                let _ = config.save(None);
+                                crate::app::events::persist_config(config, &gw_tx);
                                 // Reload gateway
-                                let _ = client.send(GatewayCommand::Reload).await;
+                                client.send_or_log(GatewayCommand::Reload).await;
                                 // Trigger model selector (show loading)
                                 let display = def.display.to_string();
                                 let pid = provider_id.clone();
-                                let _ = gw_tx.send(GwEvent::FetchModelsLoading {
-                                    provider: pid.clone(),
-                                    provider_display: display.clone(),
-                                });
+                                crate::app::events::emit(
+                                    &gw_tx,
+                                    GwEvent::FetchModelsLoading {
+                                        provider: pid.clone(),
+                                        provider_display: display.clone(),
+                                    },
+                                );
                                 let gw_tx2 = gw_tx.clone();
                                 let base = config.model.as_ref().and_then(|m| m.base_url.clone());
                                 tokio::spawn(async move {
@@ -752,15 +773,18 @@ impl App {
                                                     .and_then(|m| m.base_url.clone()),
                                             ),
                                     });
-                                    let _ = config.save(None);
-                                    let _ = client.send(GatewayCommand::Reload).await;
+                                    crate::app::events::persist_config(config, &gw_tx);
+                                    client.send_or_log(GatewayCommand::Reload).await;
                                     let display = def.display.to_string();
                                     let pid = provider_id.clone();
                                     let key = has_key;
-                                    let _ = gw_tx.send(GwEvent::FetchModelsLoading {
-                                        provider: pid.clone(),
-                                        provider_display: display.clone(),
-                                    });
+                                    crate::app::events::emit(
+                                        &gw_tx,
+                                        GwEvent::FetchModelsLoading {
+                                            provider: pid.clone(),
+                                            provider_display: display.clone(),
+                                        },
+                                    );
                                     let gw_tx2 = gw_tx.clone();
                                     let base =
                                         config.model.as_ref().and_then(|m| m.base_url.clone());
@@ -789,12 +813,15 @@ impl App {
                                     });
                                 } else {
                                     // No key — prompt for one
-                                    let _ = gw_tx.send(GwEvent::PromptApiKey {
-                                        provider: provider_id.clone(),
-                                        provider_display: def.display.to_string(),
-                                        help_url: def.help_url.unwrap_or("").to_string(),
-                                        help_text: def.help_text.unwrap_or("").to_string(),
-                                    });
+                                    crate::app::events::emit(
+                                        &gw_tx,
+                                        GwEvent::PromptApiKey {
+                                            provider: provider_id.clone(),
+                                            provider_display: def.display.to_string(),
+                                            help_url: def.help_url.unwrap_or("").to_string(),
+                                            help_text: def.help_text.unwrap_or("").to_string(),
+                                        },
+                                    );
                                 }
                             }
                             rustyclaw_core::providers::AuthMethod::DeviceFlow => {
@@ -823,15 +850,18 @@ impl App {
                                                     .and_then(|m| m.base_url.clone()),
                                             ),
                                     });
-                                    let _ = config.save(None);
-                                    let _ = client.send(GatewayCommand::Reload).await;
+                                    crate::app::events::persist_config(config, &gw_tx);
+                                    client.send_or_log(GatewayCommand::Reload).await;
                                     let display = def.display.to_string();
                                     let pid = provider_id.clone();
                                     let token = has_token;
-                                    let _ = gw_tx.send(GwEvent::FetchModelsLoading {
-                                        provider: pid.clone(),
-                                        provider_display: display.clone(),
-                                    });
+                                    crate::app::events::emit(
+                                        &gw_tx,
+                                        GwEvent::FetchModelsLoading {
+                                            provider: pid.clone(),
+                                            provider_display: display.clone(),
+                                        },
+                                    );
                                     let gw_tx2 = gw_tx.clone();
                                     let base =
                                         config.model.as_ref().and_then(|m| m.base_url.clone());
@@ -864,10 +894,13 @@ impl App {
                                         let pid = provider_id.clone();
                                         let display = def.display.to_string();
                                         let gw_tx2 = gw_tx.clone();
-                                        let _ = gw_tx.send(GwEvent::Info(format!(
-                                            "Starting device flow for {}…",
-                                            display
-                                        )));
+                                        crate::app::events::emit(
+                                            &gw_tx,
+                                            GwEvent::Info(format!(
+                                                "Starting device flow for {}…",
+                                                display
+                                            )),
+                                        );
                                         tokio::spawn(async move {
                                             match rustyclaw_core::providers::start_device_flow(
                                                 df_config,
@@ -940,10 +973,13 @@ impl App {
                                             }
                                         });
                                     } else {
-                                        let _ = gw_tx.send(GwEvent::error(
-                                            "Device flow not configured for this provider."
-                                                .to_string(),
-                                        ));
+                                        crate::app::events::emit(
+                                            &gw_tx,
+                                            GwEvent::error(
+                                                "Device flow not configured for this provider."
+                                                    .to_string(),
+                                            ),
+                                        );
                                     }
                                 }
                             }
@@ -959,16 +995,22 @@ impl App {
                         rustyclaw_core::providers::display_name_for_provider(&provider).to_string();
                     match secrets_manager.store_secret(secret_key_name, &key) {
                         Ok(()) => {
-                            let _ = gw_tx.send(GwEvent::Success(format!(
-                                "✓ API key for {} stored securely.",
-                                display,
-                            )));
+                            crate::app::events::emit(
+                                &gw_tx,
+                                GwEvent::Success(format!(
+                                    "✓ API key for {} stored securely.",
+                                    display,
+                                )),
+                            );
                         }
                         Err(e) => {
-                            let _ = gw_tx.send(GwEvent::warning(format!(
-                                "Failed to store API key: {}. Key is set for this session only.",
-                                e,
-                            )));
+                            crate::app::events::emit(
+                                &gw_tx,
+                                GwEvent::warning(format!(
+                                    "Failed to store API key: {}. Key is set for this session only.",
+                                    e,
+                                )),
+                            );
                         }
                     }
                     // Update config with the new provider
@@ -982,15 +1024,18 @@ impl App {
                             config.model.as_ref().and_then(|m| m.base_url.clone()),
                         ),
                     });
-                    let _ = config.save(None);
+                    crate::app::events::persist_config(config, &gw_tx);
                     // Reload gateway
-                    let _ = client.send(GatewayCommand::Reload).await;
+                    client.send_or_log(GatewayCommand::Reload).await;
                     // Now fetch models
                     let pid = provider.clone();
-                    let _ = gw_tx.send(GwEvent::FetchModelsLoading {
-                        provider: pid.clone(),
-                        provider_display: display.clone(),
-                    });
+                    crate::app::events::emit(
+                        &gw_tx,
+                        GwEvent::FetchModelsLoading {
+                            provider: pid.clone(),
+                            provider_display: display.clone(),
+                        },
+                    );
                     let gw_tx2 = gw_tx.clone();
                     let api_key = Some(key);
                     let base = config.model.as_ref().and_then(|m| m.base_url.clone());
@@ -1028,16 +1073,22 @@ impl App {
                         base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                     });
                     if let Err(e) = config.save(None) {
-                        let _ = gw_tx.send(GwEvent::error(format!("Failed to save config: {}", e)));
+                        crate::app::events::emit(
+                            &gw_tx,
+                            GwEvent::error(format!("Failed to save config: {}", e)),
+                        );
                     } else {
                         let display =
                             rustyclaw_core::providers::display_name_for_provider(&provider);
-                        let _ = gw_tx.send(GwEvent::Info(format!(
-                            "Model set to {} / {}. Reloading gateway…",
-                            display, model,
-                        )));
+                        crate::app::events::emit(
+                            &gw_tx,
+                            GwEvent::Info(format!(
+                                "Model set to {} / {}. Reloading gateway…",
+                                display, model,
+                            )),
+                        );
                         // Reload gateway so the new provider + model take effect
-                        let _ = client.send(GatewayCommand::Reload).await;
+                        client.send_or_log(GatewayCommand::Reload).await;
                     }
                 }
                 Ok(UserInput::CancelProviderFlow) => {
@@ -1053,10 +1104,10 @@ impl App {
                         .send(GatewayCommand::EngineAction { engine, action })
                         .await;
                     // Refresh the list so status changes show up.
-                    let _ = client.send(GatewayCommand::EngineList).await;
+                    client.send_or_log(GatewayCommand::EngineList).await;
                 }
                 Ok(UserInput::EngineRefresh) => {
-                    let _ = client.send(GatewayCommand::EngineList).await;
+                    client.send_or_log(GatewayCommand::EngineList).await;
                 }
                 #[allow(unused_variables)]
                 Ok(UserInput::PairingConnect {
