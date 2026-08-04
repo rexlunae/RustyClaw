@@ -140,10 +140,14 @@ pub trait TransportWriter: Send + Sync {
 
 /// A write handed to the connection's writer task.
 pub enum Outbound {
+    /// A frame to write on a logical stream.
     Frame {
+        /// Logical stream the frame belongs to.
         stream_id: u64,
+        /// The frame to write.
         frame: Box<ServerFrame>,
     },
+    /// Close the transport, once everything queued ahead of this has gone out.
     Close,
 }
 
@@ -167,6 +171,7 @@ pub struct QueuedWriter {
 }
 
 impl QueuedWriter {
+    /// Build a writer that enqueues onto the connection's writer task.
     pub fn new(tx: tokio::sync::mpsc::Sender<Outbound>) -> Self {
         Self { tx }
     }
