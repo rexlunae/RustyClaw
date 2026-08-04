@@ -62,7 +62,7 @@ pub(crate) fn report(tx: &std::sync::mpsc::Sender<GwEvent>, e: rustyclaw_view::a
     emit(
         tx,
         GwEvent::Error {
-            summary: format!("{e}"),
+            summary: format!("Action failed: {e:#}"),
             details: Some(format!("{e:?}")),
         },
     );
