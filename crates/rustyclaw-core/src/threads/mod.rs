@@ -22,7 +22,7 @@ pub mod subtask;
 pub use events::*;
 pub use manager::*;
 pub use model::*;
-pub use store::ThreadStore;
+pub use store::{ThreadStore, ThreadSummary};
 pub use subtask::{
     SpawnOptions, SubtaskError, SubtaskHandle, SubtaskRegistry, SubtaskResult, spawn_background,
     spawn_subagent, spawn_task,

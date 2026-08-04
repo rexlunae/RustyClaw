@@ -301,13 +301,17 @@ fn resolve_routing(
 
     // The thread is read from disk each time rather than cached: a client may
     // have renamed it, moved it, or deleted it since the loop started, and a
-    // stale working directory is a tool call in the wrong repository. Read
-    // through the per-thread store like every other gateway call site — the
-    // legacy loader reads a `threads.json` migration has renamed away, so it
-    // found nothing and every route fell back to the default workspace.
+    // stale working directory is a tool call in the wrong repository. A
+    // read-only peek: resolving a route must not create stores or threads
+    // (this runs per inbound message), and the legacy loader it replaced
+    // read a `threads.json` migration has renamed away, so it found nothing
+    // and every route fell back to the default workspace.
     let threads_path = config.sessions_dir_for(route.agent()).join("threads.json");
-    let thread_mgr = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
-    let Some(thread) = thread_mgr.get(rustyclaw_core::threads::ThreadId(route.thread_id)) else {
+    let threads = rustyclaw_core::threads::ThreadStore::peek(&threads_path);
+    let Some(thread) = threads
+        .as_deref()
+        .and_then(|ts| ts.iter().find(|t| t.id == route.thread_id))
+    else {
         warn!(
             account = %account.name,
             thread_id = route.thread_id,
@@ -397,12 +401,10 @@ pub async fn run_messenger_loop(
     copilot_session: Option<Arc<super::CopilotSession>>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    eprintln!("DEBUG: run_messenger_loop() called");
     // If no model context, we can't process messages
     let model_ctx = match model_ctx {
         Some(ctx) => ctx,
         None => {
-            eprintln!("DEBUG: No model context, returning early");
             warn!("No model context — messenger loop disabled");
             return Ok(());
         }
@@ -418,10 +420,6 @@ pub async fn run_messenger_loop(
     let concurrent_mode = max_concurrent > 1;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
-    eprintln!(
-        "DEBUG: messenger_max_concurrent={}, concurrent_mode={}",
-        max_concurrent, concurrent_mode
-    );
     if concurrent_mode {
         info!(max_concurrent, "Concurrent message processing enabled");
     }
@@ -435,10 +433,6 @@ pub async fn run_messenger_loop(
             .build()?,
     );
 
-    eprintln!(
-        "DEBUG: Starting messenger loop with poll_interval={}ms",
-        poll_interval.as_millis()
-    );
     info!(
         poll_interval_ms = poll_interval.as_millis(),
         "Starting messenger loop"
@@ -447,7 +441,6 @@ pub async fn run_messenger_loop(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                eprintln!("DEBUG: Messenger loop cancelled");
                 info!("Shutting down messenger loop");
                 break;
             }
@@ -473,17 +466,22 @@ pub async fn run_messenger_loop(
                 }
                 config = fresh;
 
-                eprintln!("DEBUG: Polling messengers...");
+                // The loop runs on every gateway so the setup panel's first
+                // account is noticed — but with nothing configured, a tick
+                // is just the config check above.
+                if config.messengers.is_empty() {
+                    continue;
+                }
+
                 // Poll all messengers for incoming messages
                 let messages = {
                     let mgr = messenger_mgr.lock().await;
                     poll_all_messengers(&mgr).await
                 };
-                eprintln!("DEBUG: Got {} messages", messages.len());
+                trace!(count = messages.len(), "Polled messengers");
 
                 // Process each message
                 for (account_name, messenger_type, msg) in messages {
-                    eprintln!("DEBUG: Processing message from {} in {}", msg.sender, messenger_type);
 
                     if concurrent_mode {
                         // Spawn message processing as a background task
@@ -540,11 +538,9 @@ pub async fn run_messenger_loop(
                             }
 
                             if let Err(e) = result {
-                                eprintln!("DEBUG: Error processing message: {}", e);
                                 error!(error = %e, "Error processing message");
                             }
                         });
-                        eprintln!("DEBUG: Message processing spawned (concurrent)");
                     } else {
                         // Sequential mode (original behavior)
                         // Set typing indicator before processing
@@ -582,10 +578,8 @@ pub async fn run_messenger_loop(
                         }
 
                         if let Err(e) = result {
-                            eprintln!("DEBUG: Error processing message: {}", e);
                             error!(error = %e, "Error processing message");
                         }
-                        eprintln!("DEBUG: Message processing complete");
                     }
                 }
             }

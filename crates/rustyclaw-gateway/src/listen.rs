@@ -263,12 +263,9 @@ pub async fn run_gateway(
     // config meant a first account saved through the panel could never
     // connect until a restart. With nothing configured, polling an empty
     // manager is a no-op.
-    eprintln!("DEBUG: messengers configured: {}", config.messengers.len());
     let messenger_mgr = {
-        eprintln!("DEBUG: Creating messenger manager...");
         match messenger_handler::create_messenger_manager(&config, &vault).await {
             Ok(mgr) => {
-                eprintln!("DEBUG: Messenger manager created successfully");
                 let shared_mgr: SharedMessengerManager = Arc::new(Mutex::new(mgr));
 
                 // Spawn messenger loop
@@ -283,13 +280,7 @@ pub async fn run_gateway(
                 // Read current copilot session from shared state
                 let messenger_copilot = shared_copilot_session.read().await.clone();
 
-                eprintln!("DEBUG: Spawning messenger loop task...");
                 tokio::spawn(async move {
-                    eprintln!("DEBUG: Messenger loop task started");
-                    eprintln!(
-                        "DEBUG: messenger_ctx.is_some() = {}",
-                        messenger_ctx.is_some()
-                    );
                     if let Err(e) = messenger_handler::run_messenger_loop(
                         messenger_config,
                         mgr_clone,
@@ -303,10 +294,8 @@ pub async fn run_gateway(
                     )
                     .await
                     {
-                        eprintln!("DEBUG: Messenger loop error: {}", e);
                         error!(error = %e, "Messenger loop error");
                     }
-                    eprintln!("DEBUG: Messenger loop exited");
                 });
 
                 Some(shared_mgr)

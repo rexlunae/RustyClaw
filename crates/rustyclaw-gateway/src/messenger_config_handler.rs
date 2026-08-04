@@ -200,17 +200,19 @@ fn available_kinds() -> Vec<String> {
 fn routable_threads(config: &Config) -> Vec<RoutableThreadDto> {
     let mut out = Vec::new();
     for agent in config.agent_registry().list() {
-        // Through the per-thread store, like every other gateway call site.
-        // The legacy loader reads a `threads.json` the gateway no longer
-        // writes (migration renames it away), so it saw no threads at all —
-        // and then invented a fresh "Main", leaving the picker with one
-        // phantom entry and rejecting every real thread id.
+        // A read-only peek, not a load: enumerating for the picker must not
+        // materialise a "Main" thread (and a store on disk) for every agent
+        // nobody has opened, nor raise the global thread-id floor to the
+        // installation-wide maximum. An agent with no store simply has no
+        // routable threads.
         let path = config.sessions_dir_for(&agent.id).join("threads.json");
-        let mgr = rustyclaw_core::threads::ThreadStore::load_or_migrate(&path);
-        for thread in mgr.list() {
+        let Some(threads) = rustyclaw_core::threads::ThreadStore::peek(&path) else {
+            continue;
+        };
+        for thread in threads {
             out.push(RoutableThreadDto {
-                thread_id: thread.id.0,
-                label: thread.label.clone(),
+                thread_id: thread.id,
+                label: thread.label,
                 agent_id: agent.id.clone(),
             });
         }
