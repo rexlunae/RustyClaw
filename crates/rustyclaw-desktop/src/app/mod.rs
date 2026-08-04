@@ -368,7 +368,7 @@ pub fn App() -> Element {
             .and_then(|d| d.selected_engine.clone());
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("EngineList", async move {
+            spawn_reporting("load engines", async move {
                 client
                     .send(GatewayCommand::EngineList)
                     .await
@@ -416,7 +416,7 @@ pub fn App() -> Element {
         }
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("CronList", async move {
+            spawn_reporting("refresh panels", async move {
                 if cron {
                     client
                         .send(GatewayCommand::CronList)
@@ -1010,7 +1010,7 @@ pub fn App() -> Element {
     let on_delete_thread = move |thread_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("ThreadClose", async move {
+            spawn_reporting("close thread", async move {
                 client
                     .send(GatewayCommand::ThreadClose { thread_id })
                     .await
@@ -1031,7 +1031,7 @@ pub fn App() -> Element {
         drop(s);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("Cancel", async move {
+            spawn_reporting("cancel turn", async move {
                 client
                     .send(GatewayCommand::Cancel { thread_id })
                     .await
@@ -1122,7 +1122,7 @@ pub fn App() -> Element {
                 show_messengers.set(true);
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
-                    spawn_reporting("MessengerConfig", async move {
+                    spawn_reporting("load messenger config", async move {
                         client
                             .send(GatewayCommand::MessengerConfig)
                             .await
@@ -1134,7 +1134,7 @@ pub fn App() -> Element {
                 show_secrets.set(true);
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
-                    spawn_reporting("SecretsList", async move {
+                    spawn_reporting("load secrets", async move {
                         client
                             .send(GatewayCommand::SecretsList)
                             .await
@@ -1164,7 +1164,7 @@ pub fn App() -> Element {
                     let need_host = state.read().host_info.is_none();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("HostInfoRequest", async move {
+                        spawn_reporting("load host status", async move {
                             if need_host {
                                 client
                                     .send(GatewayCommand::HostInfoRequest)
@@ -1186,7 +1186,7 @@ pub fn App() -> Element {
                     // Opening: fetch the service list.
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("ServiceList", async move {
+                        spawn_reporting("load services", async move {
                             client
                                 .send(GatewayCommand::ServiceList)
                                 .await
@@ -1204,7 +1204,7 @@ pub fn App() -> Element {
                     let need_host = state.read().host_info.is_none();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("EngineList", async move {
+                        spawn_reporting("load engines", async move {
                             client
                                 .send(GatewayCommand::EngineList)
                                 .await
@@ -1225,7 +1225,7 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("CronList", async move {
+                        spawn_reporting("load cron jobs", async move {
                             client
                                 .send(GatewayCommand::CronList)
                                 .await
@@ -1256,7 +1256,7 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("McpList", async move {
+                        spawn_reporting("load MCP servers", async move {
                             client
                                 .send(GatewayCommand::McpList)
                                 .await
@@ -1271,7 +1271,7 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("ChannelStatus", async move {
+                        spawn_reporting("load channels", async move {
                             client
                                 .send(GatewayCommand::ChannelStatus)
                                 .await
@@ -1286,7 +1286,7 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("ToolConfigList", async move {
+                        spawn_reporting("load tool config", async move {
                             client
                                 .send(GatewayCommand::ToolConfigList)
                                 .await
@@ -1450,7 +1450,7 @@ pub fn App() -> Element {
                             show_secrets.set(true);
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
-                                spawn_reporting("SecretsList", async move {
+                                spawn_reporting("load secrets", async move {
                                     client.send(GatewayCommand::SecretsList).await.context("sending SecretsList")?;
                         client.send(GatewayCommand::SecretsHasTotp).await.context("sending SecretsHasTotp")?;
                                     Ok(())
@@ -1520,7 +1520,7 @@ pub fn App() -> Element {
                             show_secrets.set(true);
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
-                                spawn_reporting("SecretsList", async move {
+                                spawn_reporting("load secrets", async move {
                                     client.send(GatewayCommand::SecretsList).await.context("sending SecretsList")?;
                         client.send(GatewayCommand::SecretsHasTotp).await.context("sending SecretsHasTotp")?;
                                     Ok(())
@@ -1533,7 +1533,7 @@ pub fn App() -> Element {
                             let need_host = state.read().host_info.is_none();
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
-                                spawn_reporting("EngineList", async move {
+                                spawn_reporting("load engines", async move {
                                     client.send(GatewayCommand::EngineList).await.context("sending EngineList")?;
                                     if need_host {
                                         client.send(GatewayCommand::HostInfoRequest).await.context("sending HostInfoRequest")?;
