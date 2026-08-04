@@ -478,22 +478,18 @@ pub fn App() -> Element {
             let done_w = worker_done.clone();
             tokio::spawn(async move {
                 loop {
-                    if !client_w.is_connected() {
-                        // Whatever is still queued outlives the flag. The
-                        // writer marks the connection dead immediately after
-                        // queueing its `Disconnected`, so breaking straight
-                        // out here would strand the one event that tells the
-                        // UI the connection is gone — leaving it showing a
-                        // healthy connection and a spinner that never stops.
-                        let remaining = client_w.drain_available().await;
-                        if !remaining.is_empty() {
-                            buf_w
-                                .lock()
-                                .expect("stream buffer poisoned")
-                                .push_events(remaining);
-                        }
-                        break;
-                    }
+                    // End of stream is the event channel closing, never the
+                    // connection flag. A write failure kills only the writer;
+                    // the reader stays live and keeps delivering. Quitting on
+                    // the flag threw those remaining events away — fatally
+                    // during login, where a refused pre-auth command marks the
+                    // connection dead and the `AuthSuccess` that would close
+                    // the TOTP prompt then never gets processed, locking the
+                    // user out of an app that is still receiving frames.
+                    //
+                    // The client holds only the receiver, so both tasks
+                    // dropping their senders is exactly "nothing more will
+                    // ever arrive" — the honest signal to stop on.
                     let first = match client_w.recv().await {
                         Some(e) => e,
                         None => break,
@@ -564,8 +560,23 @@ pub fn App() -> Element {
                                 };
                                 handle_gateway_event(thread_id, event, state);
                                 if triggers_refresh && !refreshed_threads_this_connection {
-                                    refreshed_threads_this_connection = true;
-                                    let _ = client_ui.send(GatewayCommand::ThreadList).await;
+                                    // Latch only on a send that actually left
+                                    // the process. `Connected` can arrive while
+                                    // a TOTP prompt is still up, and a gateway
+                                    // that refuses pre-auth commands drops that
+                                    // refresh — latching anyway left the
+                                    // sidebar empty for the rest of the session
+                                    // even after the user logged in. Same shape
+                                    // as the history guard below. `AuthSuccess`
+                                    // fires this again, so the retry is free.
+                                    match client_ui.send(GatewayCommand::ThreadList).await {
+                                        Ok(()) => refreshed_threads_this_connection = true,
+                                        Err(e) => tracing::error!(
+                                            error = %e,
+                                            "Thread list refresh failed to send; \
+                                             will retry on the next trigger"
+                                        ),
+                                    }
                                 }
                                 if should_reset_history_guard {
                                     last_foreground_history_request = None;
