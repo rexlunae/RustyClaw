@@ -61,7 +61,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
     let on_secrets_command = move |cmd: SecretsCommand| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("SecretsList", async move {
+            spawn_reporting("secrets command", async move {
                 match cmd {
                     SecretsCommand::Refresh => {
                         client
@@ -120,7 +120,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
     let on_messenger_command = move |cmd: MessengerCommand| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("command", async move {
+            spawn_reporting("send command", async move {
                 let command = match cmd {
                     MessengerCommand::Refresh => GatewayCommand::MessengerConfig,
                     MessengerCommand::SaveAccount {
@@ -242,7 +242,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     // Persist the name to the gateway config.
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("SetAgentName", async move {
+                        spawn_reporting("rename agent", async move {
                             client.send(GatewayCommand::SetAgentName { name }).await.context("sending SetAgentName")?;
                             Ok(())
                         });
@@ -444,7 +444,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("ToolApprove", async move {
+                        spawn_reporting("answer tool approval", async move {
                             client.send(GatewayCommand::ToolApprove { id, approved: true }).await.context("sending ToolApprove")?;
                             Ok(())
                         });
@@ -457,7 +457,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("ToolApprove", async move {
+                        spawn_reporting("answer tool approval", async move {
                             client.send(GatewayCommand::ToolApprove { id, approved: false }).await.context("sending ToolApprove")?;
                             Ok(())
                         });
@@ -475,7 +475,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     vault_unlock_error.set(None);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("VaultUnlock", async move {
+                        spawn_reporting("unlock vault", async move {
                             client.send(GatewayCommand::VaultUnlock { password }).await.context("sending VaultUnlock")?;
                             Ok(())
                         });
@@ -501,7 +501,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("CredentialResponse", async move {
+                        spawn_reporting("submit credential", async move {
                             client.send(GatewayCommand::CredentialResponse {
                                 id,
                                 dismissed: false,
@@ -515,7 +515,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("CredentialResponse", async move {
+                        spawn_reporting("submit credential", async move {
                             client.send(GatewayCommand::CredentialResponse {
                                 id,
                                 dismissed: true,
@@ -580,7 +580,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         .push_notice(MessageRole::Info, "Device flow cancelled.");
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("Cancel", async move {
+                        spawn_reporting("cancel turn", async move {
                             client.send(GatewayCommand::Cancel { thread_id }).await.context("sending Cancel")?;
                             Ok(())
                         });
