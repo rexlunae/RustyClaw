@@ -111,11 +111,19 @@ pub(crate) async fn handle_agent_list(
 /// target agent's state, repoint the workspace and system prompt, and
 /// notify the client. Returns `true` when the switch happened (the caller
 /// must then re-subscribe to the new thread manager's events).
+///
+/// `thread_mgr_cell` is the store the connection's reader answers history
+/// from, and it is repointed here rather than by the caller: everything below
+/// the swap tells the client about the new agent, and the client answers a
+/// thread list by asking for a transcript. Publishing after the announcement
+/// would leave a window where the new agent's ids are resolved against the old
+/// agent's store — which resolves, because ids restart low in each.
 pub(crate) async fn handle_agent_switch(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     base_system_prompt: &Option<String>,
     session: &mut AgentSession,
+    thread_mgr_cell: &Arc<std::sync::RwLock<SharedThreadMgr>>,
     task_mgr: &SharedTaskManager,
     agent_id: String,
 ) -> Result<bool> {
@@ -133,6 +141,12 @@ pub(crate) async fn handle_agent_switch(
 
     session.save().await;
     *session = AgentSession::load(config, &agent_id);
+    // Before a single frame about the new agent goes out — see the note on
+    // this function. The reader answers history without passing through here,
+    // so this is the moment the two must agree.
+    *thread_mgr_cell
+        .write()
+        .expect("thread manager cell poisoned") = session.thread_mgr.clone();
 
     // Non-main agents may carry their own base system prompt; main gets
     // the connection's original prompt back.

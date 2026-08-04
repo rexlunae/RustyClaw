@@ -1548,22 +1548,20 @@ pub(crate) async fn handle_connection(
                                     &mut config,
                                     &base_system_prompt,
                                     &mut agent_session,
+                                    &thread_mgr_cell,
                                     &task_mgr,
                                     agent_id,
                                 )
                                 .await?;
                                 if switched {
                                     // The thread manager was replaced — follow
-                                    // the new one's sidebar events.
+                                    // the new one's sidebar events. The reader's
+                                    // cell was repointed inside the switch, before
+                                    // the client heard about it; doing it here
+                                    // would be after the new agent's thread list
+                                    // had already gone out, and the client asks
+                                    // for a transcript as soon as it sees one.
                                     thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
-                                    // And point the reader at it too. It
-                                    // answers history without coming through
-                                    // here, so a store left unpublished is one
-                                    // it would keep answering from.
-                                    *thread_mgr_cell
-                                        .write()
-                                        .expect("thread manager cell poisoned") =
-                                        agent_session.thread_mgr.clone();
                                 }
                             }
                             ClientPayload::AgentCreate { name, agent_id, description } => {
