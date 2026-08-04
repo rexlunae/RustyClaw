@@ -82,6 +82,16 @@ pub fn MessengersDialog(props: MessengersDialogProps) -> Element {
     let route_account = use_signal(String::new);
 
     if !props.visible {
+        // The component stays mounted while hidden, so its signals survive a
+        // close — and a half-typed credential must not still be sitting in
+        // the form when the window is next opened. Dismissal abandons the
+        // edit.
+        if editor.read().is_some() {
+            editor.set(None);
+        }
+        if *picking_kind.read() {
+            picking_kind.set(false);
+        }
         return rsx! {};
     }
 

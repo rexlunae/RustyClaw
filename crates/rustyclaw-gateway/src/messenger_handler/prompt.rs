@@ -69,16 +69,12 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         identity.workspace_dir.to_path_buf(),
         config.workspace_context.clone(),
     );
-    eprintln!(
-        "DEBUG: Building workspace context for session_type={:?}, workspace_dir={}",
-        session_type,
-        identity.workspace_dir.display()
+    tracing::trace!(
+        ?session_type,
+        workspace_dir = %identity.workspace_dir.display(),
+        "Building messenger workspace context"
     );
     let workspace_prompt = workspace_ctx.build_context(session_type);
-    eprintln!(
-        "DEBUG: Workspace prompt length: {} chars",
-        workspace_prompt.len()
-    );
 
     // Combine base prompt, identity, safety, workspace context, and messaging
     // context.

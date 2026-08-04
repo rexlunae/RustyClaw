@@ -166,17 +166,18 @@ async fn announce_profile(
             Ok(path) => {
                 // Location checks can't vouch for *contents*: anything with
                 // workspace write access (the agent's file tools included)
-                // could have replaced the image. Only the bytes present when
-                // the user saved the profile get published; a mismatch means
-                // "re-save in the setup panel to bless the new image". A
-                // profile with no recorded fingerprint was hand-written into
-                // config.toml on the host, which is at least as deliberate
-                // as a panel save, so it uploads as-is.
+                // could have replaced the image. Only bytes the user has
+                // blessed get published — a fingerprint recorded at save
+                // time that still matches. No fingerprint means no upload,
+                // even for a hand-written config: leaving that case open
+                // made "an unpinned profile" the standing loophole, and a
+                // hand-editor can bless their image either by saving the
+                // profile once in the setup panel or by writing the
+                // `avatar_sha256` field beside `avatar_path`.
                 let fingerprint = rustyclaw_core::messengers::setup::file_fingerprint(&path);
                 let publishable = match (profile.avatar_sha256.as_deref(), &fingerprint) {
                     (Some(saved), Ok(current)) => saved == current,
-                    (Some(_), Err(_)) => false,
-                    (None, _) => true,
+                    _ => false,
                 };
                 if publishable {
                     let url = format!("file://{}", path.display());
@@ -186,8 +187,9 @@ async fn announce_profile(
                 } else {
                     warn!(
                         path = %path.display(),
-                        "Avatar contents changed since the profile was saved; \
-                         not publishing them — re-save the profile to use the new image"
+                        "Avatar has no recorded fingerprint or its contents changed since \
+                         the profile was saved; not publishing it — save the profile in \
+                         the messenger setup panel to bless this image"
                     );
                 }
             }

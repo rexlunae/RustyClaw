@@ -953,15 +953,20 @@ fn save_route(
         .unwrap_or_else(|| MAIN_AGENT_ID.to_string());
 
     // A route to a thread that does not exist would silently never fire, and
-    // the user would have no way to tell that from a working one.
+    // the user would have no way to tell that from a working one — so an
+    // *enabled* save requires the thread. Disabling skips the check, exactly
+    // as `save_account` does for unrunnable backends: both clients toggle by
+    // re-sending the save with `enabled` flipped, and the one route the
+    // panel flags as dangling must not be the one that can't be turned off.
     let threads = routable_threads(config);
     let target = threads
         .iter()
         .find(|t| t.thread_id == thread_id && t.agent_id == agent);
-    let Some(target) = target else {
-        return Err(format!("Agent '{agent}' has no thread #{thread_id}"));
+    let label = match (target, enabled) {
+        (Some(target), _) => target.label.clone(),
+        (None, true) => return Err(format!("Agent '{agent}' has no thread #{thread_id}")),
+        (None, false) => format!("#{thread_id}"),
     };
-    let label = target.label.clone();
 
     let channel = channel.filter(|c| !c.trim().is_empty());
     let route = ThreadRoute {
@@ -1883,6 +1888,40 @@ mod tests {
             Some("123:secret"),
             "a failed rename must never cost the stored credential"
         );
+    }
+
+    #[tokio::test]
+    async fn a_route_whose_thread_was_deleted_can_still_be_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+
+        let sessions = config.sessions_dir_for(MAIN_AGENT_ID);
+        std::fs::create_dir_all(&sessions).unwrap();
+        let mut mgr = ThreadManager::new();
+        let thread = mgr.create_chat("Inbox");
+        rustyclaw_core::threads::ThreadStore::at_legacy_path(&sessions.join("threads.json"))
+            .persist(&mut mgr)
+            .unwrap();
+        save_route(&mut config, "tg".into(), None, thread.0, None, true).unwrap();
+
+        // The thread goes away; the panel now flags the route as dangling.
+        let mut empty = ThreadManager::new();
+        rustyclaw_core::threads::ThreadStore::at_legacy_path(&sessions.join("threads.json"))
+            .persist(&mut empty)
+            .unwrap();
+
+        // Disabling the broken route must work — it is the one action that
+        // stops it, and deleting it outright was the only alternative.
+        save_route(&mut config, "tg".into(), None, thread.0, None, false)
+            .expect("disabling a dangling route must be allowed");
+        assert!(!config.messenger_routes[0].enabled);
+
+        // Re-enabling still validates: the thread genuinely is not there.
+        let error = save_route(&mut config, "tg".into(), None, thread.0, None, true).unwrap_err();
+        assert!(error.contains("no thread"), "{error}");
     }
 
     #[tokio::test]
