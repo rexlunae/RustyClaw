@@ -133,19 +133,29 @@ impl AgentSession {
         elected
     }
 
-    /// Persist thread and project state.
+    /// Persist thread state, recording where this connection was looking.
     ///
-    /// Hands this connection's foreground to the manager on the way out, so
-    /// the agent reopens where this window actually was. Quietly: the other
-    /// windows on this agent are watching the manager's events and have their
-    /// own view to keep.
-    pub async fn save(&self) {
+    /// Every path that ends a connection's claim on the store goes through
+    /// here — agent switch and disconnect alike. The foreground is a
+    /// per-connection cell now, so the manager only learns it when someone
+    /// tells it; a teardown that persisted the manager directly would write
+    /// out whatever pointer happened to be there, and the window would
+    /// reopen on a thread the user never chose.
+    ///
+    /// Written *quietly*: the other windows on this agent are watching the
+    /// manager's events and have their own view to keep. And written
+    /// unconditionally, `None` included — a client that backgrounded its
+    /// thread left nothing focused, and a stale pointer left behind is
+    /// exactly the thread it asked not to be in.
+    pub async fn persist_threads(&self) {
         let mut tm = self.thread_mgr.lock().await;
-        if let Some(id) = self.foreground_id() {
-            tm.set_foreground_quietly(Some(id));
-        }
+        tm.set_foreground_quietly(self.foreground_id());
         crate::helpers::persist_threads(&mut tm, &self.threads_path);
-        drop(tm);
+    }
+
+    /// Persist thread and project state.
+    pub async fn save(&self) {
+        self.persist_threads().await;
         crate::helpers::persist_projects(&self.project_mgr, &self.projects_path);
     }
 }

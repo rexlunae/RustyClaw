@@ -2366,10 +2366,10 @@ pub(crate) async fn handle_connection(
             }
         }
     }
-    crate::helpers::persist_threads(
-        &mut *agent_session.thread_mgr.lock().await,
-        &agent_session.threads_path,
-    );
+    // Through the session, not the manager directly: the last thing this
+    // client was looking at lives in a per-connection cell, and the store's
+    // foreground is how the next window finds its way back to it.
+    agent_session.persist_threads().await;
 
     Ok(())
 }
@@ -4869,6 +4869,57 @@ mod tests {
         in_b.lock().await.push_back(None);
         handle_a.await.expect("A panicked")?;
         handle_b.await.expect("B panicked")?;
+        Ok(())
+    }
+
+    /// Closing a window records where it was, so reopening lands there.
+    ///
+    /// The foreground is a per-connection cell, so the store only learns it
+    /// when the connection says so on the way out. Miss that and the
+    /// persisted pointer is whatever the manager happened to hold — the
+    /// most recently created thread, or whatever was elected at load — and
+    /// the user reopens in a conversation they never chose.
+    ///
+    /// The switch here is to the thread that is *not* the seeded foreground,
+    /// so a pointer that simply never moved fails this.
+    #[tokio::test]
+    async fn a_window_reopens_on_the_thread_it_was_closed_in() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (_first, second) = seed_two_threads(&cfg, "first", "second")?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let (incoming, outgoing, handle) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        await_frame(&outgoing, "the connection to settle", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+
+        incoming.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadSwitch,
+            payload: ClientPayload::ThreadSwitch {
+                thread_id: second.0,
+            },
+        }));
+        await_frame(&outgoing, "the switch", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+
+        // Close the window — the teardown is the only thing that can record
+        // this, and it is the path that used to bypass it.
+        incoming.lock().await.push_back(None);
+        handle.await.expect("connection task panicked")?;
+
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        let reloaded = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
+        assert_eq!(
+            reloaded.foreground_id(),
+            Some(second),
+            "the store should name the thread the window was closed in"
+        );
         Ok(())
     }
 
