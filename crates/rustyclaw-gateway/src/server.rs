@@ -2582,6 +2582,43 @@ mod tests {
                 outgoing,
             )
         }
+
+        /// A client whose later frames are decided while the connection is
+        /// already running.
+        ///
+        /// `with_frames*` fixes the whole script up front, which cannot
+        /// express "send this *while* that turn is still streaming" — the
+        /// only shape in which a serialising gateway differs from an
+        /// interleaving one. The returned queue is the client's keyboard:
+        /// pushing to it mid-connection is a user typing during someone
+        /// else's answer.
+        fn injectable(
+            peer: PeerInfo,
+            initial: Vec<Option<ClientFrame>>,
+        ) -> (
+            Self,
+            Arc<Mutex<VecDeque<Option<ClientFrame>>>>,
+            Arc<Mutex<Vec<ServerFrame>>>,
+        ) {
+            let outgoing = Arc::new(Mutex::new(Vec::new()));
+            let incoming = Arc::new(Mutex::new(VecDeque::from(initial)));
+            (
+                Self {
+                    peer,
+                    incoming: incoming.clone(),
+                    outgoing: outgoing.clone(),
+                    // Never hangs up by itself. A count of close-outs cannot
+                    // express "stay connected while I decide what to send
+                    // next", and a client that disconnects mid-test asks the
+                    // gateway to cancel turns — which would be measuring the
+                    // disconnect path instead. The test ends the connection
+                    // by pushing an explicit end-of-stream.
+                    hang_up_after_done: Some(usize::MAX),
+                },
+                incoming,
+                outgoing,
+            )
+        }
     }
 
     #[async_trait]
@@ -3636,6 +3673,63 @@ mod tests {
 
     // ── Content-routing tests: a scripted model, real turns ─────────────
 
+    /// Holds a scripted model's replies open so a test can keep a turn in
+    /// flight while it does something else on the same connection.
+    ///
+    /// Every existing turn test answers instantly, which means no turn is
+    /// ever really *running* when the next frame arrives — so none of them
+    /// can tell a gateway that interleaves work from one that serialises it.
+    /// This is the difference between "the reply was correct" and "the reply
+    /// did not have to wait for another thread".
+    #[derive(Clone)]
+    struct ModelGate {
+        /// Requests that have reached the model and are being held. A test
+        /// waits on this rather than sleeping, so it knows the turn is
+        /// genuinely inside the provider call and not merely spawned.
+        arrivals: Arc<std::sync::atomic::AtomicUsize>,
+        release: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl ModelGate {
+        fn new() -> Self {
+            Self {
+                arrivals: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                release: tokio::sync::watch::channel(false).0,
+            }
+        }
+
+        fn arrived(&self) -> usize {
+            self.arrivals.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// Wait until `n` requests are being held, or fail the test.
+        ///
+        /// Polling rather than a signal because the interesting failure is
+        /// "the turn never reached the model at all", and that should report
+        /// as a clear timeout here rather than as a hang somewhere later.
+        async fn await_arrivals(&self, n: usize, what: &str) {
+            let deadline = std::time::Duration::from_secs(10);
+            tokio::time::timeout(deadline, async {
+                while self.arrived() < n {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out waiting for {n} model request(s) while {what}; saw {}",
+                    self.arrived()
+                )
+            });
+        }
+
+        /// Let every held request answer, and every later one pass straight
+        /// through.
+        fn release(&self) {
+            let _ = self.release.send(true);
+        }
+    }
+
     /// A scripted OpenAI-compatible model endpoint.
     ///
     /// Every reply is derived from the request that produced it: the last
@@ -3646,6 +3740,11 @@ mod tests {
     /// streaming (SSE) protocol the chat path uses and the plain-JSON
     /// protocol internal calls (compaction summaries) use.
     async fn spawn_mock_model() -> std::net::SocketAddr {
+        spawn_mock_model_gated(None).await
+    }
+
+    /// The same endpoint, optionally holding every reply until released.
+    async fn spawn_mock_model_gated(gate: Option<ModelGate>) -> std::net::SocketAddr {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         fn content_text(value: &serde_json::Value) -> String {
@@ -3666,6 +3765,7 @@ mod tests {
         let addr = listener.local_addr().expect("mock model addr");
         tokio::spawn(async move {
             while let Ok((mut sock, _)) = listener.accept().await {
+                let gate = gate.clone();
                 tokio::spawn(async move {
                     let mut buf = Vec::new();
                     let mut tmp = [0u8; 8192];
@@ -3701,6 +3801,31 @@ mod tests {
                     let body = &buf[header_end..(header_end + content_length).min(buf.len())];
                     let request: serde_json::Value =
                         serde_json::from_slice(body).unwrap_or_default();
+                    // Counted before waiting: the test's signal that a turn
+                    // has reached the provider is this request arriving, not
+                    // it being answered.
+                    // Only completions are held. A connection also probes the
+                    // provider while starting up, and gating that would stall
+                    // the handshake before a single frame was served — the
+                    // test would then be measuring its own harness rather
+                    // than whether a turn blocks the loop.
+                    let is_completion = headers
+                        .lines()
+                        .next()
+                        .is_some_and(|line| line.contains("/chat/completions"));
+                    if let Some(gate) = gate.as_ref().filter(|_| is_completion) {
+                        gate.arrivals
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let mut rx = gate.release.subscribe();
+                        loop {
+                            // Copied out so the borrow guard is dropped
+                            // before the await below.
+                            let open = *rx.borrow();
+                            if open || rx.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    }
                     let users: Vec<String> = request
                         .get("messages")
                         .and_then(|m| m.as_array())
@@ -4019,6 +4144,304 @@ mod tests {
             messages.iter().any(|(role, _)| role == "tool"),
             "the tool result is part of the transcript: {messages:?}"
         );
+        Ok(())
+    }
+
+    /// Spawn a connection whose frames a test can add to while it runs.
+    ///
+    /// Returns the client's inbound queue, the frames it has been sent, and
+    /// the join handle — the connection is left running on purpose, because
+    /// everything interesting happens while it is.
+    fn spawn_live_connection(
+        cfg: &Config,
+        model_ctx: &SharedModelCtx,
+        initial: Vec<Option<ClientFrame>>,
+    ) -> (
+        Arc<Mutex<VecDeque<Option<ClientFrame>>>>,
+        Arc<Mutex<Vec<ServerFrame>>>,
+        tokio::task::JoinHandle<Result<()>>,
+    ) {
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (transport, incoming, outgoing) = MockTransport::injectable(peer, initial);
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+        let cfg = Arc::new(RwLock::new(cfg.clone()));
+        let model_ctx = model_ctx.clone();
+        let handle = tokio::spawn(async move {
+            handle_transport_connection(
+                Box::new(transport),
+                cfg,
+                model_ctx,
+                Arc::new(RwLock::new(None)),
+                vault,
+                skill_mgr,
+                task_mgr,
+                model_registry,
+                None,
+                auth::new_rate_limiter(),
+                CancellationToken::new(),
+            )
+            .await
+        });
+        (incoming, outgoing, handle)
+    }
+
+    /// Wait for a frame the client should have been sent, or say what did
+    /// arrive instead.
+    ///
+    /// The failure this exists to report is a gateway that is *not
+    /// answering*, so the timeout has to be the assertion rather than an
+    /// outer harness timeout that cannot say which frame was missing.
+    async fn await_frame(
+        outgoing: &Arc<Mutex<Vec<ServerFrame>>>,
+        what: &str,
+        matches: impl Fn(&ServerFrame) -> bool,
+    ) -> ServerFrame {
+        let deadline = std::time::Duration::from_secs(10);
+        let found = tokio::time::timeout(deadline, async {
+            loop {
+                if let Some(f) = outgoing.lock().await.iter().find(|f| matches(f)) {
+                    return f.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        match found {
+            Ok(f) => f,
+            Err(_) => {
+                let seen: Vec<String> = outgoing
+                    .lock()
+                    .await
+                    .iter()
+                    .map(|f| format!("{:?}", f.frame_type))
+                    .collect();
+                panic!("timed out waiting for {what}; frames seen: {seen:?}");
+            }
+        }
+    }
+
+    fn gated_model_ctx(addr: std::net::SocketAddr) -> SharedModelCtx {
+        Arc::new(RwLock::new(Some(Arc::new(
+            rustyclaw_core::gateway::ModelContext {
+                provider: "openai".to_string(),
+                model: "mock-model".to_string(),
+                base_url: format!("http://{addr}/v1"),
+                api_key: Some("test-key".to_string()),
+            },
+        ))))
+    }
+
+    /// Opening a thread must not wait for another thread's turn to finish.
+    ///
+    /// The reported symptom: creating a thread while one was answering
+    /// blocked immediately. A turn is spawned, so the connection loop is
+    /// free in principle — but only if nothing on the way to `ThreadCreate`
+    /// waits on something the running turn holds. The model is held open
+    /// here so the turn is genuinely mid-provider-call, which is the state
+    /// every other turn test skips past by answering instantly.
+    #[tokio::test]
+    async fn a_thread_can_be_created_while_another_thread_is_answering() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, _beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let gate = ModelGate::new();
+        let addr = spawn_mock_model_gated(Some(gate.clone())).await;
+        let model_ctx = gated_model_ctx(addr);
+
+        let (incoming, outgoing, handle) = spawn_live_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(chat_frame(alpha.0, "hold the line"))],
+        );
+
+        // The turn is now inside the provider call and will stay there.
+        gate.await_arrivals(1, "starting the first turn").await;
+
+        incoming.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadCreate,
+            payload: ClientPayload::ThreadCreate {
+                label: "opened mid-answer".to_string(),
+                project_id: 0,
+            },
+        }));
+
+        // The whole test: this must come back with the turn still running.
+        await_frame(&outgoing, "ThreadCreated while a turn was in flight", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadCreated)
+        })
+        .await;
+        assert_eq!(
+            gate.arrived(),
+            1,
+            "the first turn should still be waiting on the model"
+        );
+
+        gate.release();
+        await_frame(&outgoing, "the held turn to finish", |f| {
+            matches!(f.payload, ServerPayload::ResponseDone { .. })
+        })
+        .await;
+        incoming.lock().await.push_back(None);
+        handle.await.expect("connection task panicked")?;
+        Ok(())
+    }
+
+    /// Two threads must be able to be answering at the same time.
+    ///
+    /// This is the multiplexing claim itself: a second thread's turn should
+    /// reach the model while the first is still waiting on it. If the
+    /// gateway serialises turns, the second request never arrives until the
+    /// first is released, and this times out with one arrival instead of
+    /// two.
+    #[tokio::test]
+    async fn two_threads_can_be_answering_at_once() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let gate = ModelGate::new();
+        let addr = spawn_mock_model_gated(Some(gate.clone())).await;
+        let model_ctx = gated_model_ctx(addr);
+
+        let (incoming, outgoing, handle) =
+            spawn_live_connection(&cfg, &model_ctx, vec![Some(chat_frame(alpha.0, "first"))]);
+
+        gate.await_arrivals(1, "starting the first turn").await;
+
+        // Typed into the other thread while the first is still answering.
+        incoming
+            .lock()
+            .await
+            .push_back(Some(chat_frame(beta.0, "second")));
+
+        gate.await_arrivals(2, "a second turn should not wait for the first")
+            .await;
+
+        // Both are held at the model at the same instant — that is the
+        // property, not merely that both eventually completed.
+        gate.release();
+        let done = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                let n = outgoing
+                    .lock()
+                    .await
+                    .iter()
+                    .filter(|f| matches!(f.payload, ServerPayload::ResponseDone { .. }))
+                    .count();
+                if n >= 2 {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(done.is_ok(), "both turns should finish once released");
+        incoming.lock().await.push_back(None);
+        handle.await.expect("connection task panicked")?;
+        Ok(())
+    }
+
+    /// Seed a foreground thread with enough history to be worth compacting,
+    /// plus a second thread to run a turn in and a third to switch to.
+    fn seed_for_compaction(
+        cfg: &Config,
+    ) -> Result<(
+        rustyclaw_core::threads::ThreadId,
+        rustyclaw_core::threads::ThreadId,
+        rustyclaw_core::threads::ThreadId,
+    )> {
+        use rustyclaw_core::threads::MessageRole;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+
+        // The outgoing foreground: long enough to trip the compaction rule
+        // (more than three messages, no summary yet).
+        let stale = manager.create_chat("stale");
+        for i in 0..6 {
+            manager.add_message(stale, MessageRole::User, format!("q{i}"));
+            manager.add_message(stale, MessageRole::Assistant, format!("a{i}"));
+        }
+        let busy = manager.create_chat("busy");
+        let target = manager.create_chat("target");
+        manager.switch_foreground(stale);
+        manager.save_to_file(&threads_path)?;
+        Ok((stale, busy, target))
+    }
+
+    /// Switching threads must not stop the connection serving everything
+    /// else while it summarises the thread being left behind.
+    ///
+    /// Compaction is a provider round trip and it is awaited *inside* the
+    /// connection loop, so for as long as it runs the connection answers
+    /// nothing: not another thread's stream, not a Stop, not a thread being
+    /// opened. That is the "it blocked immediately" report — the click that
+    /// opens a thread is also the click that freezes the connection.
+    ///
+    /// No turn is needed to show this. The switch alone is enough, which is
+    /// the point: the freeze is not a consequence of concurrency, it is
+    /// what makes concurrency impossible.
+    #[tokio::test]
+    async fn a_switch_that_compacts_does_not_freeze_the_connection() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (_stale, _busy, target) = seed_for_compaction(&cfg)?;
+
+        let gate = ModelGate::new();
+        let addr = spawn_mock_model_gated(Some(gate.clone())).await;
+        let model_ctx = gated_model_ctx(addr);
+
+        let (incoming, outgoing, handle) = spawn_live_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(ClientFrame {
+                frame_type: ClientFrameType::ThreadSwitch,
+                payload: ClientPayload::ThreadSwitch {
+                    thread_id: target.0,
+                },
+            })],
+        );
+
+        // The switch is now inside the summarisation call.
+        gate.await_arrivals(1, "the switch should be compacting")
+            .await;
+
+        // Anything at all, asked while that call is outstanding.
+        incoming.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadCreate,
+            payload: ClientPayload::ThreadCreate {
+                label: "proof of life".to_string(),
+                project_id: 0,
+            },
+        }));
+
+        await_frame(
+            &outgoing,
+            "ThreadCreated while a compaction call was outstanding",
+            |f| matches!(f.frame_type, ServerFrameType::ThreadCreated),
+        )
+        .await;
+
+        gate.release();
+        await_frame(&outgoing, "the switch to be acknowledged", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+        incoming.lock().await.push_back(None);
+        handle.await.expect("connection task panicked")?;
         Ok(())
     }
 
