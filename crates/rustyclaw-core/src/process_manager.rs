@@ -65,6 +65,58 @@ pub enum SessionStatus {
     TimedOut,
 }
 
+/// A child that was already running elsewhere when the session took it on.
+///
+/// The foreground exec path spawns through `tokio::process`, which this
+/// manager cannot poll synchronously. Rather than kill that child and run
+/// the command again from the top — which threw away however much work it
+/// had already done — the pipe readers already draining it keep running and
+/// go on appending to [`Self::stdout`] and [`Self::stderr`], and a
+/// supervisor task holds the child and records where it ended up in
+/// [`Self::finished`]. This side reads those, so polling an adopted session
+/// looks the same from outside as polling a spawned one.
+pub struct AdoptedChild {
+    /// Bytes accumulated by the still-running stdout reader.
+    stdout: Arc<Mutex<Vec<u8>>>,
+    /// Bytes accumulated by the still-running stderr reader.
+    stderr: Arc<Mutex<Vec<u8>>>,
+    /// How much of each buffer this session has already copied out. The
+    /// readers only ever append, so a position is enough to find what is
+    /// new without draining what the buffers hold.
+    stdout_pos: usize,
+    stderr_pos: usize,
+    /// Set by the supervisor once the child is over.
+    finished: Arc<Mutex<Option<SessionStatus>>>,
+    /// Bytes to write to the child's stdin, handled by the supervisor
+    /// because the handle is async and this API is not.
+    stdin_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    /// Asks the supervisor to kill the child. Taken on first use — a kill
+    /// is not repeatable.
+    kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl AdoptedChild {
+    /// Assemble the session side of an adoption. The caller spawns the
+    /// supervisor that owns the child and fills these in.
+    pub fn new(
+        stdout: Arc<Mutex<Vec<u8>>>,
+        stderr: Arc<Mutex<Vec<u8>>>,
+        finished: Arc<Mutex<Option<SessionStatus>>>,
+        stdin_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+        kill_tx: tokio::sync::oneshot::Sender<()>,
+    ) -> Self {
+        Self {
+            stdout,
+            stderr,
+            stdout_pos: 0,
+            stderr_pos: 0,
+            finished,
+            stdin_tx,
+            kill_tx: Some(kill_tx),
+        }
+    }
+}
+
 /// A background exec session.
 pub struct ExecSession {
     /// Session identifier.
@@ -87,8 +139,11 @@ pub struct ExecSession {
     combined_output: String,
     /// Last read position for polling.
     last_read_pos: usize,
-    /// The child process handle.
+    /// The child process handle, when this session spawned it itself.
     child: Option<Child>,
+    /// The backing for a child adopted from the async exec path. Exactly
+    /// one of this and [`Self::child`] is set.
+    adopted: Option<AdoptedChild>,
     /// Exit code (set when process exits).
     exit_code: Option<i32>,
     /// Optional caller identity that owns this process session.
@@ -127,6 +182,41 @@ impl ExecSession {
             combined_output: String::new(),
             last_read_pos: 0,
             child: Some(child),
+            adopted: None,
+            exit_code: None,
+            owner_id,
+        }
+    }
+
+    /// Take on a child that is already running, keeping the elapsed time
+    /// it has behind it.
+    ///
+    /// `started_at` is the moment the command actually began, not the
+    /// moment of adoption: the point of handing a child over rather than
+    /// re-running it is that its progress counts, and that includes its
+    /// age. A timeout measured from the hand-off would give a command that
+    /// had already been running for most of its budget a fresh one.
+    pub fn adopt(
+        command: String,
+        working_dir: String,
+        timeout: Option<Duration>,
+        started_at: Instant,
+        adopted: AdoptedChild,
+        owner_id: Option<String>,
+    ) -> Self {
+        Self {
+            id: generate_session_id(),
+            command,
+            working_dir,
+            started_at,
+            timeout,
+            status: SessionStatus::Running,
+            stdout_buffer: Vec::new(),
+            stderr_buffer: Vec::new(),
+            combined_output: String::new(),
+            last_read_pos: 0,
+            child: None,
+            adopted: Some(adopted),
             exit_code: None,
             owner_id,
         }
@@ -194,6 +284,9 @@ impl ExecSession {
     ///
     /// Uses platform-specific non-blocking I/O.
     pub fn try_read_output(&mut self) -> bool {
+        if self.adopted.is_some() {
+            return self.drain_adopted();
+        }
         let Some(ref mut child) = self.child else {
             return false;
         };
@@ -229,8 +322,43 @@ impl ExecSession {
         read_any
     }
 
+    /// Copy whatever the adopted child's readers have appended since the
+    /// last poll into this session's buffers.
+    fn drain_adopted(&mut self) -> bool {
+        let Self {
+            adopted: Some(ad),
+            combined_output,
+            stdout_buffer,
+            stderr_buffer,
+            ..
+        } = self
+        else {
+            return false;
+        };
+
+        let mut read_any = false;
+        for (buf, pos, own) in [
+            (&ad.stdout, &mut ad.stdout_pos, &mut *stdout_buffer),
+            (&ad.stderr, &mut ad.stderr_pos, &mut *stderr_buffer),
+        ] {
+            let Ok(shared) = buf.lock() else { continue };
+            if shared.len() <= *pos {
+                continue;
+            }
+            let fresh = &shared[*pos..];
+            combined_output.push_str(&String::from_utf8_lossy(fresh));
+            own.extend_from_slice(fresh);
+            *pos = shared.len();
+            read_any = true;
+        }
+        read_any
+    }
+
     /// Check if the process has exited and update status.
     pub fn check_exit(&mut self) -> bool {
+        if self.adopted.is_some() {
+            return self.check_adopted_exit();
+        }
         let Some(ref mut child) = self.child else {
             return true; // Already exited
         };
@@ -270,8 +398,46 @@ impl ExecSession {
         }
     }
 
+    /// The adopted equivalent of [`Self::check_exit`]: the supervisor owns
+    /// the child, so its verdict is what settles this.
+    fn check_adopted_exit(&mut self) -> bool {
+        let finished = self
+            .adopted
+            .as_ref()
+            .and_then(|ad| ad.finished.lock().ok().and_then(|f| f.clone()));
+
+        if let Some(status) = finished {
+            self.exit_code = match status {
+                SessionStatus::Exited(code) => Some(code),
+                _ => None,
+            };
+            self.status = status;
+            // Sweep up whatever the readers appended between the child
+            // exiting and this poll noticing.
+            self.try_read_output();
+            return true;
+        }
+
+        if self.is_timed_out() {
+            let _ = self.kill();
+            self.status = SessionStatus::TimedOut;
+            self.exit_code = None;
+            return true;
+        }
+        false
+    }
+
     /// Write data to the process stdin.
     pub fn write_stdin(&mut self, data: &str) -> Result<(), ProcessError> {
+        if let Some(ad) = self.adopted.as_ref() {
+            if self.status != SessionStatus::Running {
+                return Err(ProcessError::Exited);
+            }
+            return ad
+                .stdin_tx
+                .send(data.as_bytes().to_vec())
+                .map_err(|_| ProcessError::Exited);
+        }
         let Some(ref mut child) = self.child else {
             return Err(ProcessError::Exited);
         };
@@ -313,6 +479,17 @@ impl ExecSession {
 
     /// Kill the process.
     pub fn kill(&mut self) -> Result<(), ProcessError> {
+        if let Some(ad) = self.adopted.as_mut() {
+            // The supervisor holds the child, so a kill is a request to
+            // it. Once sent there is nothing to repeat: the sender is
+            // consumed, and a second call finds it gone.
+            if let Some(tx) = ad.kill_tx.take() {
+                let _ = tx.send(());
+            }
+            self.status = SessionStatus::Killed;
+            return Ok(());
+        }
+
         let Some(ref mut child) = self.child else {
             return Ok(()); // Already gone
         };
@@ -662,6 +839,7 @@ mod tests {
             combined_output: "line1\nline2\nline3\nline4\nline5\n".to_string(),
             last_read_pos: 0,
             child: None,
+            adopted: None,
             exit_code: None,
             owner_id: None,
         };

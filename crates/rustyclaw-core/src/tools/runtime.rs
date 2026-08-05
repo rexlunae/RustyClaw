@@ -10,6 +10,7 @@ use crate::process_manager::SessionStatus;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, instrument, warn};
@@ -151,16 +152,29 @@ pub async fn exec_execute_command_streaming(
         });
     }
 
-    let mut yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
-    let mut timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let mut last_poll = Instant::now();
+    let started_at = Instant::now();
+    let mut yield_deadline = started_at + Duration::from_millis(yield_ms);
+    let mut timeout_deadline = started_at + Duration::from_secs(timeout_secs);
+    let mut last_poll = started_at;
 
     // Read the pipes incrementally instead of buffering with
     // wait_with_output(): the readers accumulate the full output for the
     // final result AND forward each chunk to `sink` while the process
     // runs, which is what lets clients render live progress.
-    let out_task = tokio::spawn(pump_stream(child.stdout.take(), sink.clone(), false));
-    let err_task = tokio::spawn(pump_stream(child.stderr.take(), sink, true));
+    let out_buf: Arc<Mutex<Vec<u8>>> = Arc::default();
+    let err_buf: Arc<Mutex<Vec<u8>>> = Arc::default();
+    let out_task = tokio::spawn(pump_stream(
+        child.stdout.take(),
+        sink.clone(),
+        false,
+        out_buf.clone(),
+    ));
+    let err_task = tokio::spawn(pump_stream(
+        child.stderr.take(),
+        sink,
+        true,
+        err_buf.clone(),
+    ));
 
     // Wait for completion, timeout, or the auto-background deadline.
     loop {
@@ -173,11 +187,15 @@ pub async fn exec_execute_command_streaming(
             } => {
                 match result {
                     Ok(Some(status)) => {
-                        // Process finished — the readers drain to EOF and
-                        // return the accumulated bytes.
-                        let stdout = out_task.await.unwrap_or_default();
-                        let stderr = err_task.await.unwrap_or_default();
-                        let output = std::process::Output { status, stdout, stderr };
+                        // Process finished — let the readers drain to EOF,
+                        // then take what they accumulated.
+                        let _ = out_task.await;
+                        let _ = err_task.await;
+                        let output = std::process::Output {
+                            status,
+                            stdout: snapshot(&out_buf),
+                            stderr: snapshot(&err_buf),
+                        };
                         return format_output_async(output, timeout_secs);
                     }
                     Ok(None) => {
@@ -197,13 +215,22 @@ pub async fn exec_execute_command_streaming(
                         // Check if we should auto-background
                         if now >= yield_deadline {
                             debug!(yield_ms, "Auto-backgrounding long-running process");
-                            // The accumulated buffers are unused on this
-                            // path and dropping the child closes the pipes
-                            // anyway — reap the readers now rather than
-                            // leaving them to linger until EOF.
-                            out_task.abort();
-                            err_task.abort();
-                            return background_child(child, command, &cwd, timeout_deadline).await;
+                            // The readers keep running against the same
+                            // buffers, so output produced before the
+                            // hand-off is already there and output after it
+                            // keeps arriving — which is the whole point of
+                            // handing the child over rather than restarting
+                            // it. Nothing to abort.
+                            return adopt_child(
+                                child,
+                                command,
+                                &cwd,
+                                started_at,
+                                timeout_secs,
+                                out_buf,
+                                err_buf,
+                            )
+                            .await;
                         }
 
                         // Check timeout
@@ -233,8 +260,15 @@ pub async fn exec_execute_command_streaming(
 /// 50KB cap); this only bounds the frames pushed to clients while running.
 const STREAM_CAP_BYTES: usize = 65_536;
 
-/// Drain a child pipe to EOF, accumulating everything and forwarding
-/// chunks to the sink (best-effort, capped). Returns the full bytes.
+/// Drain a child pipe to EOF, accumulating into `buf` and forwarding
+/// chunks to the sink (best-effort, capped).
+///
+/// The accumulation is shared rather than returned so that it survives the
+/// reader outliving the call that started it: when a long command is handed
+/// to the background, these tasks keep running against the same buffers and
+/// the adopted session reads what they have already collected. A returned
+/// `Vec` would only have arrived at EOF, by which point the hand-off has
+/// long since happened.
 ///
 /// Chunks are decoded lossily for streaming; a multi-byte character split
 /// across reads may render momentarily as a replacement character, but
@@ -243,15 +277,14 @@ async fn pump_stream<R>(
     reader: Option<R>,
     sink: Option<super::ToolOutputSink>,
     is_stderr: bool,
-) -> Vec<u8>
-where
+    buf: Arc<Mutex<Vec<u8>>>,
+) where
     R: tokio::io::AsyncRead + Unpin,
 {
     use tokio::io::AsyncReadExt;
 
-    let mut buf = Vec::new();
     let Some(mut reader) = reader else {
-        return buf;
+        return;
     };
     let mut chunk = [0u8; 4096];
     let mut streamed = 0usize;
@@ -259,7 +292,9 @@ where
         match reader.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
+                if let Ok(mut buf) = buf.lock() {
+                    buf.extend_from_slice(&chunk[..n]);
+                }
                 if let Some(sink) = &sink
                     && streamed < STREAM_CAP_BYTES
                 {
@@ -273,41 +308,90 @@ where
             }
         }
     }
-    buf
 }
 
-/// Move a tokio child process to the sync ProcessManager for background execution.
-async fn background_child(
+/// Take a snapshot of a shared pipe buffer.
+fn snapshot(buf: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
+    buf.lock().map(|b| b.clone()).unwrap_or_default()
+}
+
+/// Hand a still-running child to the ProcessManager, keeping the work it
+/// has already done.
+///
+/// The manager polls `std::process` children synchronously and cannot do
+/// that to a `tokio::process::Child`, which is why this used to kill the
+/// child and run the command again from the top — a build most of the way
+/// through started over, and any output already shown was thrown away. The
+/// child is kept instead: a supervisor task holds it and records where it
+/// ends up, the pipe readers carry on filling the same buffers, and the
+/// session reads both. What the manager gets is a session it can poll like
+/// any other; what it no longer gets is a second copy of the command.
+async fn adopt_child(
     mut child: tokio::process::Child,
     command: &str,
     cwd: &Path,
-    timeout_deadline: Instant,
+    started_at: Instant,
+    timeout_secs: u64,
+    out_buf: Arc<Mutex<Vec<u8>>>,
+    err_buf: Arc<Mutex<Vec<u8>>>,
 ) -> ToolResult {
-    // ProcessManager can't adopt a tokio::process::Child, so backgrounding
-    // re-spawns the command under the manager and terminates the original.
-    // Wasteful (the command restarts from scratch) but functional.
-    // TODO: Refactor ProcessManager to support tokio::process::Child
+    let finished: Arc<Mutex<Option<SessionStatus>>> = Arc::default();
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (kill_tx, mut kill_rx) = tokio::sync::oneshot::channel::<()>();
 
-    // Kill the original FIRST: dropping a tokio child does NOT kill it,
-    // and killing only after the re-spawn would leave two copies of the
-    // command running side by side.
-    let _ = child.kill().await;
+    let supervisor_finished = finished.clone();
+    tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        let mut stdin = child.stdin.take();
+
+        let status = loop {
+            tokio::select! {
+                // A kill request wins over anything else pending.
+                biased;
+                _ = &mut kill_rx => {
+                    let _ = child.kill().await;
+                    break SessionStatus::Killed;
+                }
+                Some(bytes) = stdin_rx.recv() => {
+                    if let Some(stdin) = stdin.as_mut() {
+                        let _ = stdin.write_all(&bytes).await;
+                        let _ = stdin.flush().await;
+                    }
+                }
+                // `Child::wait` is cancel-safe, so losing this branch to a
+                // stdin write and re-entering it does not lose the exit.
+                res = child.wait() => {
+                    break match res {
+                        Ok(status) => match status.code() {
+                            Some(code) => SessionStatus::Exited(code),
+                            // No code means a signal ended it.
+                            None => SessionStatus::Killed,
+                        },
+                        Err(_) => SessionStatus::Killed,
+                    };
+                }
+            }
+        };
+
+        if let Ok(mut slot) = supervisor_finished.lock() {
+            *slot = Some(status);
+        }
+    });
+
+    let session = crate::process_manager::ExecSession::adopt(
+        command.to_string(),
+        cwd.to_string_lossy().into_owned(),
+        Some(Duration::from_secs(timeout_secs)),
+        started_at,
+        crate::process_manager::AdoptedChild::new(out_buf, err_buf, finished, stdin_tx, kill_tx),
+        None,
+    );
 
     let manager = process_manager();
     let mut mgr = manager
         .lock()
         .map_err(|_| "Failed to acquire process manager lock".to_string())?;
-
-    let remaining_timeout = timeout_deadline
-        .saturating_duration_since(Instant::now())
-        .as_secs();
-
-    // Spawn a new background process (ProcessManager uses std::process internally)
-    let session_id = mgr.spawn(
-        command,
-        cwd.to_string_lossy().as_ref(),
-        Some(remaining_timeout.max(1)),
-    )?;
+    let session_id = mgr.insert(session);
 
     debug!(session_id = %session_id, "Process backgrounded");
 
@@ -315,7 +399,7 @@ async fn background_child(
         "status": "running",
         "sessionId": session_id,
         "message": format!(
-            "Command re-spawned as background session '{}'. Use process tool to poll.",
+            "Command still running as background session '{}'; it kept its progress. Use process tool to poll.",
             session_id
         )
     })

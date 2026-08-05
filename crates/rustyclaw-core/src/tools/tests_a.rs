@@ -268,6 +268,162 @@ async fn test_execute_command_child_is_registered_and_killable() {
     );
 }
 
+/// A command that outlives its yield window is handed over, not run again.
+///
+/// Backgrounding used to kill the child and re-spawn the command from the
+/// top, so anything it had already done happened twice — a build restarted,
+/// and a command with a side effect repeated it. The command here appends a
+/// line and then lingers: a second copy would leave a second line behind.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_yielding_command_is_not_run_a_second_time() {
+    use crate::tools::runtime::exec_execute_command_streaming;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("runs");
+    let command = format!("echo run >> {}; sleep 30", marker.display());
+
+    let args = json!({ "command": command, "timeout_secs": 60, "yieldMs": 300 });
+    let result = exec_execute_command_streaming(&args, ws(), None)
+        .await
+        .expect("yielding to the background is not an error");
+    assert!(
+        result.contains("sessionId"),
+        "a yielded command reports its session: {result}"
+    );
+
+    // Long enough that a re-spawned copy would have written its own line.
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let runs = std::fs::read_to_string(&marker).unwrap_or_default();
+    assert_eq!(
+        runs.lines().count(),
+        1,
+        "the command should have run once, not been restarted: {runs:?}"
+    );
+}
+
+/// Output produced before the hand-off is still there afterwards.
+///
+/// Killing and re-spawning discarded it, so a command that had already
+/// printed something came back from backgrounding with nothing to show.
+///
+/// The line has to be one a second run could not reproduce, or the test
+/// passes on the re-spawned copy's identical output and guards nothing:
+/// the command counts its own runs, so the first prints `run-1` and any
+/// restart prints `run-2`.
+#[cfg(unix)]
+#[tokio::test]
+async fn output_from_before_the_handoff_survives_it() {
+    use crate::tools::helpers::process_manager;
+    use crate::tools::runtime::exec_execute_command_streaming;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let counter = dir.path().join("n");
+    let command = format!(
+        "n=$(cat {c} 2>/dev/null || echo 0); n=$((n+1)); printf %s \"$n\" > {c}; echo run-$n; sleep 30",
+        c = counter.display()
+    );
+    let args = json!({
+        "command": command,
+        "timeout_secs": 60,
+        "yieldMs": 400,
+    });
+    let result = exec_execute_command_streaming(&args, ws(), None)
+        .await
+        .expect("yielding to the background is not an error");
+    let session_id = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|v| v["sessionId"].as_str().map(str::to_owned))
+        .expect("a yielded command reports its session");
+
+    // The readers keep running, so the line lands whether it was written
+    // before or after the hand-off; poll until it shows up.
+    let mut seen = String::new();
+    for _ in 0..100 {
+        {
+            let mgr = process_manager();
+            let mut mgr = mgr.lock().expect("process manager lock");
+            if let Some(session) = mgr.get_mut(&session_id) {
+                session.try_read_output();
+                seen = session.full_output().to_string();
+            }
+        }
+        if seen.contains("run-") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        seen.contains("run-1"),
+        "output from before the hand-off should survive it, got: {seen:?}"
+    );
+    assert!(
+        !seen.contains("run-2"),
+        "the session should be watching the original run, not a restart: {seen:?}"
+    );
+
+    let mgr = process_manager();
+    let mut mgr = mgr.lock().expect("process manager lock");
+    if let Some(session) = mgr.get_mut(&session_id) {
+        let _ = session.kill();
+    }
+}
+
+/// An adopted child's exit is noticed, and it is *that* child's exit.
+///
+/// The exit code counts runs for the same reason the output test does: a
+/// re-spawned copy exiting with the same code would satisfy a fixed one,
+/// so the first run exits 1 and a restart would exit 2.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_adopted_child_reports_its_own_exit() {
+    use crate::process_manager::SessionStatus;
+    use crate::tools::helpers::process_manager;
+    use crate::tools::runtime::exec_execute_command_streaming;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let counter = dir.path().join("n");
+    // Yields first, then exits on its own.
+    let command = format!(
+        "n=$(cat {c} 2>/dev/null || echo 0); n=$((n+1)); printf %s \"$n\" > {c}; sleep 0.6; exit $n",
+        c = counter.display()
+    );
+    let args = json!({
+        "command": command,
+        "timeout_secs": 60,
+        "yieldMs": 200,
+    });
+    let result = exec_execute_command_streaming(&args, ws(), None)
+        .await
+        .expect("yielding to the background is not an error");
+    let session_id = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|v| v["sessionId"].as_str().map(str::to_owned))
+        .expect("a yielded command reports its session");
+
+    let mut status = None;
+    for _ in 0..200 {
+        {
+            let mgr = process_manager();
+            let mut mgr = mgr.lock().expect("process manager lock");
+            if let Some(session) = mgr.get_mut(&session_id)
+                && session.check_exit()
+            {
+                status = Some(session.status.clone());
+            }
+        }
+        if status.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        status,
+        Some(SessionStatus::Exited(1)),
+        "the session should report the original child's exit, not a restart's"
+    );
+}
+
 // ── execute_tool dispatch ───────────────────────────────────────
 
 #[tokio::test]
