@@ -101,16 +101,24 @@ async fn run_inner(
         key
     };
 
-    let result = drive_tool_loop(
-        http,
-        parent,
-        &profile,
-        task,
-        context,
-        label.as_deref(),
-        model_override,
-        config,
-        workspace_dir,
+    // Owned by the same agent the session record above is filed under, so a
+    // transfer this subagent starts is listed and stoppable in that agent's
+    // panel. Untagged it would belong to nobody — and because the write loop
+    // only stops when the registry marks the transfer terminal, nothing could
+    // stop it.
+    let result = rustyclaw_core::downloads::with_origin(
+        rustyclaw_core::downloads::headless_origin(&agent_id),
+        drive_tool_loop(
+            http,
+            parent,
+            &profile,
+            task,
+            context,
+            label.as_deref(),
+            model_override,
+            config,
+            workspace_dir,
+        ),
     )
     .await;
 
