@@ -31,6 +31,10 @@ pub(crate) struct AgentSession {
     /// Shared with the running model task — see [`crate::SharedThreadMgr`].
     pub thread_mgr: SharedThreadMgr,
     pub project_mgr: ProjectManager,
+    /// Marks this store as in use for as long as the session lives, so it
+    /// cannot be deleted out from under a window that still has it open.
+    /// Dropped with the session — on disconnect, and on agent switch.
+    _store_session: rustyclaw_core::threads::StoreSession,
 }
 
 impl AgentSession {
@@ -42,6 +46,7 @@ impl AgentSession {
         let threads_path = sessions_dir.join("threads.json");
         let projects_path = sessions_dir.join("projects.json");
         let thread_mgr = rustyclaw_core::threads::manager_for(&threads_path);
+        let store_session = rustyclaw_core::threads::open_session(&threads_path);
         let mut project_mgr = ProjectManager::load_or_new(&projects_path);
         project_mgr.ensure_default(config.workspace_dir_for(agent_id));
         crate::helpers::persist_projects(&project_mgr, &projects_path);
@@ -51,6 +56,7 @@ impl AgentSession {
             projects_path,
             thread_mgr,
             project_mgr,
+            _store_session: store_session,
         }
     }
 

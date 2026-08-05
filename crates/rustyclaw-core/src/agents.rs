@@ -236,6 +236,19 @@ impl AgentRegistry {
             bail!("Agent '{}' not found", id);
         }
         let dir = self.agent_dir(id);
+        // Refused rather than raced. Evicting the cached manager does not
+        // reach a connection that already holds it, and its next write
+        // recreates the directory this is about to remove — resurrecting the
+        // conversations, and leaving a later agent under this id sharing a
+        // store with a manager nobody can see. Better to say no.
+        let open = crate::threads::sessions_open_under(&dir);
+        if open > 0 {
+            bail!(
+                "Agent '{}' is open in {} other session(s) — close it there first",
+                id,
+                open
+            );
+        }
         std::fs::remove_dir_all(&dir)?;
         // The store is gone, so nothing may go on speaking for it. Done here
         // rather than in the callers because an agent can be deleted by a
