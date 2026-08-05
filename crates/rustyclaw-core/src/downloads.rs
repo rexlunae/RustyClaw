@@ -149,6 +149,21 @@ pub struct Download {
     pub received_bytes: u64,
     pub status: DownloadStatus,
     pub started_ms: u64,
+    /// Registration order, and the tiebreaker that makes the panel's ordering
+    /// total.
+    ///
+    /// `started_ms` alone is not enough: it has millisecond resolution, so
+    /// transfers begun in one turn routinely share it, and the records are
+    /// read out of a `HashMap`, whose iteration order is not stable across
+    /// inserts and removals. Equal keys would then be left in whatever order
+    /// the map happened to yield and rows would trade places between
+    /// refreshes — which matters because the whole list is re-sent on every
+    /// change and the panels render it in the order received, so a user can
+    /// be clicking Cancel on a row that just moved.
+    ///
+    /// Kept as a number rather than sorting on `id`, because the ids are
+    /// `dl_{n}` and comparing those as strings puts `dl_10` before `dl_9`.
+    pub seq: u64,
     /// When it reached a terminal status.
     pub finished_ms: Option<u64>,
     /// Which agent, connection and conversation started it. `None` when
@@ -297,6 +312,7 @@ impl DownloadManager {
             received_bytes: 0,
             status: DownloadStatus::Running,
             started_ms: now_ms(),
+            seq: self.next_id,
             finished_ms: None,
             origin,
         };
@@ -337,7 +353,7 @@ impl DownloadManager {
     /// Every transfer, newest first.
     pub fn list(&self) -> Vec<Download> {
         let mut all: Vec<Download> = self.downloads.values().cloned().collect();
-        all.sort_by_key(|d| std::cmp::Reverse(d.started_ms));
+        all.sort_by_key(|d| (std::cmp::Reverse(d.started_ms), std::cmp::Reverse(d.seq)));
         all
     }
 
@@ -353,7 +369,7 @@ impl DownloadManager {
             .filter(|d| d.belongs_to(agent))
             .cloned()
             .collect();
-        all.sort_by_key(|d| std::cmp::Reverse(d.started_ms));
+        all.sort_by_key(|d| (std::cmp::Reverse(d.started_ms), std::cmp::Reverse(d.seq)));
         all
     }
 
@@ -960,6 +976,64 @@ mod tests {
             m.list_for("someone-else").is_empty(),
             "without becoming anyone else's"
         );
+    }
+
+    /// Rows must not trade places between refreshes.
+    ///
+    /// `started_ms` is millisecond-resolution, so several transfers begun in
+    /// one turn share it, and the records come out of a `HashMap` whose
+    /// iteration order is not stable across inserts and removals. Sorting on
+    /// the timestamp alone leaves those ties in map order, and since the whole
+    /// list is re-sent on every change, a user can be reaching for a row that
+    /// has just moved.
+    #[test]
+    fn transfers_started_in_the_same_millisecond_keep_a_fixed_order() {
+        let mut m = mgr();
+        let origin = Some(DownloadOrigin {
+            agent: "researcher".into(),
+            connection: 1,
+            thread: Some(1),
+        });
+        let ids: Vec<String> = (0..8)
+            .map(|i| {
+                m.register(
+                    format!("https://e/{i}"),
+                    PathBuf::from(format!("/tmp/{i}")),
+                    None,
+                    origin.clone(),
+                )
+                .id
+            })
+            .collect();
+
+        // Force the collision the clock only sometimes produces, so this test
+        // pins the rule rather than the machine it ran on.
+        for id in &ids {
+            if let Some(d) = m.downloads.get_mut(id) {
+                d.started_ms = 1_700_000_000_000;
+            }
+        }
+
+        let first: Vec<String> = m.list_for("researcher").into_iter().map(|d| d.id).collect();
+        assert_eq!(first.len(), ids.len());
+        // Newest first, which with equal timestamps means the highest
+        // registration order first.
+        let newest_first: Vec<String> = ids.iter().rev().cloned().collect();
+        assert_eq!(first, newest_first);
+
+        // Re-reading must not reshuffle. Removing and re-adding perturbs the
+        // map's internal layout, which is what makes an unstable tiebreak show
+        // itself rather than merely being possible.
+        m.downloads.remove(&ids[3]);
+        m.register(
+            "https://e/late".into(),
+            PathBuf::from("/tmp/late"),
+            None,
+            origin,
+        );
+        let a: Vec<String> = m.list_for("researcher").into_iter().map(|d| d.id).collect();
+        let b: Vec<String> = m.list_for("researcher").into_iter().map(|d| d.id).collect();
+        assert_eq!(a, b, "two reads of an unchanged registry must agree");
     }
 
     #[test]
