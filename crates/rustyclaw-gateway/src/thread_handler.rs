@@ -160,7 +160,10 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
-        crate::helpers::persist_threads(&mut *thread_mgr.lock().await, threads_path);
+        // `None`, and recorded as such: leaving the old pointer on disk
+        // would make the next connection reopen the very thread the user
+        // just asked to be put down.
+        crate::helpers::persist_threads_focused(thread_mgr, threads_path, None).await;
         return Ok(());
     }
 
@@ -399,8 +402,12 @@ pub(crate) async fn handle_thread_switch(
         // Send updated thread list
         send_threads_update_shared(writer, thread_mgr, task_mgr, None, Some(target_id)).await?;
         send_thread_messages_update_shared(writer, target_id, thread_mgr).await?;
-        // Persist thread state (includes compaction summary)
-        crate::helpers::persist_threads(&mut *thread_mgr.lock().await, threads_path);
+        // Persist thread state (includes compaction summary), recording the
+        // switch as this connection's foreground. Durability is why it
+        // happens here and not only at teardown: a process that is killed
+        // never reaches teardown, and the user's last choice should survive
+        // a crash the same as it did before the pointer moved off the store.
+        crate::helpers::persist_threads_focused(thread_mgr, threads_path, Some(target_id)).await;
     } else {
         // Unreachable in practice — the thread existed above and nothing
         // here removes threads — but a racing close could still take it.

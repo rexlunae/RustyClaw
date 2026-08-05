@@ -4872,6 +4872,51 @@ mod tests {
         Ok(())
     }
 
+    /// A switch survives a kill, not just a clean close.
+    ///
+    /// The teardown write is the polite path and a killed process never
+    /// reaches it. Recording the choice only there would mean a crash
+    /// reopens on whatever the manager last happened to hold — so this
+    /// asserts against the store *without* ending the connection, which is
+    /// what a `SIGKILL` between the switch and the close looks like on disk.
+    #[tokio::test]
+    async fn a_thread_switch_is_on_disk_before_the_window_closes() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (_first, second) = seed_two_threads(&cfg, "first", "second")?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let (incoming, outgoing, _handle) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        await_frame(&outgoing, "the connection to settle", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+
+        incoming.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadSwitch,
+            payload: ClientPayload::ThreadSwitch {
+                thread_id: second.0,
+            },
+        }));
+        await_frame(&outgoing, "the switch", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+
+        // Deliberately no disconnect: the switch alone must have reached
+        // the store.
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        let reloaded = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
+        assert_eq!(
+            reloaded.foreground_id(),
+            Some(second),
+            "the switch should be durable without waiting for a clean shutdown"
+        );
+        Ok(())
+    }
+
     /// Closing a window records where it was, so reopening lands there.
     ///
     /// The foreground is a per-connection cell, so the store only learns it
