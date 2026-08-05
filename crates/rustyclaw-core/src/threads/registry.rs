@@ -66,6 +66,33 @@ pub fn store_in_use_under(dir: &Path) -> bool {
     managers.keys().any(|path| path.starts_with(dir))
 }
 
+/// Remove `dir` from disk, but only while nothing is working against a
+/// store inside it. Returns whether it was removed.
+///
+/// One operation rather than check-then-remove-then-forget, because the gaps
+/// between those are usable: a connection calling [`manager_for`] after the
+/// check gets a live manager for a store that is being deleted, and its next
+/// persist recreates the directory. Worse, once the entry has been dropped
+/// from the map, the *next* caller builds a second manager for the same
+/// path — two authorities for one store, which is the condition this module
+/// exists to remove.
+///
+/// So the lock is held across all three. The filesystem work happens under
+/// it, which is not free, but a delete is rare and the alternative is a
+/// window that cannot be closed from outside.
+pub fn remove_store_dir_if_unused(dir: &Path) -> std::io::Result<bool> {
+    let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
+    managers.retain(|_, weak| weak.strong_count() > 0);
+    if managers.keys().any(|path| path.starts_with(dir)) {
+        return Ok(false);
+    }
+    std::fs::remove_dir_all(dir)?;
+    // Only dead entries can be under `dir` now, but they would otherwise
+    // linger until something happened to prune them.
+    managers.retain(|path, _| !path.starts_with(dir));
+    Ok(true)
+}
+
 /// Forget every manager whose store lives under `dir`.
 ///
 /// Holding managers for the life of the process is what makes one of them
