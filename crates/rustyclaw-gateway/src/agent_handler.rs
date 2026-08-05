@@ -120,11 +120,35 @@ impl AgentSession {
     /// Focus `id`, if it names a thread that still exists. Returns whether it
     /// did — callers report a vanished thread rather than silently focusing
     /// something else.
+    ///
+    /// Durable, not just in memory. A client picks its thread two ways: the
+    /// explicit `ThreadSwitch` frame, and simply typing into one — a `Chat`
+    /// frame naming a thread, or the auto-switch that files a message where
+    /// it fits best. Both are the user choosing a conversation, and both
+    /// must survive a process that never gets to shut down cleanly.
+    ///
+    /// While the pointer lived on the shared manager, the second kind was
+    /// carried to disk for free by the persist that follows a user message.
+    /// Moving it to a per-connection cell took that away — the persist still
+    /// runs, but writes whatever the manager happens to hold. Writing here
+    /// puts every path that chooses a thread on the same footing instead of
+    /// leaving it to whichever of them happens to be followed by a save.
+    ///
+    /// Skipped when the pointer is already there, so repeated messages in
+    /// one conversation do not each rewrite the file. That leaves the
+    /// election `restore_foreground` performs when the store names nothing
+    /// unwritten until something moves — which is harmless, because a
+    /// reopen just runs the same election again.
     pub async fn switch_foreground(&self, id: rustyclaw_core::threads::ThreadId) -> bool {
         if self.thread_mgr.lock().await.get(id).is_none() {
             return false;
         }
+        if self.foreground_id() == Some(id) {
+            return true;
+        }
         crate::set_foreground(&self.foreground, Some(id));
+        crate::helpers::persist_threads_focused(&self.thread_mgr, &self.threads_path, Some(id))
+            .await;
         true
     }
 

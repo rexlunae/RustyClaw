@@ -5043,6 +5043,60 @@ mod tests {
         Ok(())
     }
 
+    /// Typing into a thread picks it just as much as switching does, and
+    /// must reach the store just as durably.
+    ///
+    /// While the pointer lived on the shared manager, the persist that
+    /// follows a user message carried this for free. With the pointer on a
+    /// per-connection cell that persist writes whatever the manager holds,
+    /// so a client that chose its thread by typing into it had that choice
+    /// live only in memory until a clean shutdown — and a killed gateway
+    /// reopened somewhere else, or on another window's thread.
+    #[tokio::test]
+    async fn typing_into_a_thread_is_on_disk_before_the_window_closes() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        // Seeded foreground is `first`, so naming `second` is a real move.
+        let (_first, second) = seed_two_threads(&cfg, "first", "second")?;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let (incoming, outgoing, _handle) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        await_frame(&outgoing, "the connection to settle", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+
+        incoming.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", "hello")],
+                thread_id: Some(second.0),
+            },
+        }));
+
+        // Deliberately no disconnect — and polled rather than keyed off a
+        // frame, because the write and the reply are not ordered with
+        // respect to each other.
+        let landed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let reloaded = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
+                if reloaded.foreground_id() == Some(second) {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            landed.is_ok(),
+            "the thread a message was typed into should be durable without a clean shutdown"
+        );
+        Ok(())
+    }
+
     /// Closing a window records where it was, so reopening lands there.
     ///
     /// The foreground is a per-connection cell, so the store only learns it
