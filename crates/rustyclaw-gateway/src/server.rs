@@ -4618,6 +4618,87 @@ mod tests {
         Ok(())
     }
 
+    /// Two windows on one agent must not delete each other's threads.
+    ///
+    /// `AgentSession::load` builds a *fresh* `ThreadManager` per connection,
+    /// read from disk at connect time, and `ThreadStore::persist` is a
+    /// reconciliation: it deletes the files of every thread the manager it
+    /// is handed does not contain. So a second window's manager is a
+    /// snapshot from before anything the first window has done since, and
+    /// the moment it writes, that work is removed from disk.
+    ///
+    /// This is the same hazard the store's own test characterises, arriving
+    /// through the ordinary path rather than a background task: two clients
+    /// open on the same agent, which the download work already established
+    /// is a routine thing for a user to do.
+    #[tokio::test]
+    async fn two_connections_on_one_agent_do_not_delete_each_others_threads() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (seeded, _other) = seed_two_threads(&cfg, "seeded", "other")?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let create = |label: &str| {
+            Some(ClientFrame {
+                frame_type: ClientFrameType::ThreadCreate,
+                payload: ClientPayload::ThreadCreate {
+                    label: label.to_string(),
+                    project_id: 0,
+                },
+            })
+        };
+
+        // Both windows connect, so both load the store as it is now.
+        let (in_a, out_a, handle_a) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        let (in_b, out_b, handle_b) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        await_frame(&out_a, "window A to finish connecting", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+        await_frame(&out_b, "window B to finish connecting", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+
+        // A creates a thread and persists it.
+        in_a.lock().await.push_back(create("from A"));
+        await_frame(&out_a, "A's thread to be created", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadCreated)
+        })
+        .await;
+
+        // B creates one too. B's manager has never seen A's.
+        in_b.lock().await.push_back(create("from B"));
+        await_frame(&out_b, "B's thread to be created", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadCreated)
+        })
+        .await;
+
+        in_a.lock().await.push_back(None);
+        in_b.lock().await.push_back(None);
+        handle_a.await.expect("A panicked")?;
+        handle_b.await.expect("B panicked")?;
+
+        // What a third window would open onto.
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        let reloaded = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
+        let labels: Vec<String> = reloaded.list().iter().map(|t| t.label.clone()).collect();
+
+        assert!(
+            labels.iter().any(|l| l == "from A"),
+            "the first window's thread was deleted by the second window's \
+             write: {labels:?}"
+        );
+        assert!(labels.iter().any(|l| l == "from B"), "{labels:?}");
+        assert!(
+            reloaded.get(seeded).is_some(),
+            "the seeded thread should survive too: {labels:?}"
+        );
+        Ok(())
+    }
+
     /// The gateway returns the right messages, in the right threads, in
     /// the right order — whatever order the client asks in.
     ///
