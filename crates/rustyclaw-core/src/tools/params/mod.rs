@@ -226,6 +226,18 @@ pub fn web_fetch_params() -> Vec<ToolParam> {
             param_type: "object".into(),
             required: false,
         },
+        ToolParam {
+            name: "to_file".into(),
+            description: "Destination path to stream the response to, instead of returning \
+                          it. Relative paths are taken from the workspace root, and parent \
+                          directories are created as needed. The call returns a download id \
+                          immediately rather than waiting for the transfer, and you are told \
+                          when it finishes — do not poll. Use for archives, binaries, media, \
+                          or anything large."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
     ]
 }
 
