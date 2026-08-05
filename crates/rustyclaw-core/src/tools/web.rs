@@ -817,6 +817,41 @@ fn html_to_text(html: &str) -> String {
 /// terminal event is always announced regardless of this.
 const PROGRESS_STEP_BYTES: u64 = 256 * 1024;
 
+/// The most a single transfer may write.
+///
+/// Every other write the model can perform is bounded by something: a
+/// `write_file` is capped by what the model can emit, and a non-download
+/// `web_fetch` by `max_chars`. A download is bounded by nothing — it is
+/// detached from the turn on purpose, so no turn ends it, and
+/// `Deadline::Streaming` only bounds a stall rather than a body that keeps
+/// arriving. A URL that streams indefinitely would write until the filesystem
+/// filled, taking the gateway host down with it.
+///
+/// Deliberately generous: this is a backstop against an unbounded stream, not
+/// a policy about how large a file the user may fetch. Exceeding it fails the
+/// transfer like any other error — the partial file stays on disk and the
+/// reason reaches both the panel and the agent.
+pub(crate) const MAX_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Whether `bytes` is past the cap.
+///
+/// A function rather than a bare `>` at each site so the up-front refusal and
+/// the streaming check cannot disagree about which side of the boundary is
+/// allowed — exactly `MAX_DOWNLOAD_BYTES` is fine, one more is not.
+pub(crate) fn exceeds_download_cap(bytes: u64) -> bool {
+    bytes > MAX_DOWNLOAD_BYTES
+}
+
+/// The message used when a transfer is refused or stopped for its size, so
+/// the up-front check and the streaming check cannot drift apart.
+pub(crate) fn too_large(bytes: u64) -> String {
+    format!(
+        "exceeds the {} maximum download size (needed {})",
+        crate::downloads::human_bytes(MAX_DOWNLOAD_BYTES),
+        crate::downloads::human_bytes(bytes),
+    )
+}
+
 /// Stream a response to a file, returning as soon as the transfer is
 /// registered rather than when it finishes.
 ///
@@ -878,6 +913,15 @@ async fn start_download(
 
     let total_bytes = response.content_length();
 
+    // Refused before the destination is created, when the server declares a
+    // size over the cap. Truncating an existing file and *then* failing would
+    // destroy it for nothing.
+    if let Some(declared) = total_bytes
+        && exceeds_download_cap(declared)
+    {
+        return Err(format!("Refusing to download {url}: it {}", too_large(declared)).into());
+    }
+
     let (file, canonical) = open_download_dest(workspace_dir, to_file).await?;
     // Taken before the streaming task below takes ownership of the path.
     let dest_display = canonical.display().to_string();
@@ -916,6 +960,12 @@ async fn start_download(
                         break Err(format!("writing to {}: {e}", canonical.display()));
                     }
                     received += chunk.len() as u64;
+                    // The declared length is a claim, and a chunked response
+                    // makes no claim at all, so the cap is enforced against
+                    // what has actually arrived.
+                    if exceeds_download_cap(received) {
+                        break Err(format!("{url_for_task} {}", too_large(received)));
+                    }
                     // Recorded on every chunk, announced only every
                     // `PROGRESS_STEP_BYTES`. The two are separate because
                     // they answer different questions: the record is how a
@@ -932,7 +982,18 @@ async fn start_download(
                     // `None` means it ended underneath us — cancelled from
                     // the panel — so stop writing rather than finish a file
                     // nobody wants. Its ending has already been announced.
-                    let Some(updated) = updated else { return };
+                    //
+                    // Flushed on the way out even though nothing is waiting
+                    // for the file: a `tokio::fs::File` dispatches writes to a
+                    // blocking pool, and one dropped without a flush may
+                    // discard what is still buffered and swallow the error.
+                    // The partial file is deliberately left on disk for the
+                    // user, so it should hold the bytes the panel last said
+                    // had arrived rather than silently fewer.
+                    let Some(updated) = updated else {
+                        let _ = file.flush().await;
+                        return;
+                    };
                     if received - announced_at >= PROGRESS_STEP_BYTES {
                         announced_at = received;
                         announce(updated);

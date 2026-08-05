@@ -45,6 +45,25 @@ static RESUMED_TURNS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
 > = std::sync::LazyLock::new(Default::default);
 
+/// Transfers already announced by this process, keyed by download id.
+///
+/// The download-wake counterpart to [`RESUMED_TURNS`], and there for the same
+/// reason: a transfer belongs to an agent, an agent can be open in several
+/// windows at once, and each window's connection watches the same broadcast
+/// independently.
+static ANNOUNCED_DOWNLOADS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Claim the right to announce a finished transfer. True for the first caller
+/// and false for every one after it.
+fn claim_download_announcement(id: &str) -> bool {
+    ANNOUNCED_DOWNLOADS
+        .lock()
+        .expect("download announcement registry poisoned")
+        .insert(id.to_string())
+}
+
 /// Everything a spawned turn takes from its connection — owned clones, so
 /// the turn outlives the borrow of the loop that started it. Built per
 /// spawn by the Chat arm and by the resume path, which is the point:
@@ -1936,6 +1955,29 @@ pub(crate) async fn handle_connection(
                     deferred_wakes.entry(thread).or_default().push(download);
                     continue;
                 }
+                // Exactly one connection may announce a given transfer.
+                //
+                // Ownership is by agent, and an agent can be open in more than
+                // one window — a second desktop window, or a TUI alongside the
+                // app, both defaulting to `main`. Every such connection has its
+                // own watcher over the same process-global broadcast and its
+                // own `active_tasks`, so all of them pass the filter above and
+                // none of them can see that another has already started a turn.
+                // Without this the notice is appended once per window and the
+                // second turn displaces the first — aborting the reply the
+                // first had just begun.
+                //
+                // Claimed here rather than at deferral: a connection that parks
+                // a wake may go away while holding it, and the transfer should
+                // still be announced by whoever is idle. Keyed by transfer id
+                // alone, which is already unique for the life of the process.
+                if !claim_download_announcement(&download.id) {
+                    debug!(
+                        download = %download.id,
+                        "Another connection is announcing this transfer; skipping"
+                    );
+                    continue;
+                }
                 let notice = download.summary();
                 // The conversation can have been deleted while the bytes were
                 // arriving. Filing the notice anywhere else would put it in a
@@ -2284,6 +2326,29 @@ mod tests {
     use std::collections::VecDeque;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
+
+    /// An agent can be open in several windows, and each window's connection
+    /// watches the same process-global broadcast with its own `active_tasks`.
+    /// Without a shared claim every one of them announces the same transfer:
+    /// the notice is appended once per window, and the second turn displaces
+    /// the first — killing the reply it had just started.
+    #[test]
+    fn only_one_connection_announces_a_given_transfer() {
+        // Ids are unique for the life of the process, and this set is global,
+        // so the test names its own rather than reusing another test's.
+        let id = "dl-claim-test-only-one";
+        assert!(
+            claim_download_announcement(id),
+            "the first connection to reach an idle thread announces it"
+        );
+        assert!(
+            !claim_download_announcement(id),
+            "a second window on the same agent must not announce it again"
+        );
+        // A different transfer is unaffected — the claim is per transfer, not
+        // a latch that silences everything after the first.
+        assert!(claim_download_announcement("dl-claim-test-another"));
+    }
 
     /// A finished transfer parked under `thread`, for the deferral tests.
     fn parked(

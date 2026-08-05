@@ -855,3 +855,35 @@ fn test_download_gets_no_total_deadline() {
         "an ordinary read should keep its total deadline"
     );
 }
+
+/// A download is the one write the model can start that nothing else bounds.
+///
+/// `write_file` is limited by what the model can emit and a non-download
+/// `web_fetch` by `max_chars`, but a transfer is detached from the turn on
+/// purpose — no turn ends it — and its streaming deadline bounds a stall
+/// rather than a body that simply keeps arriving. So the cap is not parity
+/// with the other write paths; it is the thing they have that this lacks.
+#[test]
+fn test_download_size_is_capped() {
+    use crate::tools::web::{MAX_DOWNLOAD_BYTES, exceeds_download_cap, too_large};
+
+    // An ordinary large download passes: the cap is a backstop against an
+    // unbounded stream, not a policy about how big a file may be fetched.
+    assert!(!exceeds_download_cap(4 * 1024 * 1024 * 1024));
+    // The boundary itself is allowed; one byte past it is not. Both checks
+    // share this predicate, so they cannot disagree about which is which.
+    assert!(!exceeds_download_cap(MAX_DOWNLOAD_BYTES));
+    assert!(exceeds_download_cap(MAX_DOWNLOAD_BYTES + 1));
+
+    // The reason has to name both numbers: without them the agent cannot tell
+    // a cap it could work under from a transport failure it should retry.
+    let msg = too_large(MAX_DOWNLOAD_BYTES + 1);
+    assert!(
+        msg.contains("16.0 GB"),
+        "the limit itself should be stated: {msg}"
+    );
+    assert!(
+        msg.contains("maximum download size"),
+        "the reason should say it was a size limit: {msg}"
+    );
+}
