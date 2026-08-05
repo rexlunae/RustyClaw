@@ -244,6 +244,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let host_info: State<Option<rustyclaw_view::HostInfoData>> = hooks.use_state(|| None);
     let load_status: State<Option<rustyclaw_view::LoadStatusData>> = hooks.use_state(|| None);
     let show_system_info = hooks.use_state(|| false);
+    let show_downloads_dialog = hooks.use_state(|| false);
+    let downloads_data = hooks.use_state(|| None);
+    let downloads_cursor = hooks.use_state(|| 0usize);
     let show_services_dialog = hooks.use_state(|| false);
     let services_data: State<Option<rustyclaw_view::ServiceListData>> = hooks.use_state(|| None);
     let show_engines_dialog = hooks.use_state(|| false);
@@ -405,6 +408,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         host_info,
         load_status,
         show_system_info,
+        show_downloads_dialog,
+        downloads_data,
+        downloads_cursor,
         show_services_dialog,
         services_data,
         show_engines_dialog,
@@ -558,6 +564,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_pairing.get()
                 && !show_system_info.get()
                 && !show_services_dialog.get()
+                && !show_downloads_dialog.get()
                 && !show_engines_dialog.get()
                 && !show_cron_dialog.get()
                 && !show_memory_dialog.get()
@@ -690,6 +697,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             show_system_info: show_system_info.get(),
             host_info: host_info.read().clone(),
             load_status: load_status.read().clone(),
+            show_downloads_dialog: show_downloads_dialog.get(),
+            downloads_data: downloads_data.read().clone(),
+            downloads_cursor: downloads_cursor.get(),
             show_services_dialog: show_services_dialog.get(),
             services_data: services_data.read().clone(),
             show_engines_dialog: show_engines_dialog.get(),

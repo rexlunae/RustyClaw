@@ -184,6 +184,9 @@ pub(crate) fn gateway_event_to_gw_event(
                 .collect(),
             foreground_id,
         },
+        E::DownloadsUpdate { downloads } => GwEvent::DownloadsUpdate {
+            downloads: downloads.into_iter().map(Into::into).collect(),
+        },
         // The TUI has no plugin surface yet; plugin state is desktop-only for
         // now. Dropped explicitly rather than by a catch-all arm, so adding a
         // TUI plugin panel is a compile error away rather than a silent no-op.

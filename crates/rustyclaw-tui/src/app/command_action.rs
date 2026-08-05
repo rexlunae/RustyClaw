@@ -464,6 +464,32 @@ pub(super) async fn handle_command_action(
         CommandAction::GatewayInfo => {
             crate::app::events::emit(gw_tx, GwEvent::ShowGatewayStatus);
         }
+        CommandAction::ShowDownloads => {
+            crate::app::events::emit(gw_tx, GwEvent::ShowDownloads);
+            client
+                .send(GatewayCommand::DownloadsRequest)
+                .await
+                .context("sending DownloadsRequest")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
+        }
+        CommandAction::DownloadCancel(id) => {
+            // The panel is opened too: a cancel with nothing on screen gives
+            // the user no way to see whether it took.
+            crate::app::events::emit(gw_tx, GwEvent::ShowDownloads);
+            client
+                .send(GatewayCommand::DownloadCancel { id })
+                .await
+                .context("sending DownloadCancel")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
+        }
+        CommandAction::DownloadsClearFinished => {
+            crate::app::events::emit(gw_tx, GwEvent::ShowDownloads);
+            client
+                .send(GatewayCommand::DownloadsClearFinished)
+                .await
+                .context("sending DownloadsClearFinished")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
+        }
         CommandAction::ShowCron => {
             crate::app::events::emit(gw_tx, GwEvent::ShowCron);
             client

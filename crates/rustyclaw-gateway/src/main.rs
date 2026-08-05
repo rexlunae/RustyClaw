@@ -13,6 +13,7 @@ mod cli;
 mod command_wrapper;
 mod concurrent;
 mod dispatch;
+mod download_handler;
 mod engine_handler;
 mod errors;
 mod helpers;

@@ -486,3 +486,58 @@ pub struct PendingApprovalDto {
     pub arguments: String,
     pub requested_at: String,
 }
+
+/// DTO for one transfer in `DownloadsUpdate`.
+///
+/// Mirrors [`crate::downloads::Download`] minus its origin: the gateway sends
+/// a client only the transfers that client's own connection started, so
+/// repeating the connection id on the wire would tell it nothing it could act
+/// on and would leak how many other agents the gateway is serving.
+///
+/// The status is split into a name and an optional reason rather than sent as
+/// an enum with a payload. A client older than a future status renders the
+/// name it does not recognise as-is instead of failing to decode the whole
+/// frame — and every status a transfer can end in is worth showing even to a
+/// client that has no special handling for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadInfoDto {
+    pub id: String,
+    pub url: String,
+    /// Where the bytes are going, as an absolute path. The user needs to be
+    /// able to find the file afterwards, which a relative path would not
+    /// allow — the client does not know the workspace directory.
+    pub dest: PathBuf,
+    /// `None` for a chunked response, which declares no length. The panel
+    /// shows progress without a percentage rather than inventing one.
+    pub total_bytes: Option<u64>,
+    pub received_bytes: u64,
+    /// One of `running`, `complete`, `failed`, `cancelled`.
+    pub status: String,
+    /// Why it failed, when it did.
+    pub error: Option<String>,
+    pub started_ms: u64,
+    pub finished_ms: Option<u64>,
+}
+
+impl From<crate::downloads::Download> for DownloadInfoDto {
+    fn from(d: crate::downloads::Download) -> Self {
+        use crate::downloads::DownloadStatus;
+        let (status, error) = match d.status {
+            DownloadStatus::Running => ("running", None),
+            DownloadStatus::Complete => ("complete", None),
+            DownloadStatus::Failed { error } => ("failed", Some(error)),
+            DownloadStatus::Cancelled => ("cancelled", None),
+        };
+        Self {
+            id: d.id,
+            url: d.url,
+            dest: d.dest,
+            total_bytes: d.total_bytes,
+            received_bytes: d.received_bytes,
+            status: status.to_string(),
+            error,
+            started_ms: d.started_ms,
+            finished_ms: d.finished_ms,
+        }
+    }
+}

@@ -191,6 +191,12 @@ pub enum ClientFrameType {
     MessengerRouteSave = 89,
     /// Delete a channel-to-thread route.
     MessengerRouteDelete = 90,
+    /// Request the current list of file transfers.
+    DownloadsRequest = 91,
+    /// Stop a running transfer.
+    DownloadCancel = 92,
+    /// Forget the transfers that have finished.
+    DownloadsClearFinished = 93,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -385,6 +391,10 @@ pub enum ServerFrameType {
     MessengerAccountResult = 91,
     /// Outcome of a route save or delete.
     MessengerRouteResult = 92,
+    /// The current state of every transfer this connection started. Sent
+    /// unprompted whenever one changes, so the panel is a view of the
+    /// gateway's state rather than something the client has to poll.
+    DownloadsUpdate = 93,
 }
 
 /// Status frame sub-types.
@@ -1011,6 +1021,16 @@ pub enum ClientPayload {
         messenger: String,
         channel: Option<String>,
     },
+    /// Ask for the current transfers. Answered with a `DownloadsUpdate`;
+    /// later ones arrive unprompted.
+    DownloadsRequest,
+    /// Stop a running transfer. A transfer that has already finished is left
+    /// alone — the file is on disk and the agent has been told about it.
+    DownloadCancel {
+        id: String,
+    },
+    /// Drop the finished transfers from the list. Running ones stay.
+    DownloadsClearFinished,
 }
 
 /// Generic server frame envelope.
@@ -1547,6 +1567,13 @@ pub enum ServerPayload {
     MessengerRouteResult {
         ok: bool,
         message: Option<String>,
+    },
+    /// Every transfer this connection started, newest first. The whole list
+    /// rather than a delta: the panel redraws from it, and a client that
+    /// missed an update is corrected by the next one instead of accumulating
+    /// a wrong picture.
+    DownloadsUpdate {
+        downloads: Vec<DownloadInfoDto>,
     },
 }
 

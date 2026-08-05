@@ -650,6 +650,36 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 on_close: move |_| state.write().show_system_info = false,
             }
 
+            DownloadsDialog {
+                visible: state.read().show_downloads_dialog,
+                downloads: state.read().downloads.clone(),
+                on_close: move |_| state.write().show_downloads_dialog = false,
+                on_cancel: move |id: String| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn_reporting("cancel download", async move {
+                            client
+                                .send(GatewayCommand::DownloadCancel { id })
+                                .await
+                                .context("sending DownloadCancel")?;
+                            Ok(())
+                        });
+                    }
+                },
+                on_clear_finished: move |_| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn_reporting("clear finished downloads", async move {
+                            client
+                                .send(GatewayCommand::DownloadsClearFinished)
+                                .await
+                                .context("sending DownloadsClearFinished")?;
+                            Ok(())
+                        });
+                    }
+                },
+            }
+
             ServicesDialog {
                 visible: state.read().show_services_dialog,
                 services: state.read().services_data.clone(),

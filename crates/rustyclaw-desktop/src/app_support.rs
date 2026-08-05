@@ -400,6 +400,15 @@ pub(crate) fn handle_gateway_event(
             s.threads = mapped;
             s.set_foreground_thread(foreground_id);
         }
+        GatewayEvent::DownloadsUpdate { downloads } => {
+            // The whole list, every time. The panel is a view of the
+            // gateway's registry rather than something this client
+            // accumulates, so a missed update costs nothing beyond one stale
+            // frame — and no merge can go wrong.
+            state.write().downloads = rustyclaw_view::DownloadsData {
+                downloads: downloads.into_iter().map(Into::into).collect(),
+            };
+        }
         GatewayEvent::PluginsUpdate { plugins } => {
             tracing::info!(count = plugins.len(), "PluginsUpdate received");
             let snapshots: Vec<crate::components::PluginSnapshot> = plugins

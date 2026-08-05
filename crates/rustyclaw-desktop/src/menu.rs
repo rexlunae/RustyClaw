@@ -19,6 +19,7 @@ pub struct AppMenuIds {
     pub system_info: muda::MenuId,
     pub local_models: muda::MenuId,
     pub services: muda::MenuId,
+    pub downloads: muda::MenuId,
     pub cron: muda::MenuId,
     pub memory: muda::MenuId,
     pub mcp: muda::MenuId,
@@ -64,6 +65,7 @@ pub fn build_app_menu() -> muda::Menu {
     let swarm = muda::MenuItem::new("Swarm Manager…", true, None);
     let skills = muda::MenuItem::new("Skills…", true, None);
     let services = muda::MenuItem::new("Services…", true, "CmdOrCtrl+J".parse().ok());
+    let downloads = muda::MenuItem::new("Downloads…", true, "CmdOrCtrl+Shift+J".parse().ok());
     let local_models = muda::MenuItem::new("Local Models…", true, "CmdOrCtrl+Shift+L".parse().ok());
     let cron = muda::MenuItem::new("Scheduled Jobs…", true, None);
     let memory = muda::MenuItem::new("Memory…", true, None);
@@ -89,6 +91,7 @@ pub fn build_app_menu() -> muda::Menu {
         system_info: system_info.id().clone(),
         local_models: local_models.id().clone(),
         services: services.id().clone(),
+        downloads: downloads.id().clone(),
         cron: cron.id().clone(),
         memory: memory.id().clone(),
         mcp: mcp.id().clone(),
@@ -134,6 +137,7 @@ pub fn build_app_menu() -> muda::Menu {
             &toggle_right,
             &system_info,
             &services,
+            &downloads,
             &analytics,
             &logs,
         ],

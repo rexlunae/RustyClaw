@@ -161,6 +161,9 @@ pub(super) fn handle_normal_key(
         mut load_status,
         mut show_system_info,
         mut show_services_dialog,
+        mut show_downloads_dialog,
+        downloads_data,
+        mut downloads_cursor,
         services_data: _,
         mut show_engines_dialog,
         mut engines_data,
@@ -193,6 +196,27 @@ pub(super) fn handle_normal_key(
     if show_services_dialog.get() {
         if code == KeyCode::Esc {
             show_services_dialog.set(false);
+        }
+        return;
+    }
+
+    // Downloads panel: Esc closes, ↑/↓ move the selection so an id can be
+    // read off it. Cancelling goes through `/downloads cancel <id>`, as every
+    // other panel's mutations do.
+    if show_downloads_dialog.get() {
+        match code {
+            KeyCode::Esc => show_downloads_dialog.set(false),
+            KeyCode::Up => downloads_cursor.set(downloads_cursor.get().saturating_sub(1)),
+            KeyCode::Down => {
+                let last = downloads_data
+                    .read()
+                    .as_ref()
+                    .map(|d: &rustyclaw_view::DownloadsData| d.downloads.len())
+                    .unwrap_or(0)
+                    .saturating_sub(1);
+                downloads_cursor.set((downloads_cursor.get() + 1).min(last));
+            }
+            _ => {}
         }
         return;
     }

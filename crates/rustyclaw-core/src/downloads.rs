@@ -139,7 +139,17 @@ impl Download {
     /// and an untagged transfer belongs to no connection, so a gateway
     /// serving two agents must not let either claim it.
     pub fn wakes(&self, connection: u64) -> bool {
-        self.status.is_terminal() && self.origin.map(|o| o.connection) == Some(connection)
+        self.status.is_terminal() && self.belongs_to(connection)
+    }
+
+    /// Whether `connection` is the one that started this transfer.
+    ///
+    /// What the panel filters on. Progress belongs in a panel and not in a
+    /// turn, so this is the weaker of the two tests — but it is the same
+    /// ownership rule, and the panel must not show a client another agent's
+    /// URLs and destination paths.
+    pub fn belongs_to(&self, connection: u64) -> bool {
+        self.origin.map(|o| o.connection) == Some(connection)
     }
 
     /// How this transfer ended, in a sentence.
@@ -280,6 +290,48 @@ impl DownloadManager {
         let mut all: Vec<Download> = self.downloads.values().cloned().collect();
         all.sort_by_key(|d| std::cmp::Reverse(d.started_ms));
         all
+    }
+
+    /// Every transfer `connection` started, newest first.
+    ///
+    /// What a client's panel is shown. A gateway can be serving several
+    /// agents, and one agent's files are not another's to see, cancel, or
+    /// learn the paths of.
+    pub fn list_for(&self, connection: u64) -> Vec<Download> {
+        let mut all: Vec<Download> = self
+            .downloads
+            .values()
+            .filter(|d| d.origin.map(|o| o.connection) == Some(connection))
+            .cloned()
+            .collect();
+        all.sort_by_key(|d| std::cmp::Reverse(d.started_ms));
+        all
+    }
+
+    /// Stop a running transfer on `connection`'s behalf.
+    ///
+    /// Returns the cancelled record, or `None` if the id is unknown, the
+    /// transfer has already ended, or it belongs to another connection. The
+    /// ownership check is here rather than at the call site because it is the
+    /// same rule as [`Download::wakes`] and [`Self::list_for`]: ids are
+    /// process-wide, so a client that guessed one could otherwise stop a
+    /// download it was never shown.
+    pub fn cancel(&mut self, id: &str, connection: u64) -> Option<Download> {
+        let d = self.downloads.get(id)?;
+        if d.origin.map(|o| o.connection) != Some(connection) {
+            return None;
+        }
+        self.finish(id, DownloadStatus::Cancelled)
+    }
+
+    /// Drop `connection`'s finished transfers, leaving its running ones — and
+    /// every other connection's — alone. Returns how many went.
+    pub fn clear_finished_for(&mut self, connection: u64) -> usize {
+        let before = self.downloads.len();
+        self.downloads.retain(|_, d| {
+            !d.status.is_terminal() || d.origin.map(|o| o.connection) != Some(connection)
+        });
+        before - self.downloads.len()
     }
 
     /// Drop finished transfers, leaving running ones alone. Returns how many

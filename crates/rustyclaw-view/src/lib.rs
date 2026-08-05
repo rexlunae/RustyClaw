@@ -70,6 +70,7 @@ pub mod composer;
 pub mod conversation;
 pub mod cron;
 pub mod dialogs;
+pub mod downloads;
 pub mod engines;
 pub mod file_browser;
 pub mod kernel;
@@ -111,6 +112,7 @@ pub use dialogs::{
     PairingStep, ProviderOptionData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
     SkillInfoData, ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
 };
+pub use downloads::{DownloadData, DownloadsData};
 pub use file_browser::{FileBrowserData, FileBrowserEntry};
 pub use kernel::{GpuDisplayInfo, HostInfoData, LoadStatusData};
 pub use message::{

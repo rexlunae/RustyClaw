@@ -838,19 +838,26 @@ async fn start_download(
                         break Err(format!("writing to {}: {e}", canonical.display()));
                     }
                     received += chunk.len() as u64;
+                    // Recorded on every chunk, announced only every
+                    // `PROGRESS_STEP_BYTES`. The two are separate because
+                    // they answer different questions: the record is how a
+                    // cancel from the panel reaches this loop — `advance`
+                    // refuses once the transfer is terminal — and checking
+                    // that only per announcement would leave a slow download
+                    // writing for minutes after the user stopped it. The
+                    // announcement is what redraws a progress bar, and one
+                    // per 8 KB chunk is a redraw storm.
+                    let updated = download_manager()
+                        .lock()
+                        .ok()
+                        .and_then(|mut m| m.advance(&id_for_task, received));
+                    // `None` means it ended underneath us — cancelled from
+                    // the panel — so stop writing rather than finish a file
+                    // nobody wants. Its ending has already been announced.
+                    let Some(updated) = updated else { return };
                     if received - announced_at >= PROGRESS_STEP_BYTES {
                         announced_at = received;
-                        let updated = download_manager()
-                            .lock()
-                            .ok()
-                            .and_then(|mut m| m.advance(&id_for_task, received));
-                        // `None` means it ended underneath us — cancelled
-                        // from the panel — so stop writing rather than
-                        // finish a file nobody wants.
-                        match updated {
-                            Some(d) => announce(d),
-                            None => return,
-                        }
+                        announce(updated);
                     }
                 }
                 Ok(None) => break Ok(()),
