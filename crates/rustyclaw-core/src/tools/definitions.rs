@@ -93,7 +93,17 @@ pub static WEB_FETCH: ToolDef = ToolDef {
                   - Bearer tokens: authorization='Bearer eyJ...'\n\
                   - API keys: Use 'headers' param: {\"X-Api-Key\": \"...\"}\n\n\
                   Set use_cookies=true for sites requiring login cookies. \
-                  For JavaScript-heavy sites, use browser tools instead.",
+                  For JavaScript-heavy sites, use browser tools instead.\n\n\
+                  **To download a file rather than read it:** pass \
+                  'to_file' with a destination path. The response is streamed \
+                  to that file instead of being returned, and the call returns \
+                  a download id straight away rather than waiting for the \
+                  transfer. Use this for archives, binaries, media, or anything \
+                  large — reading those as text wastes the context window and \
+                  produces nothing useful.\n\
+                  You do not need to poll: when the transfer ends you are told, \
+                  with the destination and the outcome. The user can watch its \
+                  progress in the downloads panel meanwhile.",
     parameters: vec![],
     execute: exec_web_fetch,
 };

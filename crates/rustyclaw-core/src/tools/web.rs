@@ -47,8 +47,8 @@ fn ssrf_check_blocking(url: &str) -> ToolResult<()> {
 // ── Async implementations ───────────────────────────────────────────────────
 
 /// Fetch a URL and extract readable content as markdown or plain text (async).
-#[instrument(skip(args, _workspace_dir), fields(url))]
-pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
+#[instrument(skip(args, workspace_dir), fields(url))]
+pub async fn exec_web_fetch_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let url = args
         .get("url")
         .and_then(|v| v.as_str())
@@ -163,6 +163,16 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolRe
             status.canonical_reason().unwrap_or("Unknown")
         )
         .into());
+    }
+
+    // ── Download mode ───────────────────────────────────────────────────
+    //
+    // Placed after the request is built and the status checked, so a
+    // download gets the same SSRF validation, redirect policy, cookies and
+    // auth headers as a read — a second code path would be a second place
+    // for those to be forgotten.
+    if let Some(to_file) = args.get("to_file").and_then(|v| v.as_str()) {
+        return start_download(response, url, to_file, workspace_dir).await;
     }
 
     let content_type = response
@@ -753,4 +763,132 @@ fn html_to_text(html: &str) -> String {
     }
 
     text
+}
+
+// ── Downloads ───────────────────────────────────────────────────────────────
+
+/// How much must arrive before progress is announced again.
+///
+/// Every chunk would be a broadcast per few kilobytes, which is a lot of
+/// traffic to move a progress bar the user cannot see move that finely. The
+/// terminal event is always announced regardless of this.
+const PROGRESS_STEP_BYTES: u64 = 256 * 1024;
+
+/// Stream a response to a file, returning as soon as the transfer is
+/// registered rather than when it finishes.
+///
+/// A large file can take minutes. Holding the tool call open for it would
+/// block the turn, keep the model waiting on bytes it has no use for, and
+/// make the whole thing invisible until it ended. Instead the transfer
+/// becomes a registry entry the panel can watch, and the agent is told about
+/// it again when it completes.
+async fn start_download(
+    response: reqwest::Response,
+    url: &str,
+    to_file: &str,
+    workspace_dir: &Path,
+) -> ToolResult {
+    use crate::downloads::{DownloadStatus, announce, download_manager};
+
+    // Same resolution and the same guards as `write_file`: the destination
+    // comes from the model, so it gets the workspace boundary, the protected
+    // path list and the symlink-race protection rather than a bare open.
+    let dest = crate::tools::helpers::resolve_path(workspace_dir, to_file);
+    let total_bytes = response.content_length();
+
+    let dest_for_open = dest.clone();
+    let (file, canonical) = tokio::task::spawn_blocking(move || {
+        crate::tools::helpers::open_file_write_safe(&dest_for_open)
+    })
+    .await
+    .map_err(|e| format!("Failed to open destination: {}", e))?
+    .map_err(|e| format!("Failed to open destination: {}", e))?;
+
+    let download = download_manager()
+        .lock()
+        .map_err(|_| "download registry poisoned".to_string())?
+        .register(
+            url.to_string(),
+            canonical.clone(),
+            total_bytes,
+            // Captured here, in the turn's task. The streaming task below is
+            // spawned and would not inherit it — which is the whole reason
+            // the tag is taken at registration rather than at completion.
+            crate::downloads::current_origin(),
+        );
+    announce(download.clone());
+
+    let id = download.id.clone();
+    let id_for_task = id.clone();
+    let url_for_task = url.to_string();
+    let mut response = response;
+    let mut file = tokio::fs::File::from_std(file);
+
+    tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+
+        let mut received: u64 = 0;
+        let mut announced_at: u64 = 0;
+        // `Ok(())` means the body ended cleanly; anything else names what
+        // stopped it, and that reason reaches both the panel and the agent.
+        let outcome: Result<(), String> = loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if let Err(e) = file.write_all(&chunk).await {
+                        break Err(format!("writing to {}: {e}", canonical.display()));
+                    }
+                    received += chunk.len() as u64;
+                    if received - announced_at >= PROGRESS_STEP_BYTES {
+                        announced_at = received;
+                        let updated = download_manager()
+                            .lock()
+                            .ok()
+                            .and_then(|mut m| m.advance(&id_for_task, received));
+                        // `None` means it ended underneath us — cancelled
+                        // from the panel — so stop writing rather than
+                        // finish a file nobody wants.
+                        match updated {
+                            Some(d) => announce(d),
+                            None => return,
+                        }
+                    }
+                }
+                Ok(None) => break Ok(()),
+                Err(e) => break Err(format!("reading from {url_for_task}: {e}")),
+            }
+        };
+
+        let status = match (outcome, file.flush().await) {
+            (Ok(()), Ok(())) => DownloadStatus::Complete,
+            (Ok(()), Err(e)) => DownloadStatus::Failed {
+                error: format!("flushing {}: {e}", canonical.display()),
+            },
+            (Err(e), _) => DownloadStatus::Failed { error: e },
+        };
+
+        let finished = download_manager().lock().ok().and_then(|mut m| {
+            m.advance(&id_for_task, received);
+            m.finish(&id_for_task, status)
+        });
+        // Absent means something else ended it first, and that ending has
+        // already been announced. Announcing again would wake the agent
+        // twice for one file.
+        if let Some(d) = finished {
+            announce(d);
+        }
+    });
+
+    Ok(format!(
+        "Download started: {id}\n\
+         url: {url}\n\
+         destination: {}\n\
+         size: {}\n\n\
+         It is running in the background — you will be told when it finishes, \
+         and the user can watch it in the downloads panel. Do not poll for it.",
+        dest.display(),
+        match total_bytes {
+            Some(n) => format!("{n} bytes"),
+            None => "unknown (server sent no length)".to_string(),
+        }
+    ))
 }

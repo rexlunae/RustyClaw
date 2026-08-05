@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use rustyclaw_core::gateway::{
     ClientFrame, ClientFrameType, ClientPayload, ProbeResult, ServerFrame, ServerFrameType,
@@ -70,6 +70,9 @@ struct TurnDeps {
     dom_queries: Arc<crate::pending::PendingResponses<(String, bool)>>,
     thread_mgr: crate::SharedThreadMgr,
     threads_path: std::path::PathBuf,
+    /// The connection this turn belongs to, so a download the turn starts
+    /// knows which agent to come back and wake.
+    connection_id: u64,
 }
 
 /// Spawn one turn: run the conversation through `handle_chat_frame` in its
@@ -88,7 +91,16 @@ fn spawn_turn(
     let tool_cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
     let turn_cancel = tool_cancel.clone();
     let mut sink = concurrent::ChannelSink::new(model_task_tx, turn_key, turn_id, stream_id);
-    let handle = tokio::spawn(async move {
+    // Which conversation, on which connection, anything this turn starts in
+    // the background belongs to. Scoped around the whole turn rather than
+    // passed to `execute_tool`: the one tool that cares is `web_fetch`, and
+    // the alternative is a parameter on every tool signature between here and
+    // it.
+    let origin = rustyclaw_core::downloads::DownloadOrigin {
+        connection: deps.connection_id,
+        thread: turn_thread.map(|t| t.0),
+    };
+    let handle = tokio::spawn(rustyclaw_core::downloads::with_origin(origin, async move {
         let result = crate::chat::handle_chat_frame(
             &deps.http,
             messages,
@@ -119,8 +131,36 @@ fn spawn_turn(
             Ok(()) => sink.done(None).await,
             Err(e) => sink.error(format!("{e:#}")).await,
         }
-    });
+    }));
     (handle, tool_cancel)
+}
+
+/// Re-offer the download completions that arrived while `thread` was busy.
+///
+/// They go back through the same channel the watcher uses rather than being
+/// acted on here, so the decision to wake — and everything that hangs off it,
+/// the thread's history, the turn ids, the stream ids — lives in one arm of
+/// the loop instead of three.
+///
+/// Re-offered, not replayed blindly: the arm re-checks whether the thread is
+/// busy, because the client's next message may already have started another
+/// turn between the completion and this call.
+fn requeue_deferred_wakes(
+    deferred: &mut std::collections::HashMap<
+        rustyclaw_core::threads::ThreadId,
+        Vec<rustyclaw_core::downloads::Download>,
+    >,
+    thread: rustyclaw_core::threads::ThreadId,
+    wake_tx: &tokio::sync::mpsc::UnboundedSender<rustyclaw_core::downloads::Download>,
+) -> Result<()> {
+    for download in deferred.remove(&thread).unwrap_or_default() {
+        // The receiver is the loop making this call, so a failure here means
+        // the loop is gone — in which case propagating is the right end.
+        wake_tx
+            .send(download)
+            .context("re-offering a finished download to the connection loop")?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn handle_connection(
@@ -511,6 +551,70 @@ pub(crate) async fn handle_connection(
     let reader_user_prompts = user_prompts.clone();
     let reader_credentials = credentials.clone();
     let reader_dom_queries = dom_queries.clone();
+    // ── Download completions ───────────────────────────────────────
+    //
+    // The download registry is process-global and its broadcast carries every
+    // transfer's every change. This connection wants a narrow slice of that:
+    // the transfers *its* agent started, and only where they ended. The
+    // watcher does the filtering so the loop below never sees progress ticks
+    // for another connection's file.
+    let connection_id = rustyclaw_core::downloads::next_connection_id();
+    // Unbounded on purpose. The loop is the only receiver, and the loop sends
+    // into it too — deferring a completion that arrived while the thread was
+    // busy, then re-offering it once the turn ends. A bounded channel would
+    // let that self-send block on a receiver that is the sender's own caller.
+    let (wake_tx, mut wake_rx) =
+        tokio::sync::mpsc::unbounded_channel::<rustyclaw_core::downloads::Download>();
+    let watcher_wake_tx = wake_tx.clone();
+    let watcher_cancel = cancel.clone();
+    tokio::spawn(async move {
+        let mut events = rustyclaw_core::downloads::subscribe();
+        loop {
+            let event = tokio::select! {
+                _ = watcher_cancel.cancelled() => break,
+                event = events.recv() => event,
+            };
+            match event {
+                Ok(rustyclaw_core::downloads::DownloadEvent::Changed(download)) => {
+                    if !download.wakes(connection_id) {
+                        continue;
+                    }
+                    // The receiver is the connection loop; once it is gone
+                    // there is no agent left to wake.
+                    if watcher_wake_tx.send(download).is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                    // Said out loud rather than swallowed: each missed event
+                    // may have been a completion, and a completion dropped
+                    // here is a file the agent is never told about. Nothing
+                    // can reconstruct it — the registry still holds the
+                    // record, but the edge is gone.
+                    warn!(
+                        missed,
+                        "Download events were dropped; some completions will not wake the agent"
+                    );
+                }
+                // The sender is a process-lifetime static, so this is
+                // unreachable in practice — but a watcher that spun on a
+                // closed channel would busy-loop a core.
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    // Completions that landed while their thread had a turn running. Waking
+    // then would displace that turn — aborting the user's own request to
+    // announce a file — so they wait here and are re-offered when the turn
+    // ends. Keyed by thread because that is what has to go idle.
+    let mut deferred_wakes: std::collections::HashMap<
+        rustyclaw_core::threads::ThreadId,
+        Vec<rustyclaw_core::downloads::Download>,
+    > = std::collections::HashMap::new();
+    // Cleared only if the wake channel is somehow closed, which this scope's
+    // own sender makes impossible; see the arm that reads it.
+    let mut wakes_open = true;
+
     // Counter for turn ids, so a turn's completion cannot retire the turn
     // that replaced it.
     let mut next_turn_id: u64 = 0;
@@ -636,6 +740,7 @@ pub(crate) async fn handle_connection(
                     dom_queries: dom_queries.clone(),
                     thread_mgr: agent_session.thread_mgr.clone(),
                     threads_path: agent_session.threads_path.clone(),
+                    connection_id,
                 },
                 messages,
                 stream_id,
@@ -1250,6 +1355,7 @@ pub(crate) async fn handle_connection(
                                             dom_queries: dom_queries.clone(),
                                             thread_mgr: agent_session.thread_mgr.clone(),
                                             threads_path: agent_session.threads_path.clone(),
+                                            connection_id,
                                         },
                                         messages,
                                         stream_id,
@@ -1690,6 +1796,111 @@ pub(crate) async fn handle_connection(
                         }
             }
             // Handle messages from spawned model tasks
+            finished = wake_rx.recv(), if wakes_open => {
+                let Some(download) = finished else {
+                    // Unreachable: this scope holds a sender for the life of
+                    // the loop. Disabling the arm rather than looping is the
+                    // difference between a lost feature and a spun core,
+                    // because `recv` on a closed channel returns instantly.
+                    error!("Download completion channel closed; completions will no longer wake the agent");
+                    wakes_open = false;
+                    continue;
+                };
+                // A transfer started outside any conversation — the CLI's
+                // one-shot paths — has no transcript to be announced in.
+                let Some(thread) = download
+                    .origin
+                    .and_then(|o| o.thread)
+                    .map(rustyclaw_core::threads::ThreadId)
+                else {
+                    debug!(download = %download.id, "Download finished outside a conversation; nothing to notify");
+                    continue;
+                };
+                // Waking a thread that is mid-turn would *displace* that turn
+                // — the Chat arm's rule is one turn per thread, and the loser
+                // is aborted at its next await. Announcing a file by killing
+                // the request the user is waiting on is not a trade worth
+                // making, so it waits: the Done and Error arms re-offer
+                // whatever is parked here once the thread goes idle.
+                if active_tasks.lock().await.running_threads().contains(&thread) {
+                    debug!(
+                        download = %download.id,
+                        thread = thread.0,
+                        "Download finished while the thread was busy; deferring the wake"
+                    );
+                    deferred_wakes.entry(thread).or_default().push(download);
+                    continue;
+                }
+                let notice = download.summary();
+                // The conversation can have been deleted while the bytes were
+                // arriving. Filing the notice anywhere else would put it in a
+                // transcript that never asked for the file.
+                let history = {
+                    let mut tm = agent_session.thread_mgr.lock().await;
+                    match tm.get_mut(thread) {
+                        Some(t) => {
+                            // Recorded as the user's turn rather than a
+                            // system message: a system message part-way
+                            // through a conversation is rejected outright by
+                            // some providers, and this has to reach every one
+                            // of them. The wording is what marks it as the
+                            // environment speaking, not the person.
+                            t.add_message(rustyclaw_core::threads::MessageRole::User, &notice);
+                            tm.begin_turn(thread);
+                            crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
+                            tm.get(thread).map(crate::thread_updates::thread_history_messages)
+                        }
+                        None => None,
+                    }
+                };
+                let Some(messages) = history else {
+                    info!(
+                        download = %download.id,
+                        thread = thread.0,
+                        "Download finished but its conversation is gone; not announcing it"
+                    );
+                    continue;
+                };
+                send_thread_messages_update_shared(&mut *writer, thread, &agent_session.thread_mgr).await?;
+                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+
+                next_turn_id += 1;
+                let turn_id = next_turn_id;
+                // Even ids: server-initiated, like a resumed turn. A client
+                // allocates odd ones, so the two can never collide.
+                next_server_stream_id += 2;
+                let stream_id = next_server_stream_id;
+                let (handle, tool_cancel) = spawn_turn(
+                    TurnDeps {
+                        http: http.clone(),
+                        config: config.clone(),
+                        vault: vault.clone(),
+                        skill_mgr: skill_mgr.clone(),
+                        task_mgr: task_mgr.clone(),
+                        observer: observer.clone(),
+                        shared_config: shared_config.clone(),
+                        shared_model_ctx: shared_model_ctx.clone(),
+                        shared_copilot_session: shared_copilot_session.clone(),
+                        approvals: approvals.clone(),
+                        user_prompts: user_prompts.clone(),
+                        credentials: credentials.clone(),
+                        dom_queries: dom_queries.clone(),
+                        thread_mgr: agent_session.thread_mgr.clone(),
+                        threads_path: agent_session.threads_path.clone(),
+                        connection_id,
+                    },
+                    messages,
+                    stream_id,
+                    turn_id,
+                    Some(thread),
+                    model_task_tx.clone(),
+                    false,
+                );
+                active_tasks
+                    .lock()
+                    .await
+                    .register(thread, turn_id, stream_id, handle, tool_cancel);
+            }
             model_msg = model_task_rx.recv() => {
                 if let Some(task_msg) = model_msg {
                     match task_msg {
@@ -1764,6 +1975,7 @@ pub(crate) async fn handle_connection(
                             if still_this_turn {
                                 agent_session.thread_mgr.lock().await.end_turn(thread_id, true);
                             }
+                            requeue_deferred_wakes(&mut deferred_wakes, thread_id, &wake_tx)?;
 
                             // Send updated thread list (status may have changed)
                             send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
@@ -1787,6 +1999,11 @@ pub(crate) async fn handle_connection(
                                 agent_session.thread_mgr.lock().await.end_turn(thread_id, false);
                                 crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
                             }
+                            // A turn that failed still frees the thread, and
+                            // a download that finished behind it is still
+                            // worth saying. Nothing about the failure makes
+                            // the file less arrived.
+                            requeue_deferred_wakes(&mut deferred_wakes, thread_id, &wake_tx)?;
                             let last_turn_drained =
                                 drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
 
@@ -1956,6 +2173,78 @@ mod tests {
     use std::collections::VecDeque;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
+
+    /// A finished transfer parked under `thread`, for the deferral tests.
+    fn parked(
+        id: &str,
+        thread: u64,
+    ) -> (
+        rustyclaw_core::threads::ThreadId,
+        rustyclaw_core::downloads::Download,
+    ) {
+        let mut mgr = rustyclaw_core::downloads::DownloadManager::new();
+        let registered = mgr.register(
+            "https://e/a".into(),
+            std::path::PathBuf::from("/tmp/a"),
+            None,
+            Some(rustyclaw_core::downloads::DownloadOrigin {
+                connection: 1,
+                thread: Some(thread),
+            }),
+        );
+        let mut download = mgr
+            .finish(
+                &registered.id,
+                rustyclaw_core::downloads::DownloadStatus::Complete,
+            )
+            .expect("first ending");
+        download.id = id.to_string();
+        (rustyclaw_core::threads::ThreadId(thread), download)
+    }
+
+    /// A completion parked behind a running turn is offered again when that
+    /// turn ends, rather than being dropped to avoid displacing it.
+    #[test]
+    fn a_deferred_completion_is_re_offered_when_its_thread_goes_idle() {
+        let (thread, download) = parked("dl_1", 7);
+        let mut deferred = std::collections::HashMap::new();
+        deferred.insert(thread, vec![download]);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        requeue_deferred_wakes(&mut deferred, thread, &tx)
+            .expect("the loop still owns the receiver");
+
+        assert_eq!(
+            rx.try_recv().map(|d| d.id).ok(),
+            Some("dl_1".to_string()),
+            "the wake has to come back, or the agent is never told about the file"
+        );
+        assert!(
+            !deferred.contains_key(&thread),
+            "a re-offered wake must not stay parked, or it is delivered again \
+             at the end of every later turn"
+        );
+    }
+
+    /// One thread going idle does not release another thread's parked wake.
+    #[test]
+    fn a_turn_ending_releases_only_its_own_threads_completions() {
+        let (mine, my_download) = parked("dl_1", 7);
+        let (other, other_download) = parked("dl_2", 9);
+        let mut deferred = std::collections::HashMap::new();
+        deferred.insert(mine, vec![my_download]);
+        deferred.insert(other, vec![other_download]);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        requeue_deferred_wakes(&mut deferred, mine, &tx).expect("the loop still owns the receiver");
+
+        assert_eq!(rx.try_recv().map(|d| d.id).ok(), Some("dl_1".to_string()));
+        assert!(
+            rx.try_recv().is_err(),
+            "the other thread is still busy; waking it now would displace its turn"
+        );
+        assert!(deferred.contains_key(&other));
+    }
 
     struct MockTransport {
         peer: PeerInfo,
