@@ -18,29 +18,52 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use super::{ThreadManager, ThreadStore};
 
 /// A manager shared by everything working against one store.
 pub type SharedThreadMgr = Arc<tokio::sync::Mutex<ThreadManager>>;
 
-static MANAGERS: LazyLock<Mutex<HashMap<PathBuf, SharedThreadMgr>>> =
+/// Weak, so a store nobody is using is dropped rather than held for the
+/// life of the process.
+///
+/// A manager is not a handle: `ThreadStore::load` reads every thread's log
+/// into memory, so an entry is an agent's entire conversation history. The
+/// per-connection managers this replaced were at least dropped on
+/// disconnect; keeping strong references here would have meant a
+/// long-running gateway retaining every agent anyone had ever opened.
+///
+/// Weakness also makes "is anyone using this store" exact, and exactly the
+/// right question. It is not "does a window have it open" — a turn spawned
+/// before an agent switch outlives the session that started it and goes on
+/// persisting through the manager it captured. Whoever holds an `Arc` is a
+/// user, whatever they are, and that is what `strong_count` reports.
+static MANAGERS: LazyLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<ThreadManager>>>>> =
     LazyLock::new(Default::default);
 
-/// The manager for the store at `threads_path`, loading it from disk on
-/// first use and returning the same one to every later caller.
+/// The manager for the store at `threads_path`, loading it from disk when
+/// nobody currently holds one and returning the live one when somebody does.
 pub fn manager_for(threads_path: &Path) -> SharedThreadMgr {
-    MANAGERS
-        .lock()
-        .expect("thread manager registry poisoned")
-        .entry(threads_path.to_path_buf())
-        .or_insert_with(|| {
-            Arc::new(tokio::sync::Mutex::new(ThreadStore::load_or_migrate(
-                threads_path,
-            )))
-        })
-        .clone()
+    let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
+    if let Some(live) = managers.get(threads_path).and_then(Weak::upgrade) {
+        return live;
+    }
+    let manager = Arc::new(tokio::sync::Mutex::new(ThreadStore::load_or_migrate(
+        threads_path,
+    )));
+    managers.insert(threads_path.to_path_buf(), Arc::downgrade(&manager));
+    manager
+}
+
+/// Whether anything is still working against a store under `dir`.
+///
+/// Prunes dead entries while it is here — nothing else would, and they cost
+/// a path each.
+pub fn store_in_use_under(dir: &Path) -> bool {
+    let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
+    managers.retain(|_, weak| weak.strong_count() > 0);
+    managers.keys().any(|path| path.starts_with(dir))
 }
 
 /// Forget every manager whose store lives under `dir`.
@@ -62,61 +85,6 @@ pub fn forget_managers_under(dir: &Path) {
         .lock()
         .expect("thread manager registry poisoned")
         .retain(|path, _| !path.starts_with(dir));
-}
-
-/// Counts of live sessions per store, so a store nobody is using can be
-/// told apart from one that is open somewhere.
-static OPEN_SESSIONS: LazyLock<Mutex<HashMap<PathBuf, usize>>> = LazyLock::new(Default::default);
-
-/// A live user of the store at `threads_path`. Releases on drop.
-///
-/// Evicting a manager removes it from the table, but anything already
-/// holding the `Arc` keeps writing through it — and `ThreadStore::persist`
-/// recreates the store directory, so a deleted agent's conversations come
-/// back and a later agent under the same id loads a *second* manager beside
-/// the stale one. Exactly the two-authorities condition this module exists
-/// to prevent, reached from the other direction.
-///
-/// Counting live users is what lets deletion refuse instead.
-pub struct StoreSession {
-    path: PathBuf,
-}
-
-impl Drop for StoreSession {
-    fn drop(&mut self) {
-        let mut open = OPEN_SESSIONS
-            .lock()
-            .expect("thread manager registry poisoned");
-        if let Some(count) = open.get_mut(&self.path) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                open.remove(&self.path);
-            }
-        }
-    }
-}
-
-/// Register a live user of a store for as long as the returned value lives.
-pub fn open_session(threads_path: &Path) -> StoreSession {
-    *OPEN_SESSIONS
-        .lock()
-        .expect("thread manager registry poisoned")
-        .entry(threads_path.to_path_buf())
-        .or_insert(0) += 1;
-    StoreSession {
-        path: threads_path.to_path_buf(),
-    }
-}
-
-/// How many live users any store under `dir` has.
-pub fn sessions_open_under(dir: &Path) -> usize {
-    OPEN_SESSIONS
-        .lock()
-        .expect("thread manager registry poisoned")
-        .iter()
-        .filter(|(path, _)| path.starts_with(dir))
-        .map(|(_, count)| *count)
-        .sum()
 }
 
 #[cfg(test)]
@@ -204,6 +172,64 @@ mod tests {
                 .any(|t| t.label == "secret plans"),
             "a recreated agent must not inherit the deleted one's threads"
         );
+        forget_managers_under(&dir);
+    }
+
+    /// A store nobody holds is released, and reloaded on next use.
+    ///
+    /// The entry is weak precisely so an agent's whole message history does
+    /// not sit in memory for the life of the process once its windows have
+    /// gone.
+    #[tokio::test]
+    async fn a_store_nobody_holds_is_released() {
+        let dir = temp_dir("released");
+        let path = dir.join("threads.json");
+
+        let first = manager_for(&path);
+        first.lock().await.create_chat("while it was held");
+        assert!(store_in_use_under(&dir), "someone is holding it");
+
+        drop(first);
+        assert!(
+            !store_in_use_under(&dir),
+            "with nothing holding it, the store is no longer in use"
+        );
+
+        // Reloading is from disk, so unpersisted work is gone — the same as
+        // the per-connection managers this replaced.
+        let second = manager_for(&path);
+        assert!(
+            !second
+                .lock()
+                .await
+                .list()
+                .iter()
+                .any(|t| t.label == "while it was held")
+        );
+        forget_managers_under(&dir);
+    }
+
+    /// "In use" means anyone holding the manager, not just an open window.
+    ///
+    /// A turn spawned before an agent switch outlives the session that
+    /// started it and keeps persisting through the manager it captured, so
+    /// asking about windows would answer the wrong question.
+    #[tokio::test]
+    async fn a_holder_that_is_not_a_window_still_counts_as_in_use() {
+        let dir = temp_dir("holder");
+        let agent = dir.join("agents/busy");
+        let path = agent.join("sessions/threads.json");
+
+        // Stands in for a running turn: it holds the manager and nothing
+        // else does.
+        let running_turn = manager_for(&path);
+
+        assert!(
+            store_in_use_under(&agent),
+            "a running turn holding the manager keeps the store in use"
+        );
+        drop(running_turn);
+        assert!(!store_in_use_under(&agent));
         forget_managers_under(&dir);
     }
 }

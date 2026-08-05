@@ -888,17 +888,17 @@ fn test_download_size_is_capped() {
     );
 }
 
-/// Deleting an agent through the *tool* must forget its cached manager too.
+/// Deleting an agent takes its conversations with it, and an agent later
+/// created under the same id starts clean.
 ///
 /// The gateway's frame handler is not the only way an agent disappears:
-/// `agents_delete` runs inside the same process, and so does swarm teardown.
-/// Hooking `AgentRegistry::delete` is what makes all of them safe — this
-/// pins the one that is reachable from a test, so a future refactor that
-/// moves the eviction back out to the frame handler fails here rather than
-/// silently resurrecting a deleted agent's conversations.
+/// `agents_delete` runs in this process, and so does swarm teardown. All of
+/// them reach `AgentRegistry::delete`, which is why the store is forgotten
+/// there rather than at each caller.
 #[test]
-fn deleting_an_agent_forgets_its_cached_thread_manager() {
+fn deleting_an_agent_takes_its_threads_with_it() {
     use crate::agents::AgentRegistry;
+    use crate::threads::ThreadStore;
 
     let root = std::env::temp_dir().join(format!("rustyclaw-agent-delete-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -908,23 +908,23 @@ fn deleting_an_agent_forgets_its_cached_thread_manager() {
     registry
         .create(Some("doomed"), "Doomed", None, None, None)
         .expect("create");
-
-    // Something is holding a manager for this agent's store.
     let threads_path = registry.agent_dir("doomed").join("sessions/threads.json");
     std::fs::create_dir_all(threads_path.parent().unwrap()).unwrap();
-    let before = crate::threads::manager_for(&threads_path);
+
+    // A conversation that really reaches disk.
     {
-        let mut tm = before.blocking_lock();
+        let manager = crate::threads::manager_for(&threads_path);
+        let mut tm = manager.blocking_lock();
         tm.create_chat("secret plans");
+        ThreadStore::at_legacy_path(&threads_path)
+            .persist(&mut tm)
+            .expect("persist");
     }
+    // Nothing holds it now, so the delete is allowed to proceed.
 
     registry.delete("doomed").expect("delete");
 
     let after = crate::threads::manager_for(&threads_path);
-    assert!(
-        !std::sync::Arc::ptr_eq(&before, &after),
-        "the deleted agent's manager should not have survived"
-    );
     assert!(
         !after
             .blocking_lock()
@@ -933,6 +933,7 @@ fn deleting_an_agent_forgets_its_cached_thread_manager() {
             .any(|t| t.label == "secret plans"),
         "an agent recreated under this id would inherit deleted conversations"
     );
+    drop(after);
     crate::threads::forget_managers_under(&root);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -959,8 +960,9 @@ fn an_agent_open_elsewhere_cannot_be_deleted() {
         .expect("create");
     let threads_path = registry.agent_dir("busy").join("sessions/threads.json");
 
-    // A window has it open.
-    let session = crate::threads::open_session(&threads_path);
+    // Something is holding the manager — a window, or a turn that outlived
+    // one. The registry does not care which; holding it is what counts.
+    let session = crate::threads::manager_for(&threads_path);
     let refused = registry.delete("busy");
     assert!(
         refused.is_err(),
@@ -971,7 +973,7 @@ fn an_agent_open_elsewhere_cannot_be_deleted() {
         "and must not have removed anything"
     );
 
-    // The window closes; now it can go.
+    // The last holder goes away; now it can be deleted.
     drop(session);
     registry
         .delete("busy")
