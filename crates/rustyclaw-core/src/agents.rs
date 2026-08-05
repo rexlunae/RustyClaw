@@ -236,26 +236,19 @@ impl AgentRegistry {
             bail!("Agent '{}' not found", id);
         }
         let dir = self.agent_dir(id);
-        // Refused rather than raced. Evicting the cached manager does not
-        // reach a connection that already holds it, and its next write
-        // recreates the directory this is about to remove — resurrecting the
-        // conversations, and leaving a later agent under this id sharing a
-        // store with a manager nobody can see. Better to say no.
-        if crate::threads::store_in_use_under(&dir) {
+        // Refused rather than raced, and refused *atomically*: checking that
+        // nobody holds the store, removing it, and forgetting it are one
+        // operation under the registry's lock. Split apart, a connection
+        // opening the agent in between keeps a manager for a directory that
+        // is about to vanish — its next write brings the conversations back,
+        // and the caller after that builds a second manager beside it.
+        if !crate::threads::remove_store_dir_if_unused(&dir)? {
             bail!(
                 "Agent '{}' is still in use — close its windows and let any \
                  running reply finish first",
                 id
             );
         }
-        std::fs::remove_dir_all(&dir)?;
-        // The store is gone, so nothing may go on speaking for it. Done here
-        // rather than in the callers because an agent can be deleted by a
-        // client frame, by the `agents_delete` tool, or by swarm teardown,
-        // and all three arrive at this one function — hooking callers means
-        // the next deletion path added has to remember, and forgetting is
-        // silent until a recreated agent inherits a dead one's conversations.
-        crate::threads::forget_managers_under(&dir);
         Ok(())
     }
 }

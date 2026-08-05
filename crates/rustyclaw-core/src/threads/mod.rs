@@ -23,7 +23,10 @@ pub mod subtask;
 pub use events::*;
 pub use manager::*;
 pub use model::*;
-pub use registry::{SharedThreadMgr, forget_managers_under, manager_for, store_in_use_under};
+pub use registry::{
+    SharedThreadMgr, forget_managers_under, manager_for, remove_store_dir_if_unused,
+    store_in_use_under,
+};
 pub use store::{ThreadStore, ThreadSummary};
 pub use subtask::{
     SpawnOptions, SubtaskError, SubtaskHandle, SubtaskRegistry, SubtaskResult, spawn_background,
