@@ -403,25 +403,74 @@ fn test_web_fetch_blocks_cloud_metadata_ssrf() {
 #[test]
 fn test_web_fetch_params_defined() {
     let params = web_fetch_params();
-    assert_eq!(params.len(), 6);
+
+    // Named rather than counted. The count assertion this replaces could not
+    // fail for a missing parameter — `to_file` was described to the model in
+    // the tool's prose, read by `exec_web_fetch`, and never declared here, and
+    // a `len() == 6` that nobody had reason to touch stayed green throughout.
+    let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "url",
+            "extract_mode",
+            "max_chars",
+            "use_cookies",
+            "authorization",
+            "headers",
+            "to_file",
+        ]
+    );
+
     assert!(params.iter().any(|p| p.name == "url" && p.required));
+    for optional in [
+        "extract_mode",
+        "max_chars",
+        "use_cookies",
+        "authorization",
+        "headers",
+        "to_file",
+    ] {
+        assert!(
+            params.iter().any(|p| p.name == optional && !p.required),
+            "{optional} should be declared optional"
+        );
+    }
+}
+
+/// Every argument `exec_web_fetch` reads has to be declared in the schema the
+/// providers receive: one that is only described in prose is an argument a
+/// strict-validating provider will strip or reject, so the feature behind it
+/// is unreachable no matter how well the runtime handles it.
+#[test]
+fn test_web_fetch_reads_no_undeclared_arguments() {
+    let declared: std::collections::HashSet<String> =
+        web_fetch_params().into_iter().map(|p| p.name).collect();
+
+    let src = include_str!("web.rs");
+    let mut read: Vec<String> = Vec::new();
+    for (_, rest) in src.match_indices("args.get(\"").map(|(i, m)| (i, &src[i + m.len()..])) {
+        if let Some(end) = rest.find('"') {
+            read.push(rest[..end].to_string());
+        }
+    }
     assert!(
-        params
-            .iter()
-            .any(|p| p.name == "extract_mode" && !p.required)
+        !read.is_empty(),
+        "found no argument reads at all — the scan is broken, not the schema"
     );
-    assert!(params.iter().any(|p| p.name == "max_chars" && !p.required));
+
+    // `web.rs` holds web_search too, so only complain about names neither
+    // tool declares.
+    let search: std::collections::HashSet<String> =
+        web_search_params().into_iter().map(|p| p.name).collect();
+    let undeclared: Vec<&String> = read
+        .iter()
+        .filter(|n| !declared.contains(*n) && !search.contains(*n))
+        .collect();
     assert!(
-        params
-            .iter()
-            .any(|p| p.name == "use_cookies" && !p.required)
+        undeclared.is_empty(),
+        "read at runtime but never declared in any tool schema: {undeclared:?}"
     );
-    assert!(
-        params
-            .iter()
-            .any(|p| p.name == "authorization" && !p.required)
-    );
-    assert!(params.iter().any(|p| p.name == "headers" && !p.required));
 }
 
 // ── web_search ──────────────────────────────────────────────────
@@ -756,3 +805,34 @@ fn test_parse_unified_diff() {
 }
 
 // ── secrets tools ───────────────────────────────────────────────
+
+/// The parameter list is one step removed from what providers actually see:
+/// `definitions.rs` declares `parameters: vec![]` and the real list is looked
+/// up by name in `resolve_params`, whose fallback arm is a silent `vec![]`. So
+/// this checks the delivered payload rather than the list feeding it.
+#[test]
+fn test_web_fetch_schema_reaches_providers_with_to_file() {
+    for (provider, tools) in [
+        ("anthropic", crate::tools::schema::tools_anthropic()),
+        ("openai", crate::tools::schema::tools_openai()),
+        ("google", crate::tools::schema::tools_google()),
+    ] {
+        let tool = tools
+            .iter()
+            .find(|t| {
+                t.get("name").and_then(|n| n.as_str()) == Some("web_fetch")
+                    || t.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        == Some("web_fetch")
+            })
+            .unwrap_or_else(|| panic!("{provider}: web_fetch missing from the tool list"));
+
+        let json = serde_json::to_string(tool).unwrap();
+        assert!(
+            json.contains("to_file"),
+            "{provider}: web_fetch schema does not mention to_file, so the model \
+             cannot legally ask for a download"
+        );
+    }
+}
