@@ -429,13 +429,23 @@ impl ExecSession {
 
     /// Write data to the process stdin.
     pub fn write_stdin(&mut self, data: &str) -> Result<(), ProcessError> {
+        self.write_stdin_bytes(data.as_bytes())
+    }
+
+    /// Put bytes on the child's stdin, whichever kind of child this is.
+    ///
+    /// Both stdin entry points go through here so neither can be taught
+    /// about adopted sessions without the other: they differ only in how
+    /// the bytes are arrived at, and routing them was where that
+    /// difference had turned into two behaviours.
+    fn write_stdin_bytes(&mut self, bytes: &[u8]) -> Result<(), ProcessError> {
         if let Some(ad) = self.adopted.as_ref() {
             if self.status != SessionStatus::Running {
                 return Err(ProcessError::Exited);
             }
             return ad
                 .stdin_tx
-                .send(data.as_bytes().to_vec())
+                .send(bytes.to_vec())
                 .map_err(|_| ProcessError::Exited);
         }
         let Some(ref mut child) = self.child else {
@@ -446,7 +456,7 @@ impl ExecSession {
             return Err(ProcessError::StdinUnavailable);
         };
 
-        stdin.write_all(data.as_bytes())?;
+        stdin.write_all(bytes)?;
         stdin.flush()?;
 
         Ok(())
@@ -463,17 +473,7 @@ impl ExecSession {
     pub fn send_keys(&mut self, keys: &str) -> Result<usize, ProcessError> {
         let bytes = translate_keys(keys).map_err(ProcessError::InvalidKeys)?;
         let len = bytes.len();
-
-        let Some(ref mut child) = self.child else {
-            return Err(ProcessError::Exited);
-        };
-        let Some(ref mut stdin) = child.stdin else {
-            return Err(ProcessError::StdinUnavailable);
-        };
-
-        stdin.write_all(&bytes)?;
-        stdin.flush()?;
-
+        self.write_stdin_bytes(&bytes)?;
         Ok(len)
     }
 

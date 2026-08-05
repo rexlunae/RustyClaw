@@ -424,6 +424,136 @@ async fn an_adopted_child_reports_its_own_exit() {
     );
 }
 
+/// Named keys reach a command that has moved to the background.
+///
+/// An adopted session has no `child` — its stdin goes through the
+/// supervisor — so every stdin entry point has to know that. `write_stdin`
+/// did and `send_keys` did not, which turned "press Enter" on a
+/// backgrounded interactive command into "Process has exited" while it was
+/// plainly still running.
+#[cfg(unix)]
+#[tokio::test]
+async fn keys_reach_a_command_after_it_moves_to_the_background() {
+    use crate::tools::helpers::process_manager;
+    use crate::tools::runtime::exec_execute_command_streaming;
+
+    // Echoes whatever it is given, so anything that arrives comes back.
+    let args = json!({ "command": "cat", "timeout_secs": 60, "yieldMs": 300 });
+    let result = exec_execute_command_streaming(&args, ws(), None)
+        .await
+        .expect("yielding to the background is not an error");
+    let session_id = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|v| v["sessionId"].as_str().map(str::to_owned))
+        .expect("a yielded command reports its session");
+
+    {
+        let mgr = process_manager();
+        let mut mgr = mgr.lock().expect("process manager lock");
+        let session = mgr.get_mut(&session_id).expect("the adopted session");
+        session
+            .write_stdin("typed")
+            .expect("typed text should reach a backgrounded command");
+        session
+            .send_keys("Enter")
+            .expect("named keys should reach a backgrounded command too");
+    }
+
+    // `cat` only emits the line once the Enter lands, so seeing it back
+    // proves the keystroke arrived rather than just being accepted.
+    let mut seen = String::new();
+    for _ in 0..100 {
+        {
+            let mgr = process_manager();
+            let mut mgr = mgr.lock().expect("process manager lock");
+            if let Some(session) = mgr.get_mut(&session_id) {
+                session.try_read_output();
+                seen = session.full_output().to_string();
+            }
+        }
+        if seen.contains("typed") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        seen.contains("typed"),
+        "the keystroke should have reached the command, got: {seen:?}"
+    );
+
+    let mgr = process_manager();
+    let mut mgr = mgr.lock().expect("process manager lock");
+    if let Some(session) = mgr.get_mut(&session_id) {
+        let _ = session.kill();
+    }
+}
+
+/// Time spent paused is not billed to the command once it backgrounds.
+///
+/// The foreground loop pushes both deadlines out while the user has a
+/// process stopped, so a paused command cannot time out underneath them.
+/// The session measures its timeout from the command's real start, so
+/// handing over the timeout the *arguments* asked for rather than the one
+/// the loop had arrived at gave that grace straight back — far enough here
+/// that the very first poll would kill it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_paused_command_keeps_its_grace_when_it_backgrounds() {
+    use crate::exec_status::{self, ProcessControlAction};
+    use crate::process_manager::SessionStatus;
+    use crate::tools::helpers::process_manager;
+    use crate::tools::runtime::exec_execute_command_streaming;
+
+    // Paused for longer than the raw timeout, so elapsed-since-start is
+    // past it by the time the yield fires, while the adjusted budget is
+    // not. Both deadlines freeze while stopped, so the yield lands after
+    // the pause rather than during it.
+    let args = json!({ "command": "sleep 30", "timeout_secs": 3, "yieldMs": 200 });
+    let workspace = ws().to_path_buf();
+    let handle: tokio::task::JoinHandle<ToolResult> =
+        tokio::spawn(async move { exec_execute_command_streaming(&args, &workspace, None).await });
+
+    let mut pid = None;
+    for _ in 0..200 {
+        if let Some(s) = exec_status::sample_active()
+            .into_iter()
+            .find(|s| s.command == "sleep 30" && s.alive)
+        {
+            pid = Some(s.pid);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let pid = pid.expect("the running child should be registered");
+
+    exec_status::control(pid, ProcessControlAction::Pause).expect("pause");
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    exec_status::control(pid, ProcessControlAction::Resume).expect("resume");
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(20), handle)
+        .await
+        .expect("the command should yield rather than hang")
+        .expect("task join")
+        .expect("yielding to the background is not an error");
+    let session_id = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|v| v["sessionId"].as_str().map(str::to_owned))
+        .expect("a yielded command reports its session");
+
+    let mgr = process_manager();
+    let mut mgr = mgr.lock().expect("process manager lock");
+    let session = mgr.get_mut(&session_id).expect("the adopted session");
+    let exited = session.check_exit();
+    let status = session.status.clone();
+    let _ = session.kill();
+
+    assert!(
+        !exited && status == SessionStatus::Running,
+        "a command paused for longer than its raw timeout should not be \
+         timed out on its first poll, got: {status:?}"
+    );
+}
+
 // ── execute_tool dispatch ───────────────────────────────────────
 
 #[tokio::test]
