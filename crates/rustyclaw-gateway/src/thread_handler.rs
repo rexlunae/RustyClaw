@@ -256,7 +256,6 @@ pub(crate) async fn handle_thread_switch(
             // So it runs on its own task and the switch returns immediately.
             let http = http.clone();
             let thread_mgr = thread_mgr.clone();
-            let threads_path = threads_path.to_path_buf();
             tokio::spawn(async move {
                 let resp = match providers::call_with_tools(&http, &summary_req, None).await {
                     Ok(resp) if !resp.text.is_empty() => resp,
@@ -308,7 +307,22 @@ pub(crate) async fn handle_thread_switch(
                     keep_after_compaction(covered, thread.messages.len()),
                 );
                 debug!(thread = %label, "Thread compacted");
-                crate::helpers::persist_threads(&mut tm, &threads_path);
+                // Deliberately not persisted from here.
+                //
+                // `ThreadStore::persist` is a reconciliation, not an append:
+                // it deletes the files of every thread the manager it is
+                // handed does not contain. This manager belongs to the
+                // connection that asked for the switch, and this task now
+                // outlives it — the connection can be gone, or its agent
+                // session reloaded, by the time the provider replies. A later
+                // connection that created a thread meanwhile would have it
+                // deleted from disk by this write, which is a far worse
+                // outcome than the one being avoided.
+                //
+                // The summary is a cache: it is in memory for the context
+                // that needs it, the next persist on a live manager writes it
+                // out, and if it is lost the only cost is summarising again
+                // on the next switch.
             });
         }
     }
