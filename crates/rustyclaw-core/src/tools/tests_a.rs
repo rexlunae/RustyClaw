@@ -887,3 +887,52 @@ fn test_download_size_is_capped() {
         "the reason should say it was a size limit: {msg}"
     );
 }
+
+/// Deleting an agent through the *tool* must forget its cached manager too.
+///
+/// The gateway's frame handler is not the only way an agent disappears:
+/// `agents_delete` runs inside the same process, and so does swarm teardown.
+/// Hooking `AgentRegistry::delete` is what makes all of them safe — this
+/// pins the one that is reachable from a test, so a future refactor that
+/// moves the eviction back out to the frame handler fails here rather than
+/// silently resurrecting a deleted agent's conversations.
+#[test]
+fn deleting_an_agent_forgets_its_cached_thread_manager() {
+    use crate::agents::AgentRegistry;
+
+    let root = std::env::temp_dir().join(format!("rustyclaw-agent-delete-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let registry = AgentRegistry::new(&root, "Main");
+    registry
+        .create(Some("doomed"), "Doomed", None, None, None)
+        .expect("create");
+
+    // Something is holding a manager for this agent's store.
+    let threads_path = registry.agent_dir("doomed").join("sessions/threads.json");
+    std::fs::create_dir_all(threads_path.parent().unwrap()).unwrap();
+    let before = crate::threads::manager_for(&threads_path);
+    {
+        let mut tm = before.blocking_lock();
+        tm.create_chat("secret plans");
+    }
+
+    registry.delete("doomed").expect("delete");
+
+    let after = crate::threads::manager_for(&threads_path);
+    assert!(
+        !std::sync::Arc::ptr_eq(&before, &after),
+        "the deleted agent's manager should not have survived"
+    );
+    assert!(
+        !after
+            .blocking_lock()
+            .list()
+            .iter()
+            .any(|t| t.label == "secret plans"),
+        "an agent recreated under this id would inherit deleted conversations"
+    );
+    crate::threads::forget_managers_under(&root);
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -235,7 +235,15 @@ impl AgentRegistry {
         if !self.exists(id) {
             bail!("Agent '{}' not found", id);
         }
-        std::fs::remove_dir_all(self.agent_dir(id))?;
+        let dir = self.agent_dir(id);
+        std::fs::remove_dir_all(&dir)?;
+        // The store is gone, so nothing may go on speaking for it. Done here
+        // rather than in the callers because an agent can be deleted by a
+        // client frame, by the `agents_delete` tool, or by swarm teardown,
+        // and all three arrive at this one function — hooking callers means
+        // the next deletion path added has to remember, and forgetting is
+        // silent until a recreated agent inherits a dead one's conversations.
+        crate::threads::forget_managers_under(&dir);
         Ok(())
     }
 }
