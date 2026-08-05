@@ -161,8 +161,8 @@ pub async fn exec_execute_command_streaming(
     // wait_with_output(): the readers accumulate the full output for the
     // final result AND forward each chunk to `sink` while the process
     // runs, which is what lets clients render live progress.
-    let out_buf: Arc<Mutex<Vec<u8>>> = Arc::default();
-    let err_buf: Arc<Mutex<Vec<u8>>> = Arc::default();
+    let out_buf: crate::process_manager::SharedPipe = Arc::default();
+    let err_buf: crate::process_manager::SharedPipe = Arc::default();
     let out_task = tokio::spawn(pump_stream(
         child.stdout.take(),
         sink.clone(),
@@ -236,6 +236,8 @@ pub async fn exec_execute_command_streaming(
                                 timeout_deadline.saturating_duration_since(started_at),
                                 out_buf,
                                 err_buf,
+                                out_task,
+                                err_task,
                             )
                             .await;
                         }
@@ -267,6 +269,10 @@ pub async fn exec_execute_command_streaming(
 /// 50KB cap); this only bounds the frames pushed to clients while running.
 const STREAM_CAP_BYTES: usize = 65_536;
 
+/// How long the supervisor waits for the pipe readers to reach EOF before
+/// it publishes an adopted child's exit status regardless.
+const PUMP_DRAIN_GRACE: Duration = Duration::from_secs(2);
+
 /// Drain a child pipe to EOF, accumulating into `buf` and forwarding
 /// chunks to the sink (best-effort, capped).
 ///
@@ -284,7 +290,7 @@ async fn pump_stream<R>(
     reader: Option<R>,
     sink: Option<super::ToolOutputSink>,
     is_stderr: bool,
-    buf: Arc<Mutex<Vec<u8>>>,
+    buf: crate::process_manager::SharedPipe,
 ) where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -300,7 +306,7 @@ async fn pump_stream<R>(
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 if let Ok(mut buf) = buf.lock() {
-                    buf.extend_from_slice(&chunk[..n]);
+                    buf.push(&chunk[..n]);
                 }
                 if let Some(sink) = &sink
                     && streamed < STREAM_CAP_BYTES
@@ -317,9 +323,9 @@ async fn pump_stream<R>(
     }
 }
 
-/// Take a snapshot of a shared pipe buffer.
-fn snapshot(buf: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
-    buf.lock().map(|b| b.clone()).unwrap_or_default()
+/// Take a snapshot of a shared pipe buffer, leaving it in place.
+fn snapshot(buf: &crate::process_manager::SharedPipe) -> Vec<u8> {
+    buf.lock().map(|b| b.peek()).unwrap_or_default()
 }
 
 /// Hand a still-running child to the ProcessManager, keeping the work it
@@ -339,8 +345,10 @@ async fn adopt_child(
     cwd: &Path,
     started_at: Instant,
     timeout: Duration,
-    out_buf: Arc<Mutex<Vec<u8>>>,
-    err_buf: Arc<Mutex<Vec<u8>>>,
+    out_buf: crate::process_manager::SharedPipe,
+    err_buf: crate::process_manager::SharedPipe,
+    out_task: tokio::task::JoinHandle<()>,
+    err_task: tokio::task::JoinHandle<()>,
 ) -> ToolResult {
     let finished: Arc<Mutex<Option<SessionStatus>>> = Arc::default();
     let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -379,6 +387,23 @@ async fn adopt_child(
                 }
             }
         };
+
+        // The readers are separate tasks and may still be holding what
+        // the child wrote just before it stopped. Publishing the status
+        // first is what let a session report completion with its closing
+        // lines missing: `check_adopted_exit` drains once and flips the
+        // status, and `poll_all` skips a session that is no longer
+        // running, so nothing collects them afterwards.
+        //
+        // Bounded, because pipe EOF is not guaranteed to arrive: a
+        // grandchild that inherited the handles can hold them open after
+        // the child itself is gone, and a session that never reports
+        // finishing would be worse than one missing its tail.
+        let _ = tokio::time::timeout(PUMP_DRAIN_GRACE, async {
+            let _ = out_task.await;
+            let _ = err_task.await;
+        })
+        .await;
 
         if let Ok(mut slot) = supervisor_finished.lock() {
             *slot = Some(status);

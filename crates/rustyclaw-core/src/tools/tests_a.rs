@@ -488,6 +488,85 @@ async fn keys_reach_a_command_after_it_moves_to_the_background() {
     }
 }
 
+/// An adopted session collects a large burst and reports the right exit.
+///
+/// This covers the adoption path under load — 400KB through the pipes,
+/// across many reads, with the exit code arriving intact. It does **not**
+/// prove the ordering fix that accompanies it: the supervisor now waits
+/// for pipe EOF before publishing the status, so a session cannot report
+/// finishing while the readers still hold its closing lines, but that
+/// window is a few microseconds of scheduler latency and this test passes
+/// with the wait removed. Any polling loop tight enough to land inside the
+/// window also gives the readers the scheduling they need to close it.
+/// Left here for what it does cover, and deliberately not described as a
+/// guard for the race.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_backgrounded_command_keeps_its_closing_lines() {
+    use crate::process_manager::SessionStatus;
+    use crate::tools::helpers::process_manager;
+    use crate::tools::runtime::exec_execute_command_streaming;
+
+    // Yields, then prints a burst and exits immediately after — the window
+    // in which the readers are still behind the supervisor.
+    // A big burst, so the readers need many reads to keep up and cannot
+    // finish inside the instant the supervisor takes to record the exit.
+    // A handful of lines is drained faster than the status is observed,
+    // which made an earlier version of this test pass on the bug.
+    let args = json!({
+        "command": "sleep 0.4; awk 'BEGIN{for(i=0;i<20000;i++) print \"closing-line-\" i}'; echo END-MARKER; exit 3",
+        "timeout_secs": 60,
+        "yieldMs": 200,
+    });
+    let result = exec_execute_command_streaming(&args, ws(), None)
+        .await
+        .expect("yielding to the background is not an error");
+    let session_id = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|v| v["sessionId"].as_str().map(str::to_owned))
+        .expect("a yielded command reports its session");
+
+    // Poll exactly as the process tool does, and stop at the first poll
+    // that reports the session finished — the point after which nothing
+    // would collect any more output.
+    // Polled as tightly as possible: the window this guards is the instant
+    // between the exit being recorded and the readers catching up, and
+    // sleeping between polls hands them the time to close it.
+    let mut seen = String::new();
+    let mut status = None;
+    for _ in 0..200_000 {
+        {
+            let mgr = process_manager();
+            let mut mgr = mgr.lock().expect("process manager lock");
+            if let Some(session) = mgr.get_mut(&session_id) {
+                session.try_read_output();
+                let done = session.check_exit();
+                if done {
+                    seen = session.full_output().to_string();
+                    status = Some(session.status.clone());
+                }
+            }
+        }
+        if status.is_some() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(
+        status,
+        Some(SessionStatus::Exited(3)),
+        "the command should have been seen to finish"
+    );
+    assert!(
+        seen.contains("END-MARKER"),
+        "the last line printed before exiting should be present by the time \
+         the session reports finishing; got {} bytes ending {:?}",
+        seen.len(),
+        &seen[seen.len().saturating_sub(80)..]
+    );
+}
+
 /// Time spent paused is not billed to the command once it backgrounds.
 ///
 /// The foreground loop pushes both deadlines out while the user has a
