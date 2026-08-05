@@ -109,6 +109,14 @@ struct TurnDeps {
     dom_queries: Arc<crate::pending::PendingResponses<(String, bool)>>,
     thread_mgr: crate::SharedThreadMgr,
     threads_path: std::path::PathBuf,
+    /// What this turn's client is looking at, read live.
+    ///
+    /// The turn sends sidebar updates back, and their `foreground_id` tells
+    /// the client which conversation to show. Cloning the *value* at spawn
+    /// would send a stale one after a mid-turn switch and pull the user back
+    /// to the thread they just left; the cell is shared with the connection
+    /// loop, so what goes out is where they are now.
+    foreground: crate::ForegroundCell,
     /// The connection this turn belongs to, so a download the turn starts can
     /// be routed back to the right client.
     connection_id: u64,
@@ -165,6 +173,7 @@ fn spawn_turn(
             &deps.thread_mgr,
             turn_thread,
             &deps.threads_path,
+            &deps.foreground,
             is_resume,
         )
         .await;
@@ -240,6 +249,9 @@ pub(crate) async fn handle_connection(
     let mut agent_session =
         crate::agent_handler::AgentSession::load(&config, rustyclaw_core::agents::MAIN_AGENT_ID);
     rustyclaw_core::runtime_ctx::set_active_agent(&agent_session.agent_id);
+    // Open where this agent was last left. From here the pointer is this
+    // connection's alone — see `AgentSession::foreground_id`.
+    agent_session.restore_foreground().await;
 
     // Point the workspace at the restored foreground thread's effective
     // directory — its own override, else its project's — so tools run in the
@@ -251,6 +263,7 @@ pub(crate) async fn handle_connection(
         &mut config,
         &agent_session.project_mgr,
         &*agent_session.thread_mgr.lock().await,
+        agent_session.foreground_id(),
     );
 
     // Local engine registry for model management.
@@ -727,8 +740,14 @@ pub(crate) async fn handle_connection(
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
-    if let Err(e) =
-        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await
+    if let Err(e) = send_threads_update_shared(
+        &mut *writer,
+        &agent_session.thread_mgr,
+        &task_mgr,
+        None,
+        agent_session.foreground_id(),
+    )
+    .await
     {
         warn!(error = %e, "Failed to send initial thread list");
     }
@@ -794,8 +813,14 @@ pub(crate) async fn handle_connection(
             // still open; without a refreshed one, this client keeps
             // showing the thread as Streaming — composer gated on a reply
             // that will never come — until some unrelated broadcast.
-            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None)
-                .await?;
+            send_threads_update_shared(
+                &mut *writer,
+                &agent_session.thread_mgr,
+                &task_mgr,
+                None,
+                agent_session.foreground_id(),
+            )
+            .await?;
         }
         for thread in resumable {
             let (label, messages) = {
@@ -820,8 +845,14 @@ pub(crate) async fn handle_connection(
                 tm.begin_turn(thread);
                 crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
             }
-            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None)
-                .await?;
+            send_threads_update_shared(
+                &mut *writer,
+                &agent_session.thread_mgr,
+                &task_mgr,
+                None,
+                agent_session.foreground_id(),
+            )
+            .await?;
             next_turn_id += 1;
             let turn_id = next_turn_id;
             next_server_stream_id += 2;
@@ -843,6 +874,7 @@ pub(crate) async fn handle_connection(
                     dom_queries: dom_queries.clone(),
                     thread_mgr: agent_session.thread_mgr.clone(),
                     threads_path: agent_session.threads_path.clone(),
+                    foreground: agent_session.foreground.clone(),
                     connection_id,
                     agent_id: agent_session.agent_id.clone(),
                 },
@@ -1212,10 +1244,7 @@ pub(crate) async fn handle_connection(
                                     // from there, and leaving the two
                                     // disagreeing is the confusion this is
                                     // meant to end.
-                                    let adopted = {
-                                        let mut tm = agent_session.thread_mgr.lock().await;
-                                        tm.switch_foreground(want)
-                                    };
+                                    let adopted = agent_session.switch_foreground(want).await;
                                     if !adopted {
                                         // The thread went away between the
                                         // client composing and this frame
@@ -1251,6 +1280,7 @@ pub(crate) async fn handle_connection(
                                             &agent_session.thread_mgr,
                                             &task_mgr,
                                             None,
+                                            agent_session.foreground_id(),
                                         )
                                         .await?;
                                         continue;
@@ -1265,22 +1295,32 @@ pub(crate) async fn handle_connection(
                                     // override a statement.
                                     None
                                 } else {
-                                    let mut tm = agent_session.thread_mgr.lock().await;
+                                    let tm = agent_session.thread_mgr.lock().await;
                                     messages
                                         .iter()
                                         .rev()
                                         .find(|m| m.role == "user")
-                                        .and_then(|last| tm.find_best_match(&last.content))
-                                        .filter(|better| tm.switch_foreground(*better))
-                                        .map(|better| {
-                                            (
-                                                better,
-                                                tm.foreground()
-                                                    .and_then(|t| t.compact_summary.clone()),
+                                        .and_then(|last| {
+                                            // Exempt where the message was
+                                            // typed, which is this client's
+                                            // thread — not whatever the
+                                            // shared manager last pointed at.
+                                            tm.find_best_match(
+                                                &last.content,
+                                                agent_session.foreground_id(),
                                             )
+                                        })
+                                        .and_then(|better| {
+                                            tm.get(better).map(|t| {
+                                                (better, t.compact_summary.clone())
+                                            })
                                         })
                                 };
                                 if let Some((better, context_summary)) = auto_switch {
+                                    // This connection follows its own guess;
+                                    // the other windows on this agent keep
+                                    // looking at whatever they were.
+                                    agent_session.switch_foreground(better).await;
                                     send_frame(
                                         &mut *writer,
                                         &ServerFrame {
@@ -1297,6 +1337,7 @@ pub(crate) async fn handle_connection(
                                         &agent_session.thread_mgr,
                                         &task_mgr,
                                         None,
+                                        agent_session.foreground_id(),
                                     )
                                     .await?;
                                     send_thread_messages_update_shared(&mut *writer, better, &agent_session.thread_mgr)
@@ -1311,11 +1352,7 @@ pub(crate) async fn handle_connection(
                                 // clear the transcript.
                                 let turn_thread = match requested {
                                     Some(want) => Some(want),
-                                    None => agent_session
-                                        .thread_mgr
-                                        .lock()
-                                        .await
-                                        .ensure_foreground(),
+                                    None => agent_session.ensure_foreground().await,
                                 };
                                 // Settling the thread is only half of it. The
                                 // turn's file and command tools run in the
@@ -1333,9 +1370,17 @@ pub(crate) async fn handle_connection(
                                 // leaves the turn correctly filed under A but
                                 // writing files into B's directory. Right
                                 // conversation, wrong project on disk.
+                                //
+                                // Read from `turn_thread`, the thread just
+                                // settled on, rather than from a foreground
+                                // looked up again: they are the same here,
+                                // and asking twice is how they come to
+                                // disagree.
                                 if let Some(pid) = {
                                     let tm = agent_session.thread_mgr.lock().await;
-                                    tm.foreground().map(|t| t.project_id)
+                                    turn_thread
+                                        .and_then(|id| tm.get(id))
+                                        .map(|t| t.project_id)
                                 } {
                                     if pid != agent_session.project_mgr.active_id() {
                                         project_handler::activate_project(
@@ -1345,6 +1390,7 @@ pub(crate) async fn handle_connection(
                                             &agent_session.thread_mgr,
                                             &agent_session.projects_path,
                                             pid,
+                                            turn_thread,
                                         )
                                         .await?;
                                     } else {
@@ -1354,6 +1400,7 @@ pub(crate) async fn handle_connection(
                                             &mut config,
                                             &agent_session.project_mgr,
                                             &*agent_session.thread_mgr.lock().await,
+                                            turn_thread,
                                         );
                                     }
                                 }
@@ -1437,6 +1484,7 @@ pub(crate) async fn handle_connection(
                                     &agent_session.thread_mgr,
                                     &task_mgr,
                                     None,
+                                    agent_session.foreground_id(),
                                 )
                                 .await?;
                                 {
@@ -1459,6 +1507,7 @@ pub(crate) async fn handle_connection(
                                             dom_queries: dom_queries.clone(),
                                             thread_mgr: agent_session.thread_mgr.clone(),
                                             threads_path: agent_session.threads_path.clone(),
+                                            foreground: agent_session.foreground.clone(),
                                             connection_id,
                                             agent_id: agent_session.agent_id.clone(),
                                         },
@@ -1512,6 +1561,7 @@ pub(crate) async fn handle_connection(
                                 };
                                 // Creating into a different project also makes it
                                 // active and repoints the workspace dir.
+                                let foreground = agent_session.foreground_id();
                                 if pid != agent_session.project_mgr.active_id() {
                                     project_handler::activate_project(
                                         &mut *writer,
@@ -1520,6 +1570,7 @@ pub(crate) async fn handle_connection(
                                         &agent_session.thread_mgr,
                                         &agent_session.projects_path,
                                         pid,
+                                        foreground,
                                     )
                                     .await?;
                                 }
@@ -1530,6 +1581,7 @@ pub(crate) async fn handle_connection(
                                     &agent_session.threads_path,
                                     pid,
                                     label,
+                                    &agent_session.foreground,
                                 )
                                 .await?;
                             }
@@ -1553,6 +1605,7 @@ pub(crate) async fn handle_connection(
                                     &shared_model_ctx,
                                     &http,
                                     thread_id,
+                                    &agent_session.foreground,
                                     &busy_threads,
                                 )
                                 .await?;
@@ -1567,9 +1620,10 @@ pub(crate) async fn handle_connection(
                                 // take this lock again. `tokio::sync::Mutex`
                                 // is not reentrant, so that is a hang, not a
                                 // slow path.
+                                let foreground = agent_session.foreground_id();
                                 let foreground_project = {
                                     let tm = agent_session.thread_mgr.lock().await;
-                                    tm.foreground().map(|t| t.project_id)
+                                    foreground.and_then(|id| tm.get(id)).map(|t| t.project_id)
                                 };
                                 if let Some(pid) = foreground_project {
                                     if pid != agent_session.project_mgr.active_id() {
@@ -1580,6 +1634,7 @@ pub(crate) async fn handle_connection(
                                             &agent_session.thread_mgr,
                                             &agent_session.projects_path,
                                             pid,
+                                            foreground,
                                         )
                                         .await?;
                                     } else {
@@ -1587,12 +1642,13 @@ pub(crate) async fn handle_connection(
                                             &mut config,
                                             &agent_session.project_mgr,
                                             &*agent_session.thread_mgr.lock().await,
+                                            foreground,
                                         );
                                     }
                                 }
                             }
                             ClientPayload::ThreadList => {
-                                thread_handler::handle_thread_list(&mut *writer, &agent_session.thread_mgr, &task_mgr).await?;
+                                thread_handler::handle_thread_list(&mut *writer, &agent_session.thread_mgr, &task_mgr, agent_session.foreground_id()).await?;
                             }
                             ClientPayload::ThreadHistoryRequest { thread_id } => {
                                 thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
@@ -1617,6 +1673,7 @@ pub(crate) async fn handle_connection(
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     thread_id,
+                                    &agent_session.foreground,
                                 )
                                 .await?;
                             }
@@ -1628,6 +1685,7 @@ pub(crate) async fn handle_connection(
                                     &agent_session.threads_path,
                                     thread_id,
                                     new_label,
+                                    agent_session.foreground_id(),
                                 )
                                 .await?;
                             }
@@ -1642,6 +1700,7 @@ pub(crate) async fn handle_connection(
                                     thread_id,
                                     label,
                                     working_dir,
+                                    agent_session.foreground_id(),
                                 )
                                 .await?;
                             }
@@ -1685,6 +1744,7 @@ pub(crate) async fn handle_connection(
                                 project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;
                             }
                             ClientPayload::ProjectCreate { name, path } => {
+                                let foreground = agent_session.foreground_id();
                                 project_handler::handle_project_create(
                                     &mut *writer,
                                     &mut config,
@@ -1693,6 +1753,7 @@ pub(crate) async fn handle_connection(
                                     &agent_session.projects_path,
                                     name,
                                     path,
+                                    foreground,
                                 )
                                 .await?;
                             }
@@ -1707,6 +1768,7 @@ pub(crate) async fn handle_connection(
                                 .await?;
                             }
                             ClientPayload::ProjectUpdate { project_id, name, path } => {
+                                let foreground = agent_session.foreground_id();
                                 project_handler::handle_project_update(
                                     &mut *writer,
                                     &mut config,
@@ -1716,10 +1778,12 @@ pub(crate) async fn handle_connection(
                                     project_id,
                                     name,
                                     path,
+                                    foreground,
                                 )
                                 .await?;
                             }
                             ClientPayload::ProjectDelete { project_id } => {
+                                let foreground = agent_session.foreground_id();
                                 // Reassign the doomed project's threads to Default
                                 // so they aren't orphaned, then delete + repoint.
                                 let pid = rustyclaw_core::projects::ProjectId(project_id);
@@ -1738,12 +1802,14 @@ pub(crate) async fn handle_connection(
                                     &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     project_id,
+                                    foreground,
                                 )
                                 .await?;
                                 crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
-                                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
                             }
                             ClientPayload::ProjectSwitch { project_id } => {
+                                let foreground = agent_session.foreground_id();
                                 project_handler::handle_project_switch(
                                     &mut *writer,
                                     &mut config,
@@ -1751,6 +1817,7 @@ pub(crate) async fn handle_connection(
                                     &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     project_id,
+                                    foreground,
                                 )
                                 .await?;
                             }
@@ -2055,7 +2122,7 @@ pub(crate) async fn handle_connection(
                     continue;
                 };
                 send_thread_messages_update_shared(&mut *writer, thread, &agent_session.thread_mgr).await?;
-                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
 
                 next_turn_id += 1;
                 let turn_id = next_turn_id;
@@ -2080,6 +2147,7 @@ pub(crate) async fn handle_connection(
                         dom_queries: dom_queries.clone(),
                         thread_mgr: agent_session.thread_mgr.clone(),
                         threads_path: agent_session.threads_path.clone(),
+                        foreground: agent_session.foreground.clone(),
                         connection_id,
                         agent_id: agent_session.agent_id.clone(),
                     },
@@ -2177,7 +2245,7 @@ pub(crate) async fn handle_connection(
                             requeue_deferred_wakes(&mut deferred_wakes, thread_id, &wake_tx)?;
 
                             // Send updated thread list (status may have changed)
-                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
 
                             // Persist thread state
                             crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
@@ -2247,7 +2315,7 @@ pub(crate) async fn handle_connection(
                             }
 
                             // Send updated thread list
-                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
 
                             if last_turn_drained {
                                 break;
@@ -2261,7 +2329,7 @@ pub(crate) async fn handle_connection(
                 if let Ok(event) = thread_event {
                     // Only send updates for events that affect sidebar display
                     if event.triggers_sidebar_update() {
-                        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
                     }
                 }
             }
@@ -4696,6 +4764,111 @@ mod tests {
             reloaded.get(seeded).is_some(),
             "the seeded thread should survive too: {labels:?}"
         );
+        Ok(())
+    }
+
+    /// One window's thread switch must not move another window's view.
+    ///
+    /// Sharing the manager between the windows open on an agent shares its
+    /// `foreground_id`, which used to be per-connection only by accident of
+    /// each connection owning a manager. A foreground is a statement about
+    /// one client — which transcript is on screen — and clients act on it:
+    /// the TUI treats a changed `foreground_id` in a `ThreadsUpdate` as an
+    /// instruction to switch conversation and fetch its history. So B
+    /// opening a thread dragged A onto it, mid-sentence.
+    ///
+    /// Both halves are checked, because they fail through different paths:
+    /// the update A gets *unasked* (the manager's `Foregrounded` event
+    /// reaches every subscriber) and the one A gets when it asks.
+    #[tokio::test]
+    async fn a_switch_in_one_window_leaves_the_other_windows_foreground_alone() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (first, second) = seed_two_threads(&cfg, "first", "second")?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let switch_to = |id: rustyclaw_core::threads::ThreadId| {
+            Some(ClientFrame {
+                frame_type: ClientFrameType::ThreadSwitch,
+                payload: ClientPayload::ThreadSwitch { thread_id: id.0 },
+            })
+        };
+
+        let (in_a, out_a, handle_a) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        let (in_b, out_b, handle_b) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        for (out, who) in [(&out_a, "A"), (&out_b, "B")] {
+            await_frame(out, &format!("window {who} to finish connecting"), |f| {
+                matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+            })
+            .await;
+        }
+
+        // A settles on `first` and stays there for the rest of the test.
+        in_a.lock().await.push_back(switch_to(first));
+        await_frame(&out_a, "A's switch to first", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+        // Everything from here on is what A sees *after* it stopped moving.
+        out_a.lock().await.clear();
+
+        // B moves to the other thread.
+        in_b.lock().await.push_back(switch_to(second));
+        await_frame(&out_b, "B's switch to second", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+
+        // Ask A for its thread list: a frame we can wait for deterministically,
+        // by which point B's switch has already been broadcast.
+        in_a.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadList,
+            payload: ClientPayload::ThreadList,
+        }));
+        await_frame(&out_a, "A's thread list", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+
+        let moved: Vec<Option<u64>> = out_a
+            .lock()
+            .await
+            .iter()
+            .filter_map(|f| match &f.payload {
+                ServerPayload::ThreadsUpdate { foreground_id, .. } => Some(*foreground_id),
+                _ => None,
+            })
+            .filter(|fg| *fg != Some(first.0))
+            .collect();
+        assert!(
+            moved.is_empty(),
+            "window B's switch moved window A's foreground to {moved:?}; \
+             A never left thread {}",
+            first.0
+        );
+
+        // And B really did move — otherwise the assertion above passes for
+        // the wrong reason.
+        let b_foreground = out_b
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadsUpdate { foreground_id, .. } => Some(*foreground_id),
+                _ => None,
+            })
+            .expect("B received a threads update");
+        assert_eq!(
+            b_foreground,
+            Some(second.0),
+            "B asked to switch and should be looking at its own choice"
+        );
+
+        in_a.lock().await.push_back(None);
+        in_b.lock().await.push_back(None);
+        handle_a.await.expect("A panicked")?;
+        handle_b.await.expect("B panicked")?;
         Ok(())
     }
 

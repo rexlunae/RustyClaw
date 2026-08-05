@@ -55,6 +55,10 @@ pub(crate) async fn handle_chat_frame(
     thread_mgr: &SharedThreadMgr,
     turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
+    // Read live rather than captured: a sidebar update sent from this turn
+    // carries a `foreground_id` the client acts on, and the user may have
+    // switched threads since the turn started.
+    foreground: &crate::ForegroundCell,
     // A resumed turn replays the conversation already in the thread's log;
     // its last user message is recorded, and recording it again would
     // duplicate it in the transcript.
@@ -108,7 +112,14 @@ pub(crate) async fn handle_chat_frame(
         }
     }
     if did_auto_label {
-        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+        send_threads_update_shared(
+            writer,
+            thread_mgr,
+            task_mgr,
+            None,
+            crate::foreground_of(foreground),
+        )
+        .await?;
     }
 
     // Auto-ingest user message into Steel Memory
@@ -231,7 +242,7 @@ pub(crate) async fn handle_chat_frame(
                     )
                 })
             });
-            (tm.build_global_context(), thread_context)
+            (tm.build_global_context(turn_thread), thread_context)
         };
         let (mut msgs, compact_summary) =
             thread_context.unwrap_or_else(|| (messages.clone(), None));
@@ -346,6 +357,7 @@ pub(crate) async fn handle_chat_frame(
         thread_mgr,
         active_thread_id,
         threads_path,
+        foreground,
     )
     .await
     {

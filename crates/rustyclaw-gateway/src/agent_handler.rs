@@ -31,6 +31,30 @@ pub(crate) struct AgentSession {
     /// Shared with the running model task — see [`crate::SharedThreadMgr`].
     pub thread_mgr: SharedThreadMgr,
     pub project_mgr: ProjectManager,
+    /// The thread *this connection* is looking at.
+    ///
+    /// Per-connection, deliberately. A foreground is a statement about one
+    /// client's view — which transcript is on screen, where the next typed
+    /// message goes — and the gateway serves several clients per agent: a
+    /// desktop window and a TUI, or two desktop windows. The manager beneath
+    /// them is shared (see [`rustyclaw_core::threads::manager_for`]), so a
+    /// foreground kept *there* is one pointer for all of them: one window
+    /// opening a thread drags the others onto it, because clients treat a
+    /// changed `foreground_id` as an instruction to switch conversation and
+    /// fetch its history.
+    ///
+    /// `None` means nothing is focused — either the connection has not
+    /// settled on a thread yet, or the client asked to background the
+    /// current one. Both resolve the same way at the moment a thread is
+    /// actually needed: see [`Self::ensure_foreground`].
+    ///
+    /// [`rustyclaw_core::threads::ThreadManager`] keeps its own foreground
+    /// for the CLI, which is genuinely single-viewer, and as the persisted
+    /// "where this agent was last left" hint a new connection starts from.
+    ///
+    /// Shared with this agent's running turns, which report sidebar updates
+    /// and must read the *current* value — see [`crate::ForegroundCell`].
+    pub foreground: crate::ForegroundCell,
 }
 
 impl AgentSession {
@@ -51,12 +75,77 @@ impl AgentSession {
             projects_path,
             thread_mgr,
             project_mgr,
+            // Seeded by `restore_foreground`, which needs the manager lock
+            // and so cannot run here. Until then nothing is focused, which
+            // is the honest answer for a connection that has not asked for
+            // a thread yet.
+            foreground: Default::default(),
         }
     }
 
+    /// Adopt the agent's persisted foreground as this connection's, so a
+    /// window opens where the agent was last left rather than wherever the
+    /// election rule happens to land.
+    ///
+    /// Only meaningful as the *initial* value: from here the connection's
+    /// pointer moves on its own and the manager's is not consulted again.
+    /// A stale persisted id — the thread was closed by another window — is
+    /// ignored, leaving the election to [`Self::ensure_foreground`].
+    pub async fn restore_foreground(&self) {
+        let tm = self.thread_mgr.lock().await;
+        let restored = tm.foreground_id().filter(|id| tm.get(*id).is_some());
+        drop(tm);
+        crate::set_foreground(&self.foreground, restored);
+    }
+
+    /// The thread this connection is looking at, if any.
+    pub fn foreground_id(&self) -> Option<rustyclaw_core::threads::ThreadId> {
+        crate::foreground_of(&self.foreground)
+    }
+
+    /// Focus `id`, if it names a thread that still exists. Returns whether it
+    /// did — callers report a vanished thread rather than silently focusing
+    /// something else.
+    pub async fn switch_foreground(&self, id: rustyclaw_core::threads::ThreadId) -> bool {
+        if self.thread_mgr.lock().await.get(id).is_none() {
+            return false;
+        }
+        crate::set_foreground(&self.foreground, Some(id));
+        true
+    }
+
+    /// The thread a turn from this connection should be filed under, electing
+    /// one when nothing is focused or the focused thread has gone away.
+    ///
+    /// `None` only when the agent has no threads at all. Election reads the
+    /// shared manager but does not move it, so filing a turn here cannot
+    /// disturb another window's view.
+    pub async fn ensure_foreground(&self) -> Option<rustyclaw_core::threads::ThreadId> {
+        let tm = self.thread_mgr.lock().await;
+        if let Some(id) = self.foreground_id()
+            && tm.get(id).is_some()
+        {
+            return Some(id);
+        }
+        let elected = tm.elect_foreground();
+        drop(tm);
+        crate::set_foreground(&self.foreground, elected);
+        elected
+    }
+
     /// Persist thread and project state.
+    ///
+    /// Hands this connection's foreground to the manager on the way out, so
+    /// the agent reopens where this window actually was. Quietly: the other
+    /// windows on this agent are watching the manager's events and have their
+    /// own view to keep.
     pub async fn save(&self) {
-        crate::helpers::persist_threads(&mut *self.thread_mgr.lock().await, &self.threads_path);
+        let mut tm = self.thread_mgr.lock().await;
+        if let Some(id) = self.foreground_id() {
+            tm.set_foreground_quietly(Some(id));
+        }
+        crate::helpers::persist_threads(&mut tm, &self.threads_path);
+        drop(tm);
         crate::helpers::persist_projects(&self.project_mgr, &self.projects_path);
     }
 }
@@ -172,6 +261,10 @@ pub(crate) async fn handle_agent_switch(
     // Repoint the workspace at the new agent's active project and push the
     // new sidebar state.
     let active_project = session.project_mgr.active_id();
+    // The new agent's own last-left thread, adopted as this connection's:
+    // the outgoing agent's foreground names a thread in a different store.
+    session.restore_foreground().await;
+    let foreground = session.foreground_id();
     project_handler::activate_project(
         writer,
         config,
@@ -179,9 +272,10 @@ pub(crate) async fn handle_agent_switch(
         &session.thread_mgr,
         &session.projects_path,
         active_project,
+        foreground,
     )
     .await?;
-    send_threads_update_shared(writer, &session.thread_mgr, task_mgr, None).await?;
+    send_threads_update_shared(writer, &session.thread_mgr, task_mgr, None, foreground).await?;
     send_projects_update(writer, &session.project_mgr).await?;
 
     Ok(true)

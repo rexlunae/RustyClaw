@@ -479,6 +479,11 @@ pub(crate) async fn dispatch_text_message(
     // file the answer in whichever thread they moved to.
     turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
+    // Where this turn's client is looking *now*. Distinct from `turn_thread`
+    // above, and for the opposite reason: writes go to the pinned thread, but
+    // a sidebar update tells the client which conversation to display, and
+    // that is wherever the user has since moved to.
+    foreground: &crate::ForegroundCell,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
         Ok(r) => r,
@@ -1151,8 +1156,14 @@ pub(crate) async fn dispatch_text_message(
                                     thread_mgr.lock().await.set_description(id, description);
                                 }
                                 output = format!("Thread description set to: {}", description);
-                                send_threads_update_shared(writer, thread_mgr, task_mgr, None)
-                                    .await?;
+                                send_threads_update_shared(
+                                    writer,
+                                    thread_mgr,
+                                    task_mgr,
+                                    None,
+                                    crate::foreground_of(foreground),
+                                )
+                                .await?;
                             }
                         }
                         "set_caption" => {
@@ -1169,8 +1180,14 @@ pub(crate) async fn dispatch_text_message(
                                 };
                                 if renamed {
                                     output = format!("Thread caption set to: {}", caption);
-                                    send_threads_update_shared(writer, thread_mgr, task_mgr, None)
-                                        .await?;
+                                    send_threads_update_shared(
+                                        writer,
+                                        thread_mgr,
+                                        task_mgr,
+                                        None,
+                                        crate::foreground_of(foreground),
+                                    )
+                                    .await?;
                                 } else {
                                     output = "No active thread to caption.".to_string();
                                 }
@@ -1184,7 +1201,14 @@ pub(crate) async fn dispatch_text_message(
             // Tools that modify session state should trigger sidebar update
             const SESSION_TOOLS: &[&str] = &["sessions_spawn", "sessions_send", "subagent_run"];
             if SESSION_TOOLS.contains(&tc.name.as_str()) && !is_error {
-                send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+                send_threads_update_shared(
+                    writer,
+                    thread_mgr,
+                    task_mgr,
+                    None,
+                    crate::foreground_of(foreground),
+                )
+                .await?;
             }
 
             // Notify the client about the result.

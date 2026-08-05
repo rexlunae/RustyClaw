@@ -98,6 +98,44 @@ pub type SharedTaskManager = Arc<rustyclaw_core::tasks::TaskManager>;
 /// operations only: never across a model call.
 pub type SharedThreadMgr = Arc<Mutex<rustyclaw_core::threads::ThreadManager>>;
 
+/// The thread *this connection's client* is looking at.
+///
+/// Deliberately not on [`SharedThreadMgr`]: that manager is shared by every
+/// window open on the agent (see [`rustyclaw_core::threads::manager_for`]),
+/// while a foreground is a statement about one client's view. Keeping it
+/// there made one window's thread switch drag the others onto it.
+///
+/// A cell rather than a plain field because a running turn reports sidebar
+/// updates back to this client, and the client reads the `foreground_id` in
+/// them as "switch to this conversation". A value captured when the turn was
+/// spawned goes stale the moment the user switches threads mid-answer, and
+/// sending it would pull them back. Read it live instead — the same reason
+/// the reader holds its thread manager in a cell.
+///
+/// A `std::sync::RwLock`, not tokio's: every access is a field read or write
+/// with no await between, and the turn machinery reads it from paths that are
+/// not all async.
+pub type ForegroundCell = Arc<std::sync::RwLock<Option<rustyclaw_core::threads::ThreadId>>>;
+
+/// Read a [`ForegroundCell`], recovering from a poisoned lock.
+///
+/// A `PoisonError` here says some thread panicked while holding the lock, not
+/// that the value is meaningless — it is one `Option<ThreadId>` written under
+/// the lock in a single step. Propagating instead would make one unrelated
+/// panic permanently break every sidebar update on the connection, since
+/// poison never clears.
+pub fn foreground_of(cell: &ForegroundCell) -> Option<rustyclaw_core::threads::ThreadId> {
+    *cell.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Write a [`ForegroundCell`], recovering from a poisoned lock — see
+/// [`foreground_of`].
+pub fn set_foreground(cell: &ForegroundCell, id: Option<rustyclaw_core::threads::ThreadId>) {
+    *cell
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = id;
+}
+
 /// Shared model registry for model management.
 pub type SharedModelRegistry = rustyclaw_core::models::SharedModelRegistry;
 

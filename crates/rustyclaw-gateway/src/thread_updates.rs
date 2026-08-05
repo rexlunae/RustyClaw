@@ -78,13 +78,32 @@ pub(crate) fn session_transcript(id: u64) -> Option<(String, Vec<protocol::types
 /// release the lock, and only then write to the client. Holding the thread
 /// lock across a frame write would deadlock a model task against the
 /// connection loop the moment the frame channel filled up.
+///
+/// `foreground` is the *connection's* focused thread, not the manager's. The
+/// manager is shared by every window open on the agent, so taking the
+/// foreground from it puts one window's cursor in another window's frame —
+/// and clients read a changed `foreground_id` as "switch conversation and
+/// fetch its history", so the other window jumps.
 fn thread_dtos(
     thread_mgr: &rustyclaw_core::threads::ThreadManager,
+    foreground: Option<rustyclaw_core::threads::ThreadId>,
 ) -> (Vec<protocol::ThreadInfoDto>, Option<u64>) {
-    let foreground_id = thread_mgr.foreground().map(|t| t.task_id().0);
+    let foreground_id = foreground
+        .and_then(|id| thread_mgr.get(id))
+        .map(|t| t.task_id().0);
     let threads = thread_mgr
         .list_info()
-        .iter()
+        .into_iter()
+        .map(|mut t| {
+            // Same reason: `is_foreground` on the thread is shared state.
+            // This connection's answer is whether it is *this* client's
+            // focused thread. Fixed up before the filter below, which lets a
+            // still-empty thread through on exactly this flag — read from the
+            // manager it would keep another window's new thread listed here
+            // and drop this window's.
+            t.is_foreground = Some(t.id) == foreground;
+            t
+        })
         // A thread with no messages has nothing to open: it is a row whose
         // click shows an empty transcript. Existence in the sidebar should
         // mean there is a conversation behind it — the foreground stays
@@ -121,10 +140,11 @@ pub(crate) async fn send_threads_update_shared(
     thread_mgr: &SharedThreadMgr,
     task_mgr: &SharedTaskManager,
     session_key: Option<&str>,
+    foreground: Option<rustyclaw_core::threads::ThreadId>,
 ) -> Result<()> {
     let (threads, foreground_id) = {
         let tm = thread_mgr.lock().await;
-        thread_dtos(&tm)
+        thread_dtos(&tm, foreground)
     };
     send_threads_update_from(writer, threads, foreground_id, task_mgr, session_key).await
 }
@@ -405,7 +425,7 @@ mod tests {
 
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            send_threads_update_shared(&mut writer, &thread_mgr, &task_mgr, None),
+            send_threads_update_shared(&mut writer, &thread_mgr, &task_mgr, None, None),
         )
         .await
         .expect("sending a threads update must not deadlock on the thread lock")
@@ -449,7 +469,8 @@ mod tests {
         }
         tm.switch_foreground(foreground);
 
-        let (threads, _) = thread_dtos(&tm);
+        // The connection's foreground, which is what the filter now consults.
+        let (threads, _) = thread_dtos(&tm, Some(foreground));
         let listed: Vec<u64> = threads.iter().map(|t| t.id).collect();
         assert!(
             listed.contains(&foreground.0),
