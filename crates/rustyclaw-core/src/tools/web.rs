@@ -44,6 +44,45 @@ fn ssrf_check_blocking(url: &str) -> ToolResult<()> {
     Ok(SsrfValidator::default().validate_url(url)?)
 }
 
+/// How long a `web_fetch` request is allowed to take.
+///
+/// The two modes need genuinely different answers, and the difference is easy
+/// to collapse back into one `.timeout(..)` by accident — which is what makes
+/// this an enum with a test rather than an `if` inside the builder chain.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Deadline {
+    /// A whole request, body included, must finish inside this.
+    Total(Duration),
+    /// No cap on the total. Connecting is bounded, and each read is bounded
+    /// separately — the clock resets on every successful read, so a stalled
+    /// connection is still caught while a long transfer is not punished for
+    /// being long.
+    Streaming { connect: Duration, read: Duration },
+}
+
+impl Deadline {
+    /// Reading a page is a single short burst; a download is not.
+    pub(crate) fn for_fetch(is_download: bool) -> Self {
+        if is_download {
+            Deadline::Streaming {
+                connect: Duration::from_secs(30),
+                read: Duration::from_secs(60),
+            }
+        } else {
+            Deadline::Total(Duration::from_secs(30))
+        }
+    }
+
+    fn apply(&self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        match *self {
+            Deadline::Total(d) => builder.timeout(d),
+            Deadline::Streaming { connect, read } => {
+                builder.connect_timeout(connect).read_timeout(read)
+            }
+        }
+    }
+}
+
 // ── Async implementations ───────────────────────────────────────────────────
 
 /// Fetch a URL and extract readable content as markdown or plain text (async).
@@ -73,6 +112,9 @@ pub async fn exec_web_fetch_async(args: &Value, workspace_dir: &Path) -> ToolRes
 
     let authorization = args.get("authorization").and_then(|v| v.as_str());
     let custom_headers = args.get("headers").and_then(|v| v.as_object());
+    // Read here rather than at the download branch below: a client's deadline
+    // is fixed when it is built, and a transfer needs a different one.
+    let to_file = args.get("to_file").and_then(|v| v.as_str());
 
     debug!(extract_mode, max_chars, use_cookies, "Fetching URL");
 
@@ -101,10 +143,11 @@ pub async fn exec_web_fetch_async(args: &Value, workspace_dir: &Path) -> ToolRes
     let is_secure = parsed_url.scheme() == "https";
 
     // Build async HTTP client
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+    let builder = reqwest::Client::builder()
         .user_agent("RustyClaw/0.1 (web_fetch tool)")
-        .redirect(ssrf_redirect_policy(10))
+        .redirect(ssrf_redirect_policy(10));
+    let client = Deadline::for_fetch(to_file.is_some())
+        .apply(builder)
         .build()
         .map_err(|e| ToolError::context("Failed to create HTTP client", e))?;
 
@@ -171,7 +214,7 @@ pub async fn exec_web_fetch_async(args: &Value, workspace_dir: &Path) -> ToolRes
     // download gets the same SSRF validation, redirect policy, cookies and
     // auth headers as a read — a second code path would be a second place
     // for those to be forgotten.
-    if let Some(to_file) = args.get("to_file").and_then(|v| v.as_str()) {
+    if let Some(to_file) = to_file {
         return start_download(response, url, to_file, workspace_dir).await;
     }
 

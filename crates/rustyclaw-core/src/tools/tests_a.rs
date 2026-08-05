@@ -837,3 +837,21 @@ fn test_web_fetch_schema_reaches_providers_with_to_file() {
         );
     }
 }
+
+/// `reqwest`'s `ClientBuilder::timeout` is a *total* deadline — the docs say it
+/// runs "from when the request starts connecting until the response body has
+/// finished" — so applying the read path's 30s to a download kills every
+/// transfer this mode exists for, part-written, at the 30s mark.
+#[test]
+fn test_download_gets_no_total_deadline() {
+    use crate::tools::web::Deadline;
+
+    assert!(
+        matches!(Deadline::for_fetch(true), Deadline::Streaming { .. }),
+        "a download must not be given a total deadline"
+    );
+    assert!(
+        matches!(Deadline::for_fetch(false), Deadline::Total(_)),
+        "an ordinary read should keep its total deadline"
+    );
+}
