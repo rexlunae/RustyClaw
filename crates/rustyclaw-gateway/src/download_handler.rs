@@ -13,7 +13,7 @@
 use anyhow::Result;
 use tracing::debug;
 
-use rustyclaw_core::downloads::download_manager;
+use rustyclaw_core::downloads::lock_registry;
 use rustyclaw_core::gateway::protocol::server::send_frame;
 use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, protocol, transport};
 
@@ -22,12 +22,9 @@ use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, proto
 /// The lock is taken and released here rather than held across the send: the
 /// registry is a `std::sync::Mutex` shared with every running transfer's write
 /// loop, and holding it across a network write would stall them all.
-fn snapshot(agent: &str) -> Result<Vec<protocol::DownloadInfoDto>> {
-    let downloads = download_manager()
-        .lock()
-        .map_err(|_| anyhow::anyhow!("the download registry is poisoned"))?
-        .list_for(agent);
-    Ok(downloads.into_iter().map(Into::into).collect())
+fn snapshot(agent: &str) -> Vec<protocol::DownloadInfoDto> {
+    let downloads = lock_registry().list_for(agent);
+    downloads.into_iter().map(Into::into).collect()
 }
 
 /// Send the current transfer list to the client.
@@ -35,7 +32,7 @@ pub(crate) async fn send_downloads_update(
     writer: &mut dyn transport::TransportWriter,
     agent: &str,
 ) -> Result<()> {
-    let downloads = snapshot(agent)?;
+    let downloads = snapshot(agent);
     debug!(count = downloads.len(), "Sending DownloadsUpdate");
     send_frame(
         writer,
@@ -58,10 +55,7 @@ pub(crate) async fn handle_download_cancel(
     agent: &str,
     id: &str,
 ) -> Result<()> {
-    let cancelled = download_manager()
-        .lock()
-        .map_err(|_| anyhow::anyhow!("the download registry is poisoned"))?
-        .cancel(id, agent);
+    let cancelled = lock_registry().cancel(id, agent);
     match cancelled {
         Some(download) => {
             // Announced so every watcher agrees on the ending — including
@@ -93,10 +87,7 @@ pub(crate) async fn handle_downloads_clear_finished(
     writer: &mut dyn transport::TransportWriter,
     agent: &str,
 ) -> Result<()> {
-    let cleared = download_manager()
-        .lock()
-        .map_err(|_| anyhow::anyhow!("the download registry is poisoned"))?
-        .clear_finished_for(agent);
+    let cleared = lock_registry().clear_finished_for(agent);
     debug!(cleared, "Cleared finished transfers");
     // Nothing announces a removal — the broadcast carries changes to
     // transfers, and these no longer exist — so the update is sent directly.

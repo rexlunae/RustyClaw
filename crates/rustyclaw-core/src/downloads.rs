@@ -369,6 +369,32 @@ pub fn download_manager() -> &'static SharedDownloadManager {
     DOWNLOAD_MANAGER.get_or_init(|| Arc::new(Mutex::new(DownloadManager::new())))
 }
 
+/// Lock the registry, recovering it if a thread panicked while holding it.
+///
+/// Poison is recovered rather than propagated, because of what this data is
+/// and what the callers do with a failure. A `PoisonError` says a thread
+/// panicked mid-update; it does not say the map is inconsistent, and there is
+/// no invariant spanning two entries that a panic could leave half-applied —
+/// every operation here is one insert or one record's fields.
+///
+/// Both alternatives are worse, and the first is worse in a way that is easy
+/// to miss. A caller that maps a failed lock to `None` cannot tell it from
+/// "this transfer already ended", which is precisely the cancel signal the
+/// write loop watches for: one poisoned lock would make every running
+/// transfer look cancelled, stopping it mid-write *without* marking it
+/// terminal, so it would sit in the panel as Running forever — uncancellable,
+/// unclearable, and never waking the agent that was waiting on it. A caller
+/// that surfaces the error instead breaks the panel permanently, since poison
+/// never clears once set.
+///
+/// Recovering leaves `None` with exactly one meaning and keeps the "exactly
+/// one ending" invariant true.
+pub fn lock_registry() -> std::sync::MutexGuard<'static, DownloadManager> {
+    download_manager()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Subscribe to transfer changes.
 ///
 /// Lagging is survivable by construction: every event carries the whole
@@ -724,6 +750,55 @@ mod tests {
         );
         assert_eq!(m.clear_finished_for("researcher"), 1);
         assert!(m.get(&id).is_none());
+    }
+
+    /// A panic anywhere else must not wedge every running transfer.
+    ///
+    /// The write loop reads `advance` returning `None` as "cancelled from the
+    /// panel" and stops writing. If a poisoned lock also produced `None` the
+    /// two would be indistinguishable: the transfer would stop mid-file
+    /// *without* being marked terminal, so it would sit in the panel as
+    /// Running forever — never cleared, never cancelled, never waking the
+    /// agent waiting on it. Recovering the guard is what keeps `None` meaning
+    /// one thing.
+    #[test]
+    fn a_poisoned_registry_still_serves_the_write_loop() {
+        // Poison the real global registry: a thread panicking while holding
+        // the lock is exactly the situation being reproduced.
+        let poisoner = std::thread::spawn(|| {
+            let _guard = download_manager().lock().expect("first lock");
+            panic!("deliberate panic while holding the registry lock");
+        });
+        assert!(poisoner.join().is_err(), "the helper thread should panic");
+        assert!(
+            download_manager().lock().is_err(),
+            "the lock really is poisoned, so the rest of this test means something"
+        );
+
+        // The write loop's path must still work through it.
+        let id = lock_registry()
+            .register(
+                "https://e/a".into(),
+                PathBuf::from("/tmp/a"),
+                None,
+                Some(DownloadOrigin {
+                    agent: "researcher".into(),
+                    connection: 1,
+                    thread: Some(2),
+                }),
+            )
+            .id;
+        assert!(
+            lock_registry().advance(&id, 128).is_some(),
+            "a poisoned lock must not look like a cancel"
+        );
+        let finished = lock_registry().finish(&id, DownloadStatus::Complete);
+        assert!(
+            finished.is_some(),
+            "the transfer must still reach exactly one ending"
+        );
+        // Leave the global registry as it was found.
+        lock_registry().clear_finished();
     }
 
     #[test]
