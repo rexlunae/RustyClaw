@@ -93,6 +93,15 @@ pub fn store_in_use_under(dir: &Path) -> bool {
 /// The caller still waits for the delete, so a directory this returns `true`
 /// for really is gone. (The `remove_dir_all` remains a blocking call on
 /// whatever thread invoked it — one thread, no longer every one of them.)
+///
+/// The rename is also the point of no return, and the two failure paths
+/// differ because of it. Before it, an error means nothing happened and the
+/// agent is still there, so it is reported. After it, the agent is already
+/// detached — gone from `AgentRegistry::list`, its managers forgotten — and
+/// a failure to erase the bytes does not put it back. Reporting *that* as a
+/// failed deletion would tell the user their agent survived while they watch
+/// it disappear; it is a reclaim that did not finish, and it is logged and
+/// swept, not raised.
 pub fn remove_store_dir_if_unused(dir: &Path) -> std::io::Result<bool> {
     let doomed = {
         let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
@@ -114,8 +123,44 @@ pub fn remove_store_dir_if_unused(dir: &Path) -> std::io::Result<bool> {
             }
         }
     };
-    std::fs::remove_dir_all(&doomed)?;
+    if let Err(error) = std::fs::remove_dir_all(&doomed) {
+        tracing::warn!(
+            path = %doomed.display(),
+            %error,
+            "Could not finish erasing a deleted agent's files — the agent is \
+             gone, but its data is still on disk and will be swept on a later \
+             delete"
+        );
+    }
+    if let Some(parent) = doomed.parent() {
+        sweep_abandoned_deletes(parent);
+    }
     Ok(true)
+}
+
+/// Re-attempt any removals that were left half-done.
+///
+/// A scratch directory outlives its delete whenever the removal failed or
+/// the process died holding one, and nothing else would ever look at it
+/// again — the next delete of the same agent picks a fresh number rather
+/// than colliding with it. Retrying here keeps that from being permanent
+/// without needing a startup hook: the code that makes the litter is the
+/// code that collects it.
+///
+/// Best-effort throughout. Two deletes running at once can reach for the
+/// same leftover, and the loser gets a `NotFound` it has no reason to care
+/// about — they were both trying to erase the same doomed bytes.
+fn sweep_abandoned_deletes(agents_root: &Path) {
+    let Ok(entries) = std::fs::read_dir(agents_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with('.') && name.contains(".deleting.") {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Move `dir` out of the way, returning where it went.
@@ -400,6 +445,34 @@ mod tests {
         std::fs::create_dir_all(&agent).unwrap();
         assert!(remove_store_dir_if_unused(&agent).unwrap());
         assert!(!agent.exists());
+        forget_managers_under(&dir);
+    }
+
+    /// Files left behind by a delete that could not finish are collected.
+    ///
+    /// A removal that fails partway — or a process killed holding one —
+    /// strands the moved-aside directory, and nothing would ever look at it
+    /// again: the next delete of the same agent picks a fresh number rather
+    /// than colliding with it. Without a sweep that is permanent, and the
+    /// disk the user was reclaiming stays spent.
+    #[test]
+    fn files_stranded_by_a_failed_delete_are_swept_by_the_next_one() {
+        let dir = temp_dir("stranded");
+        let agents_root = dir.join("agents");
+
+        // What a delete that died mid-removal leaves behind.
+        let stranded = agents_root.join(".earlier.deleting.7");
+        std::fs::create_dir_all(stranded.join("workspace")).unwrap();
+        std::fs::write(stranded.join("workspace/big.bin"), "bytes").unwrap();
+
+        let agent = agents_root.join("unrelated");
+        std::fs::create_dir_all(&agent).unwrap();
+        assert!(remove_store_dir_if_unused(&agent).unwrap());
+
+        assert!(
+            !stranded.exists(),
+            "an abandoned delete should be finished off by the next one"
+        );
         forget_managers_under(&dir);
     }
 }
