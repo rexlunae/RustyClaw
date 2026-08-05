@@ -209,12 +209,25 @@ pub(crate) async fn handle_thread_switch(
     // applied under it again; the provider round trip in between holds
     // nothing.
     let to_compact = {
-        let tm = thread_mgr.lock().await;
-        tm.foreground()
+        // A write lock, because deciding to compact and marking the thread
+        // as being compacted have to be one step. Between them is exactly
+        // the window a second switch would use to start the same summary
+        // again, and that window is open for a whole provider round trip
+        // now that the call no longer blocks the loop.
+        let mut tm = thread_mgr.lock().await;
+        let candidate = tm
+            .foreground()
             .map(|t| t.task_id())
             .filter(|fg_id| *fg_id != target_id && !busy_threads.contains(fg_id))
             .and_then(|fg_id| tm.get(fg_id))
-            .filter(|thread| thread.messages.len() > 3 && thread.compact_summary.is_none())
+            .filter(|thread| {
+                thread.messages.len() > 3
+                    && thread.compact_summary.is_none()
+                    // Already being summarised: both conditions above stay
+                    // true for the whole call, so this is what stops a
+                    // second request being paid for and discarded.
+                    && !thread.compacting
+            })
             .map(|thread| {
                 (
                     thread.id,
@@ -225,7 +238,13 @@ pub(crate) async fn handle_thread_switch(
                     // thread can grow while it is being written.
                     thread.messages.len(),
                 )
-            })
+            });
+        if let Some((id, ..)) = &candidate
+            && let Some(thread) = tm.get_mut(*id)
+        {
+            thread.compacting = true;
+        }
+        candidate
     };
     if let Some((fg_id, label, prompt, covered)) = to_compact {
         // Notify client about compaction
@@ -257,7 +276,17 @@ pub(crate) async fn handle_thread_switch(
             let http = http.clone();
             let thread_mgr = thread_mgr.clone();
             tokio::spawn(async move {
-                let resp = match providers::call_with_tools(&http, &summary_req, None).await {
+                let resp = providers::call_with_tools(&http, &summary_req, None).await;
+                let mut tm = thread_mgr.lock().await;
+                let Some(thread) = tm.get_mut(fg_id) else {
+                    // Closed while the summary was in flight; its marker went
+                    // with it.
+                    return;
+                };
+                // Cleared here and nowhere else, so no early return below can
+                // leave a thread that can never be compacted again.
+                thread.compacting = false;
+                let resp = match resp {
                     Ok(resp) if !resp.text.is_empty() => resp,
                     Ok(_) => {
                         debug!(thread = %label, "Empty summary from LLM");
@@ -267,11 +296,6 @@ pub(crate) async fn handle_thread_switch(
                         debug!(thread = %label, error = %e, "Compaction failed");
                         return;
                     }
-                };
-                let mut tm = thread_mgr.lock().await;
-                let Some(thread) = tm.get_mut(fg_id) else {
-                    // Closed while the summary was in flight.
-                    return;
                 };
                 // Re-checked here, not just before the call. Compaction
                 // trims the context it summarised, so applying it to a

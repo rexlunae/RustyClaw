@@ -4445,6 +4445,92 @@ mod tests {
         Ok(())
     }
 
+    /// Flipping between threads must not pay for the same summary twice.
+    ///
+    /// Compaction is eligible while a thread is long and unsummarised, and
+    /// both stay true for the whole provider round trip. Now that a switch
+    /// returns immediately, a user can switch away, back, and away again
+    /// before the first summary lands — and every one of those would start
+    /// another paid request, with all but one result thrown away and a
+    /// "Compacting..." notice each time.
+    #[tokio::test]
+    async fn switching_back_and_forth_summarises_a_thread_once() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (stale, _busy, target) = seed_for_compaction(&cfg)?;
+
+        let gate = ModelGate::new();
+        let addr = spawn_mock_model_gated(Some(gate.clone())).await;
+        let model_ctx = gated_model_ctx(addr);
+
+        let switch_to = |id: u64| {
+            Some(ClientFrame {
+                frame_type: ClientFrameType::ThreadSwitch,
+                payload: ClientPayload::ThreadSwitch { thread_id: id },
+            })
+        };
+
+        let (incoming, outgoing, handle) =
+            spawn_live_connection(&cfg, &model_ctx, vec![switch_to(target.0)]);
+
+        // The first summary of `stale` is now in flight and stays there.
+        gate.await_arrivals(1, "the first switch should be compacting")
+            .await;
+
+        // Back and away again, while it is still being written.
+        incoming.lock().await.push_back(switch_to(stale.0));
+        incoming.lock().await.push_back(switch_to(target.0));
+
+        // Counted, not matched by id: the first switch already produced a
+        // `ThreadSwitched` naming `target`, so waiting for one of those
+        // again matches the frame that has already arrived and proves
+        // nothing. All three must have been served — which is also the
+        // freeze fix still holding — before the arrival count means
+        // anything.
+        let served = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let n = outgoing
+                    .lock()
+                    .await
+                    .iter()
+                    .filter(|f| matches!(f.frame_type, ServerFrameType::ThreadSwitched))
+                    .count();
+                if n >= 3 {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(served.is_ok(), "all three switches should have been served");
+
+        // Counted from the notice, not the arrival count: the notice is
+        // written synchronously in the connection loop just before the task
+        // is spawned, so by the time all three switches are acknowledged it
+        // is already there. Waiting on the model instead would race the
+        // duplicate's HTTP request and pass whether or not the guard works —
+        // it did, before this was corrected.
+        let compacting_notices = outgoing
+            .lock()
+            .await
+            .iter()
+            .filter(|f| {
+                matches!(&f.payload, ServerPayload::Info { message }
+                    if message.contains("Compacting"))
+            })
+            .count();
+        assert_eq!(
+            compacting_notices, 1,
+            "the same thread was summarised again while one call was already \
+             in flight"
+        );
+
+        gate.release();
+        incoming.lock().await.push_back(None);
+        handle.await.expect("connection task panicked")?;
+        Ok(())
+    }
+
     /// The gateway returns the right messages, in the right threads, in
     /// the right order — whatever order the client asks in.
     ///

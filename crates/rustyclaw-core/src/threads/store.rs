@@ -112,6 +112,7 @@ impl From<ThreadMeta> for AgentThread {
             share_context: m.share_context,
             memory_flushed: m.memory_flushed,
             open_turn: None,
+            compacting: false,
             pending_log: Vec::new(),
         }
     }
