@@ -65,6 +65,66 @@ pub enum SessionStatus {
     TimedOut,
 }
 
+/// How much of one pipe's output an adopted session holds before the
+/// oldest is dropped.
+///
+/// A ceiling is needed because nothing else provides one. While a command
+/// runs in the foreground its output is bounded by how long that lasts;
+/// once handed over, the readers keep going for as long as the command
+/// does, and a log tail or dev server that nobody polls would otherwise
+/// grow this without end.
+pub const PIPE_BUFFER_MAX_BYTES: usize = 1 << 20;
+
+/// Trimming copies what it keeps, so it is done once per [`PIPE_BUFFER_MAX_BYTES`]
+/// written rather than on every read that crosses the line.
+const PIPE_BUFFER_TRIM_AT: usize = PIPE_BUFFER_MAX_BYTES * 2;
+
+/// One pipe's worth of output that an adopted child has produced and its
+/// session has not taken yet, bounded.
+#[derive(Default)]
+pub struct PipeBuffer {
+    bytes: Vec<u8>,
+    /// Oldest bytes discarded to stay under the cap, not yet reported.
+    /// Counted rather than silently forgotten: output vanishing without a
+    /// word is the thing a cap must not do.
+    dropped: u64,
+}
+
+impl PipeBuffer {
+    /// Append what a reader just read, dropping the oldest if the cap is
+    /// exceeded. The newest output is what a tail or a failing build is
+    /// read for, so that is the end kept.
+    pub fn push(&mut self, chunk: &[u8]) {
+        self.bytes.extend_from_slice(chunk);
+        if self.bytes.len() > PIPE_BUFFER_TRIM_AT {
+            let excess = self.bytes.len() - PIPE_BUFFER_MAX_BYTES;
+            self.bytes.drain(..excess);
+            self.dropped += excess as u64;
+        }
+    }
+
+    /// Everything held, leaving it in place.
+    pub fn peek(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+
+    /// Take what is held, with the number of bytes dropped ahead of it.
+    pub fn take(&mut self) -> (Vec<u8>, u64) {
+        (
+            std::mem::take(&mut self.bytes),
+            std::mem::take(&mut self.dropped),
+        )
+    }
+
+    /// Whether there is nothing to report — no bytes and no drops.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty() && self.dropped == 0
+    }
+}
+
+/// A pipe buffer shared between a reader task and the session draining it.
+pub type SharedPipe = Arc<Mutex<PipeBuffer>>;
+
 /// A child that was already running elsewhere when the session took it on.
 ///
 /// The foreground exec path spawns through `tokio::process`, which this
@@ -78,9 +138,9 @@ pub enum SessionStatus {
 pub struct AdoptedChild {
     /// Bytes the still-running stdout reader has produced but this session
     /// has not taken yet. Emptied on each poll — see `drain_adopted`.
-    stdout: Arc<Mutex<Vec<u8>>>,
+    stdout: SharedPipe,
     /// The same, for stderr.
-    stderr: Arc<Mutex<Vec<u8>>>,
+    stderr: SharedPipe,
     /// Set by the supervisor once the child is over.
     finished: Arc<Mutex<Option<SessionStatus>>>,
     /// Bytes to write to the child's stdin, handled by the supervisor
@@ -95,8 +155,8 @@ impl AdoptedChild {
     /// Assemble the session side of an adoption. The caller spawns the
     /// supervisor that owns the child and fills these in.
     pub fn new(
-        stdout: Arc<Mutex<Vec<u8>>>,
-        stderr: Arc<Mutex<Vec<u8>>>,
+        stdout: SharedPipe,
+        stderr: SharedPipe,
         finished: Arc<Mutex<Option<SessionStatus>>>,
         stdin_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
         kill_tx: tokio::sync::oneshot::Sender<()>,
@@ -335,17 +395,25 @@ impl ExecSession {
             (&ad.stdout, &mut *stdout_buffer),
             (&ad.stderr, &mut *stderr_buffer),
         ] {
-            let Ok(mut shared) = buf.lock() else { continue };
-            if shared.is_empty() {
-                continue;
-            }
             // Taken, not copied from. The readers only append and this is
             // the only place that consumes, so leaving the bytes behind
             // would mean the session and the buffer each held a complete
             // copy of everything the command had ever printed, growing for
             // as long as it ran.
-            let fresh = std::mem::take(&mut *shared);
-            drop(shared);
+            let (fresh, dropped) = {
+                let Ok(mut shared) = buf.lock() else { continue };
+                if shared.is_empty() {
+                    continue;
+                }
+                shared.take()
+            };
+            // Said, not swallowed. Anything discarded was older than what
+            // follows, so the note belongs ahead of it.
+            if dropped > 0 {
+                combined_output.push_str(&format!(
+                    "\n[… {dropped} bytes of earlier output dropped, buffer limit reached …]\n"
+                ));
+            }
             combined_output.push_str(&String::from_utf8_lossy(&fresh));
             own.extend_from_slice(&fresh);
             read_any = true;
@@ -824,6 +892,68 @@ mod tests {
         assert!(manager.list().is_empty());
     }
 
+    /// A reader that nobody drains does not grow without end.
+    ///
+    /// The pipe is drained continuously once a command is handed over, so
+    /// the kernel's pipe buffer no longer pushes back on a chatty writer.
+    /// Without a ceiling here, a log tail or dev server that is started and
+    /// then ignored grows this for as long as it runs.
+    #[test]
+    fn an_undrained_pipe_buffer_stays_bounded() {
+        let mut buf = PipeBuffer::default();
+        let chunk = vec![b'x'; 64 * 1024];
+        for _ in 0..200 {
+            buf.push(&chunk);
+        }
+        assert!(
+            buf.peek().len() <= PIPE_BUFFER_TRIM_AT,
+            "12.5MB written with nobody reading should not all be held: {} bytes",
+            buf.peek().len()
+        );
+
+        let (kept, dropped) = buf.take();
+        assert!(dropped > 0, "the bytes that went missing should be counted");
+        assert_eq!(
+            kept.len() as u64 + dropped,
+            200 * 64 * 1024,
+            "every byte is either kept or accounted for as dropped"
+        );
+    }
+
+    /// What a cap discards, it says it discarded.
+    #[test]
+    fn dropped_output_is_reported_not_silently_lost() {
+        let stdout: SharedPipe = Arc::default();
+        let finished: Arc<Mutex<Option<SessionStatus>>> = Arc::default();
+        let (stdin_tx, _stdin_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (kill_tx, _kill_rx) = tokio::sync::oneshot::channel();
+
+        {
+            let mut buf = stdout.lock().unwrap();
+            let chunk = vec![b'x'; 64 * 1024];
+            for _ in 0..40 {
+                buf.push(&chunk);
+            }
+        }
+
+        let mut session = ExecSession::adopt(
+            "chatty".to_string(),
+            "/tmp".to_string(),
+            None,
+            Instant::now(),
+            AdoptedChild::new(stdout, Arc::default(), finished, stdin_tx, kill_tx),
+            None,
+        );
+
+        assert!(session.try_read_output());
+        assert!(
+            session
+                .full_output()
+                .contains("bytes of earlier output dropped"),
+            "a reader that had to discard output should say so"
+        );
+    }
+
     /// Polling an adopted session takes the reader's bytes rather than
     /// copying them.
     ///
@@ -834,14 +964,14 @@ mod tests {
     /// for a dev server or a log tail that is unbounded.
     #[test]
     fn polling_an_adopted_session_drains_the_readers_buffer() {
-        let stdout: Arc<Mutex<Vec<u8>>> = Arc::default();
-        let stderr: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let stdout: SharedPipe = Arc::default();
+        let stderr: SharedPipe = Arc::default();
         let finished: Arc<Mutex<Option<SessionStatus>>> = Arc::default();
         let (stdin_tx, _stdin_rx) = tokio::sync::mpsc::unbounded_channel();
         let (kill_tx, _kill_rx) = tokio::sync::oneshot::channel();
 
-        stdout.lock().unwrap().extend_from_slice(b"out-first ");
-        stderr.lock().unwrap().extend_from_slice(b"err-first");
+        stdout.lock().unwrap().push(b"out-first ");
+        stderr.lock().unwrap().push(b"err-first");
 
         let mut session = ExecSession::adopt(
             "chatty".to_string(),
@@ -866,7 +996,7 @@ mod tests {
         );
 
         // Draining must not cost the session anything that arrives later.
-        stdout.lock().unwrap().extend_from_slice(b" out-second");
+        stdout.lock().unwrap().push(b" out-second");
         assert!(session.try_read_output(), "later output still arrives");
         assert!(session.full_output().contains("out-second"));
         assert!(
