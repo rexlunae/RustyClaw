@@ -147,6 +147,36 @@ impl AgentSession {
         elected
     }
 
+    /// Re-elect if this connection's foreground has been closed underneath
+    /// it, returning what it should now report.
+    ///
+    /// The pointer is per-connection, but the threads it names are not: any
+    /// window can close one. Whoever issued the close re-elects for itself;
+    /// every *other* window is left holding an id that no longer resolves,
+    /// which reads downstream as "nothing selected" — no history, no row
+    /// highlighted, and message-less threads dropped from the sidebar by the
+    /// filter that keeps a foreground listed. The manager's own `remove`
+    /// used to elect a replacement that every viewer picked up.
+    ///
+    /// Deliberately *not* [`Self::ensure_foreground`]: that one also elects
+    /// for an empty pointer, and empty is a thing a client can mean. A
+    /// window that backgrounded its thread asked for nothing to be open, and
+    /// a sidebar refresh is not the moment to overrule it. A dangling
+    /// pointer is different — nobody asked for that.
+    pub async fn heal_foreground(&self) -> Option<rustyclaw_core::threads::ThreadId> {
+        let tm = self.thread_mgr.lock().await;
+        let current = self.foreground_id();
+        match current {
+            None => return None,
+            Some(id) if tm.get(id).is_some() => return Some(id),
+            Some(_) => {}
+        }
+        let elected = tm.elect_foreground();
+        drop(tm);
+        crate::set_foreground(&self.foreground, elected);
+        elected
+    }
+
     /// Persist thread state, recording where this connection was looking.
     ///
     /// Every path that ends a connection's claim on the store goes through
