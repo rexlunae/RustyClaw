@@ -449,7 +449,8 @@ fn test_web_fetch_reads_no_undeclared_arguments() {
 
     let src = include_str!("web.rs");
     let mut read: Vec<String> = Vec::new();
-    for (_, rest) in src.match_indices("args.get(\"").map(|(i, m)| (i, &src[i + m.len()..])) {
+    for (i, m) in src.match_indices("args.get(\"") {
+        let rest = &src[i + m.len()..];
         if let Some(end) = rest.find('"') {
             read.push(rest[..end].to_string());
         }
