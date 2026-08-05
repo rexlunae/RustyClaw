@@ -85,6 +85,23 @@ pub(crate) async fn handle_thread_create(
     Ok(())
 }
 
+/// Recent messages left in context by a compaction, over and above the
+/// summarised prefix.
+const COMPACT_KEEP_RECENT: usize = 3;
+
+/// How many trailing messages must stay in context when a summary that
+/// described `covered` messages is applied to a thread that now holds `now`.
+///
+/// Keeping a fixed count is only right when nothing was appended in between.
+/// Anything added after the prompt was taken is *not* in the summary, so it
+/// has to stay on the visible side of the boundary — otherwise it is dropped
+/// from the model's view without ever having been described. The boundary
+/// this produces is always `covered - COMPACT_KEEP_RECENT`, wherever the end
+/// of the thread has moved to.
+fn keep_after_compaction(covered: usize, now: usize) -> usize {
+    COMPACT_KEEP_RECENT + now.saturating_sub(covered)
+}
+
 /// Handle a `ThreadSwitch`: compact the current thread, switch foreground.
 ///
 /// `thread_id == 0` is a sentinel meaning "background the current thread".
@@ -198,9 +215,19 @@ pub(crate) async fn handle_thread_switch(
             .filter(|fg_id| *fg_id != target_id && !busy_threads.contains(fg_id))
             .and_then(|fg_id| tm.get(fg_id))
             .filter(|thread| thread.messages.len() > 3 && thread.compact_summary.is_none())
-            .map(|thread| (thread.id, thread.label.clone(), thread.compaction_prompt()))
+            .map(|thread| {
+                (
+                    thread.id,
+                    thread.label.clone(),
+                    thread.compaction_prompt(),
+                    // How much of the conversation this prompt describes.
+                    // The summary is only true of these messages, and the
+                    // thread can grow while it is being written.
+                    thread.messages.len(),
+                )
+            })
     };
-    if let Some((fg_id, label, prompt)) = to_compact {
+    if let Some((fg_id, label, prompt, covered)) = to_compact {
         // Notify client about compaction
         send_info(writer, &format!("Compacting thread '{}'...", label)).await?;
 
@@ -261,7 +288,25 @@ pub(crate) async fn handle_thread_switch(
                 if thread.compact_summary.is_some() {
                     return;
                 }
-                thread.apply_compaction(resp.text);
+                // `apply_compaction` would put the boundary three messages
+                // from the *current* end, and the thread may have grown
+                // while the summary was being written — a whole turn can
+                // start and finish in that window now that the loop is not
+                // blocked, which clears `open_turn` again and slips past the
+                // check above. Everything added since the prompt would then
+                // sit behind the boundary, described by a summary that
+                // predates it: silently invisible to the model while still
+                // shown in the transcript.
+                //
+                // So the tail the summary does not cover is kept explicitly.
+                // That is what `apply_compaction_keeping` is for — its own
+                // doc says "when the caller knows exactly which tail of the
+                // conversation the summary does *not* cover", and here we
+                // do.
+                thread.apply_compaction_keeping(
+                    resp.text,
+                    keep_after_compaction(covered, thread.messages.len()),
+                );
                 debug!(thread = %label, "Thread compacted");
                 crate::helpers::persist_threads(&mut tm, &threads_path);
             });
@@ -1049,5 +1094,71 @@ mod tests {
             "the chat's context is untouched by a peek"
         );
         assert_eq!(thread.messages.len(), 5, "no messages were folded away");
+    }
+
+    /// A summary that lands after the thread has moved on must not bury the
+    /// messages it never described.
+    ///
+    /// Compaction moves a boundary rather than deleting anything, so the
+    /// damage is invisible in the transcript: the client still shows every
+    /// message while the model stops being shown some of them. That is the
+    /// failure this reproduces — a turn completes on the thread while the
+    /// summary is in flight, and those messages must stay on the visible
+    /// side of the boundary.
+    #[test]
+    fn a_late_summary_does_not_bury_messages_it_never_saw() {
+        use rustyclaw_core::threads::MessageRole;
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+        let id = manager.create_chat("busy");
+        for i in 0..8 {
+            manager.add_message(id, MessageRole::User, format!("q{i}"));
+        }
+        // What the prompt was built from.
+        let covered = manager.get(id).expect("thread").messages.len();
+
+        // A whole turn starts and finishes while the summary is written, so
+        // `open_turn` is clear again by the time it lands.
+        manager.begin_turn(id);
+        manager.add_message(id, MessageRole::User, "asked while summarising");
+        manager.add_message(id, MessageRole::Assistant, "answered while summarising");
+        if let Some(t) = manager.get_mut(id) {
+            t.end_turn(true);
+        }
+
+        let now = manager.get(id).expect("thread").messages.len();
+        let keep = keep_after_compaction(covered, now);
+        if let Some(t) = manager.get_mut(id) {
+            t.apply_compaction_keeping("a summary of q0..q7".to_string(), keep);
+        }
+
+        let thread = manager.get(id).expect("thread");
+        let visible: Vec<&str> = thread
+            .context_messages()
+            .map(|m| m.content.as_str())
+            .collect();
+        assert!(
+            visible.contains(&"asked while summarising")
+                && visible.contains(&"answered while summarising"),
+            "messages added after the prompt are not in the summary, so they \
+             must still be in context: {visible:?}"
+        );
+        // The boundary lands where the summary's coverage ends, wherever the
+        // thread has grown to since.
+        assert_eq!(thread.compacted_up_to, covered - COMPACT_KEEP_RECENT);
+        assert_eq!(
+            thread.messages.len(),
+            now,
+            "compaction moves a boundary; it deletes nothing"
+        );
+    }
+
+    /// Without growth the rule is the plain one, so a quiet thread compacts
+    /// exactly as before.
+    #[test]
+    fn an_undisturbed_thread_keeps_the_usual_tail() {
+        assert_eq!(keep_after_compaction(10, 10), COMPACT_KEEP_RECENT);
+        assert_eq!(keep_after_compaction(10, 14), COMPACT_KEEP_RECENT + 4);
+        // A thread cannot shrink, but the arithmetic must not panic if it did.
+        assert_eq!(keep_after_compaction(10, 4), COMPACT_KEEP_RECENT);
     }
 }
