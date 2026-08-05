@@ -205,7 +205,7 @@ pub(crate) async fn handle_thread_switch(
         send_info(writer, &format!("Compacting thread '{}'...", label)).await?;
 
         let current_model_ctx = shared_model_ctx.read().await.clone();
-        if let Some(ref ctx) = current_model_ctx {
+        if let Some(ctx) = current_model_ctx {
             let summary_req = ProviderRequest {
                 messages: vec![ChatMessage::text("user", &prompt)],
                 model: ctx.model.clone(),
@@ -216,24 +216,55 @@ pub(crate) async fn handle_thread_switch(
                 allowed_tools: Some(Vec::new()),
             };
 
-            match providers::call_with_tools(http, &summary_req, None).await {
-                Ok(resp) if !resp.text.is_empty() => {
-                    // Scoped explicitly: a guard taken in an `if let`
-                    // scrutinee outlives the block, and this mutex is not
-                    // reentrant.
-                    let mut tm = thread_mgr.lock().await;
-                    if let Some(thread) = tm.get_mut(fg_id) {
-                        thread.apply_compaction(resp.text);
-                        debug!(thread = %label, "Thread compacted");
+            // Summarising is housekeeping on the thread being *left*, and
+            // nothing the client is about to be sent depends on it: the
+            // `ThreadSwitched` frame below carries the *target* thread's
+            // summary, not this one. Awaiting it here bought nothing and
+            // cost everything — a provider round trip inside the connection
+            // loop, during which the connection answered nothing at all.
+            // Not another thread's stream, not a Stop, not a thread being
+            // opened. Opening a thread was therefore also the act of
+            // freezing the session for as long as the provider took.
+            //
+            // So it runs on its own task and the switch returns immediately.
+            let http = http.clone();
+            let thread_mgr = thread_mgr.clone();
+            let threads_path = threads_path.to_path_buf();
+            tokio::spawn(async move {
+                let resp = match providers::call_with_tools(&http, &summary_req, None).await {
+                    Ok(resp) if !resp.text.is_empty() => resp,
+                    Ok(_) => {
+                        debug!(thread = %label, "Empty summary from LLM");
+                        return;
                     }
+                    Err(e) => {
+                        debug!(thread = %label, error = %e, "Compaction failed");
+                        return;
+                    }
+                };
+                let mut tm = thread_mgr.lock().await;
+                let Some(thread) = tm.get_mut(fg_id) else {
+                    // Closed while the summary was in flight.
+                    return;
+                };
+                // Re-checked here, not just before the call. Compaction
+                // trims the context it summarised, so applying it to a
+                // thread that started a turn meanwhile would cut the ground
+                // out from under a running answer — the caller's snapshot of
+                // which threads were busy is a round trip old by now, and a
+                // turn can start on this thread in that window.
+                if thread.open_turn.is_some() {
+                    debug!(thread = %label, "Thread started answering while it was being summarised; leaving it alone");
+                    return;
                 }
-                Ok(_) => {
-                    debug!(thread = %label, "Empty summary from LLM");
+                // Another switch may have summarised it already.
+                if thread.compact_summary.is_some() {
+                    return;
                 }
-                Err(e) => {
-                    debug!(thread = %label, error = %e, "Compaction failed");
-                }
-            }
+                thread.apply_compaction(resp.text);
+                debug!(thread = %label, "Thread compacted");
+                crate::helpers::persist_threads(&mut tm, &threads_path);
+            });
         }
     }
 
