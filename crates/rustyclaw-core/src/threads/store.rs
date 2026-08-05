@@ -651,4 +651,46 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// `persist` reconciles: it is not safe to call with a manager that is no
+    /// longer the authority on which threads exist.
+    ///
+    /// This is what makes persisting from a detached background task
+    /// dangerous. The deletion itself is wanted — a closed thread must not
+    /// rise from the dead on the next load — but it means a *stale* manager
+    /// silently destroys threads created since it was built. Pinned here so
+    /// the sharp edge is visible from the store rather than only from the
+    /// callers that have to avoid it.
+    #[test]
+    fn persist_deletes_threads_the_manager_does_not_know_about() {
+        let dir = temp_root("stale-persist");
+        let legacy = dir.join("threads.json");
+        let store = ThreadStore::at_legacy_path(&legacy);
+        let root = dir.join("threads");
+
+        // What was on disk when an earlier connection built its manager.
+        let mut first = ThreadManager::new();
+        let kept = first.create_chat("kept");
+        first.add_message(kept, MessageRole::User, "hello");
+        store.persist(&mut first).expect("first persist");
+
+        // A task spawned by that connection still holds this snapshot.
+        let mut stale = store.load().expect("load snapshot");
+        assert!(stale.get(kept).is_some());
+
+        // A later connection loads afresh and adds a thread.
+        let mut later = store.load().expect("load again");
+        let created_later = later.create_chat("created later");
+        store.persist(&mut later).expect("later persist");
+        assert!(root.join(format!("{}.meta.json", created_later.0)).exists());
+
+        // The stale snapshot writes, and reconciliation takes the newer
+        // thread with it — it was never in this manager to begin with.
+        store.persist(&mut stale).expect("stale persist");
+        assert!(
+            !root.join(format!("{}.meta.json", created_later.0)).exists(),
+            "a write from a stale manager deleted a thread it had never seen"
+        );
+        assert!(root.join(format!("{}.meta.json", kept.0)).exists());
+    }
 }
