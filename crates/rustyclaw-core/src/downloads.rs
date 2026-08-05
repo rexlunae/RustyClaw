@@ -224,6 +224,8 @@ pub struct DownloadManager {
 }
 
 impl DownloadManager {
+    /// An empty registry. The process one is reached through
+    /// [`download_manager`] instead; this is for tests that want their own.
     pub fn new() -> Self {
         Self::default()
     }
@@ -281,6 +283,7 @@ impl DownloadManager {
         Some(d.clone())
     }
 
+    /// One transfer by id, or `None` once it has been cleared from the list.
     pub fn get(&self, id: &str) -> Option<&Download> {
         self.downloads.get(id)
     }

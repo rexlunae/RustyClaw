@@ -131,6 +131,7 @@ pub struct DownloadsData {
 }
 
 impl DownloadsData {
+    /// Whether there is nothing to show — what the panel's empty state keys on.
     pub fn is_empty(&self) -> bool {
         self.downloads.is_empty()
     }

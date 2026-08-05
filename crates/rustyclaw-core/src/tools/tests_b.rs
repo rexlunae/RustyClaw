@@ -705,3 +705,49 @@ fn test_summarize_file_nonexistent() {
     let result = exec_summarize_file(&args, ws());
     assert!(result.is_err());
 }
+
+// ── download destinations ───────────────────────────────────────
+
+#[tokio::test]
+async fn download_dest_creates_missing_parent_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let (_file, canonical) = crate::tools::web::open_download_dest(tmp.path(), "new/nested/f.bin")
+        .await
+        .expect("a destination in a not-yet-existing folder should be created, as write_file does");
+
+    assert!(canonical.ends_with("f.bin"));
+    assert!(tmp.path().join("new").join("nested").is_dir());
+}
+
+#[tokio::test]
+async fn download_dest_refuses_the_credentials_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cred = tmp.path().join("credentials");
+    std::fs::create_dir_all(&cred).unwrap();
+    crate::tools::helpers::set_credentials_dir(cred.clone());
+
+    // `CREDENTIALS_DIR` is a process-wide `OnceLock`, so this asserts the
+    // precondition rather than assuming it: if another test in this binary
+    // claimed it first, the guard being exercised below is not the one set up
+    // here and the test would otherwise pass without testing anything.
+    assert!(
+        crate::tools::helpers::is_protected_path(&cred.join("vault.json")),
+        "expected this test to own the credentials dir; another test claimed it first"
+    );
+
+    let err = crate::tools::web::open_download_dest(tmp.path(), "credentials/vault.json")
+        .await
+        .expect_err("a download aimed at the credentials dir must be refused");
+
+    assert!(
+        err.to_string().contains("Access denied"),
+        "expected the vault-access-denied error, got: {err}"
+    );
+    // The guard has to run before anything is created or truncated, so a
+    // rejected download must not have touched the file on its way to failing.
+    assert!(
+        !cred.join("vault.json").exists(),
+        "rejected download created the file it was refused"
+    );
+}

@@ -782,6 +782,49 @@ const PROGRESS_STEP_BYTES: u64 = 256 * 1024;
 /// make the whole thing invisible until it ended. Instead the transfer
 /// becomes a registry entry the panel can watch, and the agent is told about
 /// it again when it completes.
+/// Resolve and open a download's destination under the same guards
+/// `write_file` applies, returning the open handle and its canonical path.
+///
+/// Separated from [`start_download`] so the guards can be tested without a
+/// live `reqwest::Response` — the protected-path rejection in particular has
+/// no other way to be exercised, and it is the one that matters most.
+pub(crate) async fn open_download_dest(
+    workspace_dir: &Path,
+    to_file: &str,
+) -> Result<(std::fs::File, std::path::PathBuf), ToolError> {
+    // Same resolution and the same guards as `write_file`: the destination
+    // comes from the model, so it gets the workspace boundary, the protected
+    // path list and the symlink-race protection rather than a bare open.
+    let dest = crate::tools::helpers::resolve_path(workspace_dir, to_file);
+
+    // Before anything is created or opened. `open_file_write_safe` does the
+    // symlink-race half only — it has no idea what the credentials directory
+    // is, so without this a download could truncate a vault file that
+    // `write_file` refuses to touch.
+    if crate::tools::helpers::is_protected_path(&dest) {
+        warn!(path = %dest.display(), "Attempted download to protected path");
+        return Err(crate::tools::helpers::VAULT_ACCESS_DENIED.into());
+    }
+
+    // `write_file` promises the destination's folders are created for it and
+    // does so here; a download aimed at a new subfolder would otherwise fail
+    // at the open with a bare ENOENT.
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            format!(
+                "Failed to create directories for '{}': {}",
+                dest.display(),
+                e
+            )
+        })?;
+    }
+
+    tokio::task::spawn_blocking(move || crate::tools::helpers::open_file_write_safe(&dest))
+        .await
+        .map_err(|e| format!("Failed to open destination: {}", e))?
+        .map_err(|e| format!("Failed to open destination: {}", e).into())
+}
+
 async fn start_download(
     response: reqwest::Response,
     url: &str,
@@ -790,19 +833,11 @@ async fn start_download(
 ) -> ToolResult {
     use crate::downloads::{DownloadStatus, announce, download_manager};
 
-    // Same resolution and the same guards as `write_file`: the destination
-    // comes from the model, so it gets the workspace boundary, the protected
-    // path list and the symlink-race protection rather than a bare open.
-    let dest = crate::tools::helpers::resolve_path(workspace_dir, to_file);
     let total_bytes = response.content_length();
 
-    let dest_for_open = dest.clone();
-    let (file, canonical) = tokio::task::spawn_blocking(move || {
-        crate::tools::helpers::open_file_write_safe(&dest_for_open)
-    })
-    .await
-    .map_err(|e| format!("Failed to open destination: {}", e))?
-    .map_err(|e| format!("Failed to open destination: {}", e))?;
+    let (file, canonical) = open_download_dest(workspace_dir, to_file).await?;
+    // Taken before the streaming task below takes ownership of the path.
+    let dest_display = canonical.display().to_string();
 
     let download = download_manager()
         .lock()
@@ -892,7 +927,7 @@ async fn start_download(
          size: {}\n\n\
          It is running in the background — you will be told when it finishes, \
          and the user can watch it in the downloads panel. Do not poll for it.",
-        dest.display(),
+        dest_display,
         match total_bytes {
             Some(n) => format!("{n} bytes"),
             None => "unknown (server sent no length)".to_string(),
