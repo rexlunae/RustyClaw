@@ -10,7 +10,6 @@
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::debug;
 
 use rustyclaw_core::agents::MAIN_AGENT_ID;
@@ -22,62 +21,6 @@ use rustyclaw_core::projects::ProjectManager;
 use crate::project_handler;
 use crate::thread_updates::{send_projects_update, send_threads_update_shared};
 use crate::{SharedTaskManager, SharedThreadMgr};
-
-/// One thread manager per agent, shared by every connection using it.
-///
-/// A manager is the authority on which threads exist, and `ThreadStore::
-/// persist` acts on that authority: it deletes the files of every thread the
-/// manager does not contain. Building one per connection therefore made two
-/// windows on the same agent mutually destructive — each held a snapshot of
-/// the store taken when it connected, and the first write after the other
-/// created a thread deleted it from disk. Not a race in the narrow sense
-/// either: the loser is whatever the other window did *at any point* since
-/// the connection opened.
-///
-/// Keyed by the store's path rather than the agent id, because the path is
-/// what a manager is the authority *for*. Two agents have separate
-/// directories and cannot reconcile each other away; so do two installations
-/// pointed at different settings directories, which an agent id alone would
-/// have collapsed into one.
-///
-/// Entries live for the process. A manager is a few hundred bytes plus its
-/// threads, an installation has a handful of agents, and dropping one while
-/// a connection still held it would put us straight back to two authorities
-/// for one store.
-static THREAD_MANAGERS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, SharedThreadMgr>>,
-> = std::sync::LazyLock::new(Default::default);
-
-/// The shared manager for the store at `threads_path`, loading it from disk
-/// on first use.
-fn thread_manager_for(threads_path: &std::path::Path) -> SharedThreadMgr {
-    let mut managers = THREAD_MANAGERS
-        .lock()
-        .expect("thread manager registry poisoned");
-    managers
-        .entry(threads_path.to_path_buf())
-        .or_insert_with(|| {
-            Arc::new(Mutex::new(
-                rustyclaw_core::threads::ThreadStore::load_or_migrate(threads_path),
-            ))
-        })
-        .clone()
-}
-
-/// Forget the cached manager for a store that no longer exists.
-///
-/// Keeping a manager for the life of the process is what makes it the single
-/// authority — but an agent's directory can be removed out from under it.
-/// Deleting an agent and creating another with the same id would otherwise
-/// hand the new one the old manager, and its first write would put the
-/// deleted agent's conversations back on disk. Reloading from disk on every
-/// connection used to make that impossible; caching is what introduces it.
-fn forget_thread_manager(threads_path: &std::path::Path) {
-    THREAD_MANAGERS
-        .lock()
-        .expect("thread manager registry poisoned")
-        .remove(threads_path);
-}
 
 /// Everything about the connection that is scoped to one agent. Swapped
 /// wholesale on agent switch.
@@ -98,7 +41,7 @@ impl AgentSession {
         let _ = std::fs::create_dir_all(&sessions_dir);
         let threads_path = sessions_dir.join("threads.json");
         let projects_path = sessions_dir.join("projects.json");
-        let thread_mgr = thread_manager_for(&threads_path);
+        let thread_mgr = rustyclaw_core::threads::manager_for(&threads_path);
         let mut project_mgr = ProjectManager::load_or_new(&projects_path);
         project_mgr.ensure_default(config.workspace_dir_for(agent_id));
         crate::helpers::persist_projects(&project_mgr, &projects_path);
@@ -286,13 +229,7 @@ pub(crate) async fn handle_agent_delete(
         .await;
     }
     match config.agent_registry().delete(&agent_id) {
-        Ok(()) => {
-            // The directory is gone, so the manager cached for it must go
-            // too — otherwise an agent recreated under this id inherits the
-            // deleted one's conversations and writes them back out.
-            forget_thread_manager(&config.sessions_dir_for(&agent_id).join("threads.json"));
-            send_agents_update(writer, config, active_id).await
-        }
+        Ok(()) => send_agents_update(writer, config, active_id).await,
         Err(e) => send_error(writer, format!("Could not delete agent: {}", e)).await,
     }
 }

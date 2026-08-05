@@ -16,12 +16,14 @@
 mod events;
 mod manager;
 mod model;
+mod registry;
 mod store;
 pub mod subtask;
 
 pub use events::*;
 pub use manager::*;
 pub use model::*;
+pub use registry::{SharedThreadMgr, forget_managers_under, manager_for};
 pub use store::{ThreadStore, ThreadSummary};
 pub use subtask::{
     SpawnOptions, SubtaskError, SubtaskHandle, SubtaskRegistry, SubtaskResult, spawn_background,
