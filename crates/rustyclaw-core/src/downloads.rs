@@ -60,6 +60,29 @@ pub fn next_connection_id() -> u64 {
     NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// The origin for a turn no client is watching — a trigger firing, a reply to
+/// a chat-app message, a subagent.
+///
+/// These run the same tools as a connected turn, so they can start a transfer,
+/// and an untagged one belongs to nobody: no panel lists it, `cancel` refuses
+/// it, and because the write loop only stops when the registry marks the
+/// transfer terminal, nothing can stop it for the life of the process. That is
+/// the same "invisible and uncancellable" failure this module rejects for
+/// connection-scoped ownership, so it is not one to leave open for the
+/// headless paths either.
+///
+/// The agent owns it, so it shows up in that agent's panel and can be stopped
+/// from there. `thread` is `None` because there is no conversation to announce
+/// into — the wake arm already skips those — and `connection` is 0, which
+/// [`next_connection_id`] never mints, so it cannot collide with a real one.
+pub fn headless_origin(agent: &str) -> DownloadOrigin {
+    DownloadOrigin {
+        agent: agent.to_string(),
+        connection: 0,
+        thread: None,
+    }
+}
+
 tokio::task_local! {
     static ORIGIN: DownloadOrigin;
 }
@@ -890,6 +913,53 @@ mod tests {
         // A second clear finds nothing, so nothing is announced and no panel
         // redraws for a no-op.
         assert!(m.clear_finished_for("researcher").is_empty());
+    }
+
+    /// A turn nobody is watching still has an owner.
+    ///
+    /// Triggers, messenger replies and subagents run the same tools as a
+    /// connected turn, so they can start a transfer. Untagged, it would be
+    /// listed by no panel and refused by `cancel` — and since the write loop
+    /// only stops when the registry marks the transfer terminal, refusing to
+    /// cancel means nothing can ever stop it. Visible and stoppable matters
+    /// more here than on a connected turn, not less: there is no user
+    /// watching it start.
+    #[test]
+    fn a_headless_turn_still_owns_what_it_starts() {
+        let origin = headless_origin("scheduler");
+        assert_eq!(
+            origin.thread, None,
+            "there is no conversation to announce into"
+        );
+        assert_ne!(
+            origin.connection,
+            next_connection_id(),
+            "0 is not an id any real connection is given"
+        );
+
+        let mut m = mgr();
+        let id = m
+            .register(
+                "https://e/nightly.tar".into(),
+                PathBuf::from("/tmp/nightly.tar"),
+                None,
+                Some(origin),
+            )
+            .id;
+
+        assert_eq!(
+            m.list_for("scheduler").len(),
+            1,
+            "it has to appear in the owning agent's panel"
+        );
+        assert!(
+            m.cancel(&id, "scheduler").is_some(),
+            "and be stoppable from there, or it runs to completion unstopped"
+        );
+        assert!(
+            m.list_for("someone-else").is_empty(),
+            "without becoming anyone else's"
+        );
     }
 
     #[test]

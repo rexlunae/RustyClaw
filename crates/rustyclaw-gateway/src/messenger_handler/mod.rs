@@ -302,6 +302,9 @@ struct Routing {
     workspace_dir: std::path::PathBuf,
     /// Thread the route named, for logging and the system prompt.
     thread: Option<(u64, String)>,
+    /// Agent whose tools these are, and so who owns anything they start.
+    /// A transfer needs an owner to be listable and stoppable at all.
+    agent_id: String,
 }
 
 /// Resolve where a message belongs.
@@ -319,6 +322,9 @@ fn resolve_routing(
         conv_key: format!("{messenger_type}:{}", channel.unwrap_or(&msg.sender)),
         workspace_dir: config.workspace_dir(),
         thread: None,
+        // Paired with the workspace above: an unrouted message runs in the
+        // installation-wide directory, which is the main agent's.
+        agent_id: rustyclaw_core::agents::MAIN_AGENT_ID.to_string(),
     };
 
     // By name; falling back to the first enabled account of this type only
@@ -396,6 +402,7 @@ fn resolve_routing(
             .clone()
             .unwrap_or_else(|| config.workspace_dir_for(route.agent())),
         thread: Some((route.thread_id, thread.label.clone())),
+        agent_id: route.agent().to_string(),
     }
 }
 
@@ -700,6 +707,9 @@ async fn process_incoming_message(
     // conversation the message joins and where its tools run.
     let routing = resolve_routing(config, account_name, messenger_type, &msg);
     let workspace_dir = routing.workspace_dir.clone();
+    // Owns anything the tools below start: a transfer with no owner is listed
+    // by no panel, refused by cancel, and therefore unstoppable.
+    let agent_id = routing.agent_id.clone();
     let conv_key = routing.conv_key.clone();
     if let Some((thread_id, label)) = &routing.thread {
         debug!(
@@ -898,7 +908,11 @@ async fn process_incoming_message(
                     crate::command_wrapper::start_command_task(task_mgr, &tc.arguments, &conv_key)
                         .await;
 
-                let result = tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir).await;
+                let result = rustyclaw_core::downloads::with_origin(
+                    rustyclaw_core::downloads::headless_origin(&agent_id),
+                    tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                )
+                .await;
 
                 match result {
                     Ok(output) => {
@@ -938,7 +952,12 @@ async fn process_incoming_message(
                     Err(err) => (err.to_string(), true),
                 }
             } else {
-                match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir).await {
+                match rustyclaw_core::downloads::with_origin(
+                    rustyclaw_core::downloads::headless_origin(&agent_id),
+                    tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                )
+                .await
+                {
                     Ok(text) => (text, false),
                     Err(err) => (err.to_string(), true),
                 }

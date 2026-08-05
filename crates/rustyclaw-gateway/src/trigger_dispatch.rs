@@ -39,16 +39,22 @@ pub async fn run_trigger_fire(
     copilot_session: Option<&crate::CopilotSession>,
 ) {
     let store = TriggerStore::open(&base_config.settings_dir);
-    let outcome = run_inner(
-        http,
-        base_config,
-        &fire,
-        model_ctx,
-        vault,
-        skill_mgr,
-        task_mgr,
-        model_registry,
-        copilot_session,
+    // Scoped around the whole run, not around a tool call: a transfer this
+    // turn starts must be listed and stoppable from the agent's panel, and
+    // without an origin it would be neither — and unstoppable with it.
+    let outcome = rustyclaw_core::downloads::with_origin(
+        rustyclaw_core::downloads::headless_origin(&fire.agent_id),
+        run_inner(
+            http,
+            base_config,
+            &fire,
+            model_ctx,
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            copilot_session,
+        ),
     )
     .await;
 
