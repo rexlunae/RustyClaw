@@ -64,6 +64,21 @@ fn thread_manager_for(threads_path: &std::path::Path) -> SharedThreadMgr {
         .clone()
 }
 
+/// Forget the cached manager for a store that no longer exists.
+///
+/// Keeping a manager for the life of the process is what makes it the single
+/// authority — but an agent's directory can be removed out from under it.
+/// Deleting an agent and creating another with the same id would otherwise
+/// hand the new one the old manager, and its first write would put the
+/// deleted agent's conversations back on disk. Reloading from disk on every
+/// connection used to make that impossible; caching is what introduces it.
+fn forget_thread_manager(threads_path: &std::path::Path) {
+    THREAD_MANAGERS
+        .lock()
+        .expect("thread manager registry poisoned")
+        .remove(threads_path);
+}
+
 /// Everything about the connection that is scoped to one agent. Swapped
 /// wholesale on agent switch.
 pub(crate) struct AgentSession {
@@ -271,7 +286,13 @@ pub(crate) async fn handle_agent_delete(
         .await;
     }
     match config.agent_registry().delete(&agent_id) {
-        Ok(()) => send_agents_update(writer, config, active_id).await,
+        Ok(()) => {
+            // The directory is gone, so the manager cached for it must go
+            // too — otherwise an agent recreated under this id inherits the
+            // deleted one's conversations and writes them back out.
+            forget_thread_manager(&config.sessions_dir_for(&agent_id).join("threads.json"));
+            send_agents_update(writer, config, active_id).await
+        }
         Err(e) => send_error(writer, format!("Could not delete agent: {}", e)).await,
     }
 }
