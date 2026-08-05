@@ -76,6 +76,29 @@ pub fn persist_threads(
     }
 }
 
+/// Persist threads, recording `foreground` as where this connection is.
+///
+/// The store keeps one foreground pointer and the connections each keep
+/// their own, so the two only agree if somebody says so before the write.
+/// Pair them here rather than at each call site: a `persist_threads` that
+/// forgets the pointer does not fail, it just writes a stale one, and the
+/// user finds out by reopening in the wrong conversation.
+///
+/// *Quietly* — no `Foregrounded` event. The other windows on this agent
+/// have their own foreground and are not to be dragged onto this one; the
+/// manager's copy is a note for the next reader, not news for the current
+/// ones. Their views are unaffected by the `is_foreground` flags this
+/// touches, because each rewrites them from its own pointer before render.
+pub async fn persist_threads_focused(
+    thread_mgr: &tokio::sync::Mutex<rustyclaw_core::threads::ThreadManager>,
+    path: &Path,
+    foreground: Option<rustyclaw_core::threads::ThreadId>,
+) {
+    let mut tm = thread_mgr.lock().await;
+    tm.set_foreground_quietly(foreground);
+    persist_threads(&mut tm, path);
+}
+
 /// Persist project state, logging rather than discarding a failure.
 pub fn persist_projects(
     project_mgr: &rustyclaw_core::projects::ProjectManager,
