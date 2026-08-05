@@ -4872,6 +4872,58 @@ mod tests {
         Ok(())
     }
 
+    /// One window backgrounding its thread must not blank the next one.
+    ///
+    /// The sentinel means "*I* want no conversation open" — it is one
+    /// client speaking for itself. But it empties the shared manager's
+    /// pointer, and a window opening afterwards used to adopt that verbatim:
+    /// no thread selected, empty transcript, and a sidebar that hides
+    /// message-less threads because none is marked foreground. Reloading the
+    /// store per connection hid this, since `ThreadStore::load` elects.
+    #[tokio::test]
+    async fn a_backgrounded_window_does_not_blank_the_next_one() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (first, second) = seed_two_threads(&cfg, "first", "second")?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let (incoming_a, outgoing_a, _a) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        await_frame(&outgoing_a, "the first window to settle", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+
+        // `thread_id: 0` — background whatever this window is in.
+        incoming_a.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadSwitch,
+            payload: ClientPayload::ThreadSwitch { thread_id: 0 },
+        }));
+        await_frame(&outgoing_a, "the background", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+
+        // A second window opens while the first is still connected and
+        // still holding nothing.
+        let (_incoming_b, outgoing_b, _b) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        let update = await_frame(&outgoing_b, "the second window's thread list", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+        })
+        .await;
+        let ServerPayload::ThreadsUpdate { foreground_id, .. } = update.payload else {
+            panic!("expected a ThreadsUpdate payload");
+        };
+        // Which of the two the rule picks is the election's business, and
+        // the seeded pair can tie on `last_activity`; what this is about is
+        // that *something* is open.
+        assert!(
+            foreground_id.is_some_and(|id| id == first.0 || id == second.0),
+            "a new window should open on a conversation, not a blank screen; \
+             got {foreground_id:?}"
+        );
+        Ok(())
+    }
+
     /// A switch survives a kill, not just a clean close.
     ///
     /// The teardown write is the polite path and a killed process never

@@ -77,20 +77,84 @@ pub fn store_in_use_under(dir: &Path) -> bool {
 /// path — two authorities for one store, which is the condition this module
 /// exists to remove.
 ///
-/// So the lock is held across all three. The filesystem work happens under
-/// it, which is not free, but a delete is rare and the alternative is a
-/// window that cannot be closed from outside.
+/// So the lock is held across all three — but only across the *cheap*
+/// three. `dir` is the whole agent folder, workspace included, and that can
+/// be a checkout with a build tree in it; a recursive delete of one is not
+/// the sort of work to do while every other window in the process waits to
+/// open an unrelated agent.
+///
+/// The rename is what makes the two separable. Renaming is O(1) and, once
+/// done, `dir` no longer names anything: a [`manager_for`] arriving a moment
+/// later loads a fresh empty store rather than reviving the doomed one, and
+/// there is still never a second manager for a path that has one. Only the
+/// bulk removal happens outside the lock, against a path nothing can reach
+/// by name.
+///
+/// The caller still waits for the delete, so a directory this returns `true`
+/// for really is gone. (The `remove_dir_all` remains a blocking call on
+/// whatever thread invoked it — one thread, no longer every one of them.)
 pub fn remove_store_dir_if_unused(dir: &Path) -> std::io::Result<bool> {
-    let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
-    managers.retain(|_, weak| weak.strong_count() > 0);
-    if managers.keys().any(|path| path.starts_with(dir)) {
-        return Ok(false);
-    }
-    std::fs::remove_dir_all(dir)?;
-    // Only dead entries can be under `dir` now, but they would otherwise
-    // linger until something happened to prune them.
-    managers.retain(|path, _| !path.starts_with(dir));
+    let doomed = {
+        let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
+        managers.retain(|_, weak| weak.strong_count() > 0);
+        if managers.keys().any(|path| path.starts_with(dir)) {
+            return Ok(false);
+        }
+        // Only dead entries can be under `dir` now, but they would otherwise
+        // linger until something happened to prune them.
+        managers.retain(|path, _| !path.starts_with(dir));
+        match rename_aside(dir) {
+            Ok(doomed) => doomed,
+            // Nothing to gain by reporting a rename failure as the outcome
+            // when the delete itself may well work: fall back to the
+            // in-place removal, lock and all. Rare path, correct either way.
+            Err(_) => {
+                std::fs::remove_dir_all(dir)?;
+                return Ok(true);
+            }
+        }
+    };
+    std::fs::remove_dir_all(&doomed)?;
     Ok(true)
+}
+
+/// Move `dir` out of the way, returning where it went.
+///
+/// The name keeps the result from being mistaken for an agent, which it
+/// otherwise would be: a manifest-bearing directory sitting in the agents
+/// root is exactly what `AgentRegistry::list` goes looking for. Two things
+/// independently rule it out — the leading dot, which `list` skips before it
+/// checks for a manifest, and the interior dots, which make the id fail
+/// `is_valid_agent_id` and so give `AgentRegistry::manifest` nothing to
+/// return. Either alone would do; a rename to some tidy `<name>_old` would
+/// satisfy neither.
+///
+/// The counter keeps concurrent deletes apart within a process, and the
+/// `exists` check steps over anything a previous run died holding.
+fn rename_aside(dir: &Path) -> std::io::Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    let invalid = |what| std::io::Error::new(std::io::ErrorKind::InvalidInput, what);
+    let parent = dir.parent().ok_or_else(|| invalid("no parent directory"))?;
+    let name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| invalid("directory has no usable name"))?;
+
+    for _ in 0..64 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".{name}.deleting.{n}"));
+        if candidate.exists() {
+            continue;
+        }
+        std::fs::rename(dir, &candidate)?;
+        return Ok(candidate);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no free scratch name for the directory being deleted",
+    ))
 }
 
 /// Forget every manager whose store lives under `dir`.
@@ -257,6 +321,85 @@ mod tests {
         );
         drop(running_turn);
         assert!(!store_in_use_under(&agent));
+        forget_managers_under(&dir);
+    }
+
+    /// A delete leaves the directory gone, not merely renamed.
+    ///
+    /// The removal moved out from under the registry lock, so the thing to
+    /// pin is that it still finishes before the call returns: a caller told
+    /// `true` has had the data deleted, and no scratch directory is left
+    /// behind in the agents root.
+    #[test]
+    fn a_completed_delete_leaves_nothing_behind() {
+        let dir = temp_dir("swept");
+        let agents_root = dir.join("agents");
+        let agent = agents_root.join("doomed");
+        std::fs::create_dir_all(agent.join("workspace/nested")).unwrap();
+        std::fs::write(agent.join("agent.toml"), "id = 'doomed'").unwrap();
+        std::fs::write(agent.join("workspace/nested/file.txt"), "payload").unwrap();
+
+        assert!(remove_store_dir_if_unused(&agent).unwrap());
+        assert!(!agent.exists(), "the agent directory should be gone");
+
+        let leftovers: Vec<_> = std::fs::read_dir(&agents_root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the scratch directory should not outlive the delete; found {leftovers:?}"
+        );
+        forget_managers_under(&dir);
+    }
+
+    /// The directory a delete moves aside cannot be read back as an agent.
+    ///
+    /// While the removal runs — and for good, if the process dies during it
+    /// — the scratch directory is a manifest-bearing folder sitting in the
+    /// agents root, which is the whole definition of an agent as far as
+    /// `AgentRegistry::list` is concerned save for one thing: the leading
+    /// dot. So the name comes from `rename_aside` itself rather than being
+    /// written out here, or the test would only be checking that `list`
+    /// skips dotfiles and not that this code produces one.
+    #[test]
+    fn the_directory_a_delete_moves_aside_is_not_an_agent() {
+        let dir = temp_dir("moved-aside");
+        let agents_root = dir.join("agents");
+        let agent = agents_root.join("doomed");
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join("agent.toml"), "name = \"Doomed\"").unwrap();
+
+        let registry = crate::agents::AgentRegistry::new(&dir, "Main");
+        let ids = || -> Vec<String> { registry.list().into_iter().map(|a| a.id).collect() };
+
+        // Establish that it really is listable to begin with. Without this
+        // the assertion after the rename holds for any reason at all — a
+        // manifest that failed to parse would satisfy it just as well.
+        assert!(
+            ids().iter().any(|id| id == "doomed"),
+            "the fixture should be a real agent before it is deleted; got {:?}",
+            ids()
+        );
+
+        let moved = rename_aside(&agent).unwrap();
+        assert!(
+            moved.join("agent.toml").exists(),
+            "it still looks like an agent from the inside"
+        );
+
+        let listed = ids();
+        assert_eq!(
+            listed,
+            vec![crate::agents::MAIN_AGENT_ID.to_string()],
+            "a directory mid-delete should not appear as an agent; found {listed:?}"
+        );
+
+        // And a leftover does not block a later delete of the same id.
+        std::fs::create_dir_all(&agent).unwrap();
+        assert!(remove_store_dir_if_unused(&agent).unwrap());
+        assert!(!agent.exists());
         forget_managers_under(&dir);
     }
 }
