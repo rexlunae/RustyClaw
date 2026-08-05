@@ -76,15 +76,11 @@ pub enum SessionStatus {
 /// [`Self::finished`]. This side reads those, so polling an adopted session
 /// looks the same from outside as polling a spawned one.
 pub struct AdoptedChild {
-    /// Bytes accumulated by the still-running stdout reader.
+    /// Bytes the still-running stdout reader has produced but this session
+    /// has not taken yet. Emptied on each poll — see `drain_adopted`.
     stdout: Arc<Mutex<Vec<u8>>>,
-    /// Bytes accumulated by the still-running stderr reader.
+    /// The same, for stderr.
     stderr: Arc<Mutex<Vec<u8>>>,
-    /// How much of each buffer this session has already copied out. The
-    /// readers only ever append, so a position is enough to find what is
-    /// new without draining what the buffers hold.
-    stdout_pos: usize,
-    stderr_pos: usize,
     /// Set by the supervisor once the child is over.
     finished: Arc<Mutex<Option<SessionStatus>>>,
     /// Bytes to write to the child's stdin, handled by the supervisor
@@ -108,8 +104,6 @@ impl AdoptedChild {
         Self {
             stdout,
             stderr,
-            stdout_pos: 0,
-            stderr_pos: 0,
             finished,
             stdin_tx,
             kill_tx: Some(kill_tx),
@@ -337,18 +331,23 @@ impl ExecSession {
         };
 
         let mut read_any = false;
-        for (buf, pos, own) in [
-            (&ad.stdout, &mut ad.stdout_pos, &mut *stdout_buffer),
-            (&ad.stderr, &mut ad.stderr_pos, &mut *stderr_buffer),
+        for (buf, own) in [
+            (&ad.stdout, &mut *stdout_buffer),
+            (&ad.stderr, &mut *stderr_buffer),
         ] {
-            let Ok(shared) = buf.lock() else { continue };
-            if shared.len() <= *pos {
+            let Ok(mut shared) = buf.lock() else { continue };
+            if shared.is_empty() {
                 continue;
             }
-            let fresh = &shared[*pos..];
-            combined_output.push_str(&String::from_utf8_lossy(fresh));
-            own.extend_from_slice(fresh);
-            *pos = shared.len();
+            // Taken, not copied from. The readers only append and this is
+            // the only place that consumes, so leaving the bytes behind
+            // would mean the session and the buffer each held a complete
+            // copy of everything the command had ever printed, growing for
+            // as long as it ran.
+            let fresh = std::mem::take(&mut *shared);
+            drop(shared);
+            combined_output.push_str(&String::from_utf8_lossy(&fresh));
+            own.extend_from_slice(&fresh);
             read_any = true;
         }
         read_any
@@ -823,6 +822,57 @@ mod tests {
     fn test_process_manager_creation() {
         let manager = ProcessManager::new();
         assert!(manager.list().is_empty());
+    }
+
+    /// Polling an adopted session takes the reader's bytes rather than
+    /// copying them.
+    ///
+    /// The readers keep running for the whole background lifetime, so their
+    /// buffer is the one thing here that grows for as long as the command
+    /// does. The session is its only consumer: anything left behind after a
+    /// poll is a second copy of the same output that nothing will free, and
+    /// for a dev server or a log tail that is unbounded.
+    #[test]
+    fn polling_an_adopted_session_drains_the_readers_buffer() {
+        let stdout: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let stderr: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let finished: Arc<Mutex<Option<SessionStatus>>> = Arc::default();
+        let (stdin_tx, _stdin_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (kill_tx, _kill_rx) = tokio::sync::oneshot::channel();
+
+        stdout.lock().unwrap().extend_from_slice(b"out-first ");
+        stderr.lock().unwrap().extend_from_slice(b"err-first");
+
+        let mut session = ExecSession::adopt(
+            "chatty".to_string(),
+            "/tmp".to_string(),
+            None,
+            Instant::now(),
+            AdoptedChild::new(stdout.clone(), stderr.clone(), finished, stdin_tx, kill_tx),
+            None,
+        );
+
+        assert!(session.try_read_output(), "there was output to collect");
+        assert!(session.full_output().contains("out-first"));
+        assert!(session.full_output().contains("err-first"));
+
+        assert!(
+            stdout.lock().unwrap().is_empty(),
+            "the stdout the session took should not still be buffered"
+        );
+        assert!(
+            stderr.lock().unwrap().is_empty(),
+            "the stderr the session took should not still be buffered"
+        );
+
+        // Draining must not cost the session anything that arrives later.
+        stdout.lock().unwrap().extend_from_slice(b" out-second");
+        assert!(session.try_read_output(), "later output still arrives");
+        assert!(session.full_output().contains("out-second"));
+        assert!(
+            session.full_output().contains("out-first"),
+            "what was drained earlier is still in the session's own record"
+        );
     }
 
     #[test]
