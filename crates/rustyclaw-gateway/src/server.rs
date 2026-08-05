@@ -573,7 +573,17 @@ pub(crate) async fn handle_connection(
         tokio::sync::mpsc::unbounded_channel::<rustyclaw_core::downloads::Download>();
     let watcher_wake_tx = wake_tx.clone();
     let watcher_panel_tx = panel_tx.clone();
-    let watcher_cancel = cancel.clone();
+    // Its own token, not the connection's. The connection's is a child of the
+    // gateway-wide shutdown token and is never cancelled when a single client
+    // leaves, and the watcher's other two exits — a closed panel or wake
+    // channel — are both behind `belongs_to(connection_id)`, which nothing can
+    // satisfy once this connection is gone. So without a token of its own the
+    // task parks on `recv()` for the life of the process, one per client that
+    // has ever connected, waking for every other connection's progress.
+    let watcher_cancel = cancel.child_token();
+    // A drop guard rather than a cancel at teardown: the loop below returns
+    // early on any write failure via `?`, and those paths would skip it.
+    let _watcher_guard = watcher_cancel.clone().drop_guard();
     tokio::spawn(async move {
         let mut events = rustyclaw_core::downloads::subscribe();
         loop {
@@ -1939,7 +1949,12 @@ pub(crate) async fn handle_connection(
                     turn_id,
                     Some(thread),
                     model_task_tx.clone(),
-                    false,
+                    // The notice is already in the thread's log — recorded a
+                    // few lines up, before the history was read back. This is
+                    // the resume shape, not the chat one: the turn replays a
+                    // transcript that already ends with its own last user
+                    // message, so it must not append it a second time.
+                    true,
                 );
                 active_tasks
                     .lock()
