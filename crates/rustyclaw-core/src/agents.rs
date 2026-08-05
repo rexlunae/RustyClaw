@@ -241,12 +241,11 @@ impl AgentRegistry {
         // recreates the directory this is about to remove — resurrecting the
         // conversations, and leaving a later agent under this id sharing a
         // store with a manager nobody can see. Better to say no.
-        let open = crate::threads::sessions_open_under(&dir);
-        if open > 0 {
+        if crate::threads::store_in_use_under(&dir) {
             bail!(
-                "Agent '{}' is open in {} other session(s) — close it there first",
-                id,
-                open
+                "Agent '{}' is still in use — close its windows and let any \
+                 running reply finish first",
+                id
             );
         }
         std::fs::remove_dir_all(&dir)?;
