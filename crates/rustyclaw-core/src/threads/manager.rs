@@ -371,9 +371,22 @@ impl ThreadManager {
     /// Keeps the per-thread `is_foreground` flags in step, so the state that
     /// reaches disk is self-consistent whichever way it was set.
     pub fn set_foreground_quietly(&mut self, id: Option<ThreadId>) {
-        if id.is_some_and(|id| !self.threads.contains_key(&id)) {
-            return;
-        }
+        // A holder can name a thread that has since been closed — from
+        // another window, or by the sweep — and refusing to write that is
+        // right, but *returning* leaves whatever is already there. Now that
+        // the manager is shared, that is liable to be some other window's
+        // thread: the note would read as "this holder was last in a
+        // conversation it never opened", which is worse than the dangling
+        // pointer it was avoiding. Falling back to the election keeps the
+        // value a statement about this holder, and it is the same answer the
+        // next reader reaches for anyway.
+        //
+        // `None` is left alone — a holder with nothing open is a real thing
+        // to record, and exactly what the background sentinel writes.
+        let id = match id {
+            Some(missing) if !self.threads.contains_key(&missing) => self.elect_foreground(),
+            given => given,
+        };
         for thread in self.threads.values_mut() {
             thread.is_foreground = Some(thread.id) == id;
         }
@@ -1133,6 +1146,43 @@ mod tests {
 
     /// A working-directory override survives a save/load round trip, and
     /// clearing it really clears it rather than leaving the old path behind.
+    /// Writing down a thread that has since been closed must not file the
+    /// note under another window's conversation.
+    ///
+    /// The manager is shared, so its pointer is whatever some holder last
+    /// wrote. A holder naming a closed thread used to be refused outright,
+    /// which left that foreign value in place to reach disk — and the next
+    /// window opened in a conversation nobody had been in.
+    #[test]
+    fn a_closed_foreground_is_not_recorded_as_another_holders_thread() {
+        let mut mgr = ThreadManager::new();
+        let mine = mgr.create_chat("mine");
+        let theirs = mgr.create_chat("theirs");
+        let _newest = mgr.create_chat("newest");
+
+        // Another window notes where *it* is.
+        mgr.set_foreground_quietly(Some(theirs));
+        // Mine is closed from a third window. `remove` re-elects only for
+        // the manager's own pointer, which is `theirs` — so this leaves the
+        // foreign value sitting there.
+        mgr.remove(mine);
+
+        let election = mgr.elect_foreground();
+        assert_ne!(
+            election,
+            Some(theirs),
+            "the election must differ from the foreign pointer, or this proves nothing"
+        );
+
+        // My connection tears down and writes down where it was.
+        mgr.set_foreground_quietly(Some(mine));
+        assert_eq!(
+            mgr.foreground_id(),
+            election,
+            "a closed thread should fall back to the election, not keep another window's"
+        );
+    }
+
     #[test]
     fn working_dir_override_round_trips_and_clears() {
         let dir = std::env::temp_dir().join(format!(
