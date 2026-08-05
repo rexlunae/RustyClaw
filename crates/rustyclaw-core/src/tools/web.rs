@@ -909,7 +909,7 @@ async fn start_download(
     to_file: &str,
     workspace_dir: &Path,
 ) -> ToolResult {
-    use crate::downloads::{DownloadStatus, announce, download_manager};
+    use crate::downloads::{DownloadStatus, announce, lock_registry};
 
     let total_bytes = response.content_length();
 
@@ -926,18 +926,15 @@ async fn start_download(
     // Taken before the streaming task below takes ownership of the path.
     let dest_display = canonical.display().to_string();
 
-    let download = download_manager()
-        .lock()
-        .map_err(|_| "download registry poisoned".to_string())?
-        .register(
-            url.to_string(),
-            canonical.clone(),
-            total_bytes,
-            // Captured here, in the turn's task. The streaming task below is
-            // spawned and would not inherit it — which is the whole reason
-            // the tag is taken at registration rather than at completion.
-            crate::downloads::current_origin(),
-        );
+    let download = lock_registry().register(
+        url.to_string(),
+        canonical.clone(),
+        total_bytes,
+        // Captured here, in the turn's task. The streaming task below is
+        // spawned and would not inherit it — which is the whole reason
+        // the tag is taken at registration rather than at completion.
+        crate::downloads::current_origin(),
+    );
     announce(download.clone());
 
     let id = download.id.clone();
@@ -975,13 +972,13 @@ async fn start_download(
                     // writing for minutes after the user stopped it. The
                     // announcement is what redraws a progress bar, and one
                     // per 8 KB chunk is a redraw storm.
-                    let updated = download_manager()
-                        .lock()
-                        .ok()
-                        .and_then(|mut m| m.advance(&id_for_task, received));
+                    let updated = lock_registry().advance(&id_for_task, received);
                     // `None` means it ended underneath us — cancelled from
                     // the panel — so stop writing rather than finish a file
                     // nobody wants. Its ending has already been announced.
+                    // It cannot also mean "the registry was unreadable":
+                    // `lock_registry` recovers a poisoned lock rather than
+                    // failing, precisely so this test keeps one meaning.
                     //
                     // Flushed on the way out even though nothing is waiting
                     // for the file: a `tokio::fs::File` dispatches writes to a
@@ -1012,10 +1009,11 @@ async fn start_download(
             (Err(e), _) => DownloadStatus::Failed { error: e },
         };
 
-        let finished = download_manager().lock().ok().and_then(|mut m| {
+        let finished = {
+            let mut m = lock_registry();
             m.advance(&id_for_task, received);
             m.finish(&id_for_task, status)
-        });
+        };
         // Absent means something else ended it first, and that ending has
         // already been announced. Announcing again would wake the agent
         // twice for one file.
