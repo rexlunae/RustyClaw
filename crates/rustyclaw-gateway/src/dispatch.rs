@@ -117,7 +117,14 @@ where
                         .find(|p| p.pid == pid)
                 });
                 let (pid, cpu, mem, state) = match proc {
-                    Some(p) => (Some(p.pid), p.cpu_percent, p.memory_bytes, p.state),
+                    Some(p) if p.alive => (Some(p.pid), p.cpu_percent, p.memory_bytes, p.state),
+                    // Registered but finished. Naming the pid here is what
+                    // produced a status line still offering to pause or kill
+                    // a process that had already gone — and the number may
+                    // by now belong to something else entirely. Report the
+                    // state without it; the elapsed time still ticks until
+                    // the tool itself returns.
+                    Some(p) => (None, None, None, p.state),
                     None => (None, None, None, None),
                 };
                 if let Err(e) = protocol::server::send_tool_status(
