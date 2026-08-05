@@ -4699,6 +4699,88 @@ mod tests {
         Ok(())
     }
 
+    /// Deleting an agent must take its conversations with it, even if
+    /// another agent is created under the same id afterwards.
+    ///
+    /// The shared manager is cached for the life of the process, so the
+    /// cache has to be told when the store it stands for is deleted.
+    /// Otherwise the recreated agent is handed the dead one's manager and
+    /// the first write puts those conversations back on disk — threads the
+    /// user deleted, reappearing. Reloading per connection made this
+    /// impossible; caching is what introduces it, so it is this change's to
+    /// close.
+    #[tokio::test]
+    async fn a_recreated_agent_does_not_inherit_the_deleted_ones_threads() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let create_agent = || {
+            Some(ClientFrame {
+                frame_type: ClientFrameType::AgentCreate,
+                payload: ClientPayload::AgentCreate {
+                    name: "Researcher".into(),
+                    agent_id: None,
+                    description: None,
+                },
+            })
+        };
+        let switch_agent = |id: &str| {
+            Some(ClientFrame {
+                frame_type: ClientFrameType::AgentSwitch,
+                payload: ClientPayload::AgentSwitch {
+                    agent_id: id.to_string(),
+                },
+            })
+        };
+
+        // Create the agent, switch to it, and give it a conversation.
+        let (incoming, outgoing, handle) = spawn_live_connection(
+            &cfg,
+            &model_ctx,
+            vec![create_agent(), switch_agent("researcher")],
+        );
+        await_frame(&outgoing, "the switch to researcher", |f| {
+            matches!(f.frame_type, ServerFrameType::AgentsUpdate)
+        })
+        .await;
+        incoming.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadCreate,
+            payload: ClientPayload::ThreadCreate {
+                label: "secret plans".to_string(),
+                project_id: 0,
+            },
+        }));
+        await_frame(&outgoing, "the thread to be created", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadCreated)
+        })
+        .await;
+
+        // Switch away so the agent can be deleted, then delete it.
+        incoming.lock().await.push_back(switch_agent("main"));
+        incoming.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::AgentDelete,
+            payload: ClientPayload::AgentDelete {
+                agent_id: "researcher".into(),
+            },
+        }));
+        // Recreate under the same id and switch back.
+        incoming.lock().await.push_back(create_agent());
+        incoming.lock().await.push_back(switch_agent("researcher"));
+        incoming.lock().await.push_back(None);
+        handle.await.expect("connection task panicked")?;
+
+        let threads_path = cfg.sessions_dir_for("researcher").join("threads.json");
+        let reloaded = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
+        let labels: Vec<String> = reloaded.list().iter().map(|t| t.label.clone()).collect();
+        assert!(
+            !labels.iter().any(|l| l == "secret plans"),
+            "a deleted agent's conversation came back with an agent of the \
+             same name: {labels:?}"
+        );
+        Ok(())
+    }
+
     /// The gateway returns the right messages, in the right threads, in
     /// the right order — whatever order the client asks in.
     ///
