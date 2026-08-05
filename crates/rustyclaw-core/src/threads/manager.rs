@@ -358,6 +358,28 @@ impl ThreadManager {
         true
     }
 
+    /// Record the foreground without announcing it.
+    ///
+    /// [`Self::switch_foreground`] emits [`ThreadEvent::Foregrounded`], and
+    /// every gateway connection subscribed to this manager turns that into a
+    /// `ThreadsUpdate` — which is how one window's switch used to drag the
+    /// others onto its thread. A holder that keeps its own foreground pointer
+    /// (see [`Self::elect_foreground`]) still wants the last one it had
+    /// written to disk, so a later session opens where this one left off.
+    /// That is a note for the *next* reader, not news for the current ones.
+    ///
+    /// Keeps the per-thread `is_foreground` flags in step, so the state that
+    /// reaches disk is self-consistent whichever way it was set.
+    pub fn set_foreground_quietly(&mut self, id: Option<ThreadId>) {
+        if id.is_some_and(|id| !self.threads.contains_key(&id)) {
+            return;
+        }
+        for thread in self.threads.values_mut() {
+            thread.is_foreground = Some(thread.id) == id;
+        }
+        self.foreground_id = id;
+    }
+
     /// Clear the foreground — no thread is active (background all).
     pub fn clear_foreground(&mut self) {
         if let Some(old_id) = self.foreground_id {
@@ -385,16 +407,30 @@ impl ThreadManager {
         {
             return Some(id);
         }
-        // Prefer interactive (chat) threads; among those, the one the user
-        // touched last. Fall back to any thread so a manager holding only
-        // sub-agent/task threads still has a foreground.
-        let elected = self
-            .threads
-            .values()
-            .max_by_key(|t| (t.kind.is_interactive(), t.last_activity))
-            .map(|t| t.id)?;
+        let elected = self.elect_foreground()?;
         self.switch_foreground(elected);
         Some(elected)
+    }
+
+    /// Which thread *would* be elected to hold the foreground, without
+    /// electing it.
+    ///
+    /// Prefer interactive (chat) threads; among those, the one the user
+    /// touched last. Fall back to any thread so a store holding only
+    /// sub-agent/task threads still yields a foreground.
+    ///
+    /// Split out of [`Self::ensure_foreground`] for holders that keep their
+    /// own foreground pointer. A gateway connection is one: its foreground is
+    /// a statement about what *that client* is looking at, but the manager
+    /// underneath is shared by every window open on the agent (see
+    /// [`crate::threads::manager_for`]), so electing through the manager
+    /// would move the other windows too. Such a holder still needs the
+    /// election *rule* — one place, so the two cannot drift apart.
+    pub fn elect_foreground(&self) -> Option<ThreadId> {
+        self.threads
+            .values()
+            .max_by_key(|t| (t.kind.is_interactive(), t.last_activity))
+            .map(|t| t.id)
     }
 
     /// Rename a thread.
@@ -410,13 +446,20 @@ impl ThreadManager {
 
     /// Find the best matching thread for a given message content.
     /// Returns the thread ID if a good match is found, None otherwise.
-    pub fn find_best_match(&self, content: &str) -> Option<ThreadId> {
+    ///
+    /// `current` is the thread the message was typed into — the point is to
+    /// find a *better* home for it, so its own is not a candidate. Named by
+    /// the caller rather than read from `is_foreground`: that flag is shared
+    /// by every window open on the agent, so reading it here would let
+    /// another window's thread be the one exempted while this window's stayed
+    /// eligible — the one thread the message must never be moved out of.
+    pub fn find_best_match(&self, content: &str, current: Option<ThreadId>) -> Option<ThreadId> {
         let content_lower = content.to_lowercase();
 
         // Look for threads where label or description matches content keywords
         for thread in self.threads.values() {
-            // Skip the current foreground
-            if thread.is_foreground {
+            // Skip the thread the message is already in
+            if Some(thread.id) == current {
                 continue;
             }
 
@@ -547,11 +590,17 @@ impl ThreadManager {
     // ── Context Building ────────────────────────────────────────────────────
 
     /// Build global context from all threads that share context.
-    pub fn build_global_context(&self) -> String {
+    ///
+    /// `exclude` is the thread this context is being built *for* — it is the
+    /// conversation, not background to itself. Named by the caller rather
+    /// than read from `is_foreground`, which is shared by every window open
+    /// on the agent: the thread to leave out is the one whose turn is being
+    /// assembled, and another window's foreground is not it.
+    pub fn build_global_context(&self, exclude: Option<ThreadId>) -> String {
         let mut context = String::new();
 
         for thread in self.threads.values() {
-            if !thread.share_context || thread.is_foreground {
+            if !thread.share_context || Some(thread.id) == exclude {
                 continue;
             }
 
@@ -979,22 +1028,25 @@ mod tests {
         mgr.switch_foreground(current);
 
         assert!(
-            mgr.build_global_context().is_empty(),
+            mgr.build_global_context(Some(current)).is_empty(),
             "an idle backgrounded conversation is not a background task"
         );
 
         // The same thread with a turn actually running is background work.
         mgr.begin_turn(old);
-        assert!(mgr.build_global_context().contains("Last night's dev task"));
+        assert!(
+            mgr.build_global_context(Some(current))
+                .contains("Last night's dev task")
+        );
         mgr.end_turn(old, true);
-        assert!(mgr.build_global_context().is_empty());
+        assert!(mgr.build_global_context(Some(current)).is_empty());
 
         // A running task thread appears; a completed one disappears.
         let task = mgr.create_task("Deploy", "ship it", None);
-        assert!(mgr.build_global_context().contains("Deploy"));
+        assert!(mgr.build_global_context(Some(current)).contains("Deploy"));
         mgr.complete(task, Some("shipped".into()), None);
         assert!(
-            mgr.build_global_context().is_empty(),
+            mgr.build_global_context(Some(current)).is_empty(),
             "completed work must not haunt later prompts"
         );
 
@@ -1003,7 +1055,7 @@ mod tests {
         mgr.add_message(busy, MessageRole::User, "é".repeat(200));
         mgr.begin_turn(busy);
         mgr.switch_foreground(current);
-        assert!(mgr.build_global_context().contains("Unicode"));
+        assert!(mgr.build_global_context(Some(current)).contains("Unicode"));
     }
 
     /// Compaction summarises the model's context; it must never destroy

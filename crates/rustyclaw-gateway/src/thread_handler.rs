@@ -59,6 +59,7 @@ pub(crate) async fn handle_thread_create(
     threads_path: &std::path::Path,
     project_id: rustyclaw_core::projects::ProjectId,
     label: String,
+    foreground: &crate::ForegroundCell,
 ) -> Result<()> {
     let (thread_id, label) = {
         let mut tm = thread_mgr.lock().await;
@@ -80,8 +81,12 @@ pub(crate) async fn handle_thread_create(
         },
     };
     send_frame(writer, &frame).await?;
+    // The client that asked for the thread is the one now in it. Set here
+    // rather than left to the manager: `create_chat_in` foregrounds on the
+    // shared manager, which every other window on this agent is watching.
+    crate::set_foreground(foreground, Some(thread_id));
     // Send updated thread list
-    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None, Some(thread_id)).await?;
     Ok(())
 }
 
@@ -119,6 +124,10 @@ pub(crate) async fn handle_thread_switch(
     shared_model_ctx: &SharedModelCtx,
     http: &reqwest::Client,
     thread_id: u64,
+    // This connection's focused thread. Not the manager's: that is shared
+    // with every other window on this agent, and a switch is one client
+    // saying where *it* is looking.
+    foreground: &crate::ForegroundCell,
     // Threads with a turn running. Their history is still being written, so
     // summarising one now would both miss the answer in flight and drop
     // messages that answer is building on.
@@ -132,8 +141,8 @@ pub(crate) async fn handle_thread_switch(
 
     // thread_id == 0 is a sentinel meaning "background current thread"
     if thread_id == 0 {
-        // Clear foreground — no thread is active
-        thread_mgr.lock().await.clear_foreground();
+        // Clear foreground — no thread is active for this client
+        crate::set_foreground(foreground, None);
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadSwitched,
             payload: ServerPayload::ThreadSwitched {
@@ -142,7 +151,7 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
-        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None, None).await?;
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadMessages,
             payload: ServerPayload::ThreadMessages {
@@ -223,7 +232,8 @@ pub(crate) async fn handle_thread_switch(
         let mut tm = thread_mgr.lock().await;
         let candidate = current_model_ctx
             .as_ref()
-            .and_then(|_| tm.foreground())
+            .and_then(|_| crate::foreground_of(foreground))
+            .and_then(|fg| tm.get(fg))
             .map(|t| t.task_id())
             .filter(|fg_id| *fg_id != target_id && !busy_threads.contains(fg_id))
             .and_then(|fg_id| tm.get(fg_id))
@@ -367,16 +377,17 @@ pub(crate) async fn handle_thread_switch(
         }
     }
 
-    // Perform the switch (use switch_foreground which returns bool,
-    // not switch_to which returns old foreground ID — the latter
-    // returns None when there is no previous foreground, e.g. after /thread bg)
+    // Perform the switch. Moving this connection's pointer, not the shared
+    // manager's: the target is re-checked here rather than trusted from the
+    // guard above, because the lock was released for the compaction round
+    // trip and a close could have landed in between.
     let switched = {
-        let mut tm = thread_mgr.lock().await;
+        let tm = thread_mgr.lock().await;
         // Get summary of thread being switched to
-        let context_summary = tm.get(target_id).and_then(|t| t.compact_summary.clone());
-        tm.switch_foreground(target_id).then_some(context_summary)
+        tm.get(target_id).map(|t| t.compact_summary.clone())
     };
     if let Some(context_summary) = switched {
+        crate::set_foreground(foreground, Some(target_id));
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadSwitched,
             payload: ServerPayload::ThreadSwitched {
@@ -386,7 +397,7 @@ pub(crate) async fn handle_thread_switch(
         };
         send_frame(writer, &frame).await?;
         // Send updated thread list
-        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None, Some(target_id)).await?;
         send_thread_messages_update_shared(writer, target_id, thread_mgr).await?;
         // Persist thread state (includes compaction summary)
         crate::helpers::persist_threads(&mut *thread_mgr.lock().await, threads_path);
@@ -410,11 +421,11 @@ pub(crate) async fn handle_thread_list(
     writer: &mut dyn transport::TransportWriter,
     thread_mgr: &crate::SharedThreadMgr,
     task_mgr: &SharedTaskManager,
+    foreground: Option<ThreadId>,
 ) -> Result<()> {
     debug!("Thread list request");
-    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
-    let fg_id = thread_mgr.lock().await.foreground().map(|t| t.id);
-    if let Some(id) = fg_id {
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None, foreground).await?;
+    if let Some(id) = foreground {
         send_thread_messages_update_shared(writer, id, thread_mgr).await?;
     }
     Ok(())
@@ -504,22 +515,30 @@ pub(crate) async fn handle_thread_close(
     task_mgr: &SharedTaskManager,
     threads_path: &std::path::Path,
     thread_id: u64,
+    foreground: &crate::ForegroundCell,
 ) -> Result<()> {
     debug!("Thread close request: {}", thread_id);
     let task_id = ThreadId(thread_id);
-    let foreground = {
+    {
         let mut tm = thread_mgr.lock().await;
         tm.remove(task_id);
         // Persist thread state
         crate::helpers::persist_threads(&mut tm, threads_path);
-        tm.foreground().map(|t| t.id)
-    };
+        // Closing the thread this client was looking at hands its foreground
+        // to another one. Elected per connection, and only when the closed
+        // thread was *this* client's: a window that closes a thread another
+        // window happens to be in must not move that window as well.
+        if crate::foreground_of(foreground) == Some(task_id) {
+            crate::set_foreground(foreground, tm.elect_foreground());
+        }
+    }
+    let now_foreground = crate::foreground_of(foreground);
     // Send updated thread list
-    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
-    // Closing the foreground thread hands the foreground to another one, so
-    // follow up with that thread's history — otherwise the client's sidebar
-    // highlight moves while its transcript still shows the closed thread.
-    if let Some(fg) = foreground {
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None, now_foreground).await?;
+    // …and follow up with the new foreground's history — otherwise the
+    // client's sidebar highlight moves while its transcript still shows the
+    // closed thread.
+    if let Some(fg) = now_foreground {
         send_thread_messages_update_shared(writer, fg, thread_mgr).await?;
     }
     Ok(())
@@ -543,6 +562,7 @@ pub(crate) async fn handle_thread_update(
     thread_id: u64,
     label: String,
     working_dir: Option<std::path::PathBuf>,
+    foreground: Option<ThreadId>,
 ) -> Result<()> {
     debug!(
         thread_id,
@@ -584,13 +604,16 @@ pub(crate) async fn handle_thread_update(
         crate::helpers::persist_threads(&mut tm, threads_path);
 
         // Editing the foreground thread's directory has to take effect right
-        // away, otherwise the next tool call still runs in the old one.
-        if tm.foreground_id() == Some(id) {
-            crate::project_handler::repoint_workspace(config, project_mgr, &tm);
+        // away, otherwise the next tool call still runs in the old one. Only
+        // when it is *this* connection's foreground: the workspace being
+        // repointed is this connection's, so another window's thread being
+        // edited is not its business.
+        if foreground == Some(id) {
+            crate::project_handler::repoint_workspace(config, project_mgr, &tm, foreground);
         }
     }
 
-    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None, foreground).await
 }
 
 /// Send an `Error` frame. Edits fail loudly: the client shows the reason
@@ -611,6 +634,7 @@ pub(crate) async fn handle_thread_rename(
     threads_path: &std::path::Path,
     thread_id: u64,
     new_label: String,
+    foreground: Option<ThreadId>,
 ) -> Result<()> {
     debug!("Thread rename request: {} -> {}", thread_id, new_label);
     let task_id = ThreadId(thread_id);
@@ -625,7 +649,7 @@ pub(crate) async fn handle_thread_rename(
     };
     if renamed {
         // Send updated thread list
-        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None, foreground).await?;
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
@@ -698,6 +722,11 @@ mod tests {
         (config, projects, Arc::new(Mutex::new(threads)), id)
     }
 
+    /// A connection's foreground pointer, standing in for one client's view.
+    fn fg_cell(id: Option<ThreadId>) -> crate::ForegroundCell {
+        Arc::new(std::sync::RwLock::new(id))
+    }
+
     #[tokio::test]
     async fn thread_update_sets_the_caption_and_override_and_repoints() {
         let tmp = tempfile::tempdir().unwrap();
@@ -717,6 +746,7 @@ mod tests {
             id.0,
             "  Renamed  ".to_string(),
             Some(override_dir.clone()),
+            Some(id),
         )
         .await
         .unwrap();
@@ -755,6 +785,7 @@ mod tests {
             id.0,
             "Renamed".to_string(),
             None,
+            Some(id),
         )
         .await
         .unwrap();
@@ -781,6 +812,7 @@ mod tests {
             id.0,
             "Keep".to_string(),
             Some(std::path::PathBuf::new()),
+            Some(id),
         )
         .await
         .unwrap();
@@ -815,6 +847,7 @@ mod tests {
             id.0,
             "Keep".to_string(),
             Some(bad),
+            Some(id),
         )
         .await
         .unwrap();
@@ -852,6 +885,7 @@ mod tests {
             9_999,
             "Ghost".to_string(),
             None,
+            Some(id),
         )
         .await
         .unwrap();
@@ -873,6 +907,7 @@ mod tests {
             id.0,
             "   ".to_string(),
             None,
+            Some(id),
         )
         .await
         .unwrap();
@@ -919,6 +954,7 @@ mod tests {
         let outgoing = manager.create_chat("outgoing");
         let target = manager.create_chat("target");
         manager.switch_foreground(outgoing);
+        let fg = fg_cell(Some(outgoing));
         // Enough history that the compaction path is taken.
         for i in 0..5 {
             manager.add_message(
@@ -948,6 +984,7 @@ mod tests {
                 &shared_model_ctx,
                 &reqwest::Client::new(),
                 target.0,
+                &fg,
                 &[],
             ),
         )
@@ -956,7 +993,7 @@ mod tests {
         .expect("the switch should succeed");
 
         assert!(writer.frames > 0, "the switch should have told the client");
-        assert_eq!(thread_mgr.lock().await.foreground_id(), Some(target));
+        assert_eq!(crate::foreground_of(&fg), Some(target));
     }
 
     /// A thread with a turn in flight is not summarised out from under it:
@@ -971,6 +1008,7 @@ mod tests {
         let busy = manager.create_chat("busy");
         let target = manager.create_chat("target");
         manager.switch_foreground(busy);
+        let fg = fg_cell(Some(busy));
         for i in 0..5 {
             manager.add_message(
                 busy,
@@ -992,6 +1030,7 @@ mod tests {
             &shared_model_ctx,
             &reqwest::Client::new(),
             target.0,
+            &fg,
             &[busy],
         )
         .await
@@ -1021,6 +1060,7 @@ mod tests {
         let mut manager = ThreadManager::new();
         let chat = manager.create_chat("chat");
         manager.switch_foreground(chat);
+        let fg = fg_cell(Some(chat));
         let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
         let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let shared_model_ctx: SharedModelCtx = Arc::new(tokio::sync::RwLock::new(None));
@@ -1043,6 +1083,7 @@ mod tests {
             &shared_model_ctx,
             &reqwest::Client::new(),
             pseudo_id,
+            &fg,
             &[],
         )
         .await
@@ -1050,7 +1091,7 @@ mod tests {
 
         assert!(writer.errors().is_empty(), "{:?}", writer.errors());
         assert_eq!(
-            thread_mgr.lock().await.foreground_id(),
+            crate::foreground_of(&fg),
             Some(chat),
             "a read-only preview must not move where the next message goes"
         );
@@ -1102,6 +1143,7 @@ mod tests {
         let mut manager = ThreadManager::new();
         let chat = manager.create_chat("chat");
         manager.switch_foreground(chat);
+        let fg = fg_cell(Some(chat));
         // Enough history that a real switch away would compact it.
         for i in 0..5 {
             manager.add_message(
@@ -1129,6 +1171,7 @@ mod tests {
             &shared_model_ctx,
             &reqwest::Client::new(),
             pseudo_id,
+            &fg,
             &[],
         )
         .await
