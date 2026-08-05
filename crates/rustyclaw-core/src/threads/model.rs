@@ -319,6 +319,19 @@ pub struct AgentThread {
     #[serde(skip)]
     pub open_turn: Option<SystemTime>,
 
+    /// Whether a summary of this thread is being produced right now.
+    ///
+    /// Eligibility for compaction is "long enough, and not summarised yet",
+    /// and both stay true for the whole provider round trip — so without
+    /// this, every switch away from the same thread while one call is in
+    /// flight starts another, each paid for and all but one discarded.
+    ///
+    /// Not persisted: a request in flight belongs to a process, and a marker
+    /// that survived a restart would be a thread that could never be
+    /// compacted again.
+    #[serde(skip)]
+    pub compacting: bool,
+
     /// Log records appended since the store last persisted this thread.
     /// Every mutation that belongs in the record pushes here; the store
     /// drains it with appends instead of rewriting history.
@@ -354,6 +367,7 @@ impl AgentThread {
             share_context: true,
             memory_flushed: false,
             open_turn: None,
+            compacting: false,
             pending_log: Vec::new(),
         }
     }
@@ -391,6 +405,7 @@ impl AgentThread {
             share_context: true,
             memory_flushed: false,
             open_turn: None,
+            compacting: false,
             pending_log: Vec::new(),
         }
     }
@@ -426,6 +441,7 @@ impl AgentThread {
             share_context: false,
             memory_flushed: false,
             open_turn: None,
+            compacting: false,
             pending_log: Vec::new(),
         }
     }
@@ -461,6 +477,7 @@ impl AgentThread {
             share_context: true,
             memory_flushed: false,
             open_turn: None,
+            compacting: false,
             pending_log: Vec::new(),
         }
     }
