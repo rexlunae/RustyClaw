@@ -89,11 +89,25 @@ impl AgentSession {
     ///
     /// Only meaningful as the *initial* value: from here the connection's
     /// pointer moves on its own and the manager's is not consulted again.
-    /// A stale persisted id — the thread was closed by another window — is
-    /// ignored, leaving the election to [`Self::ensure_foreground`].
+    ///
+    /// Falls back to the election when the stored pointer is missing or
+    /// names a thread that is gone. Both are reachable now that the manager
+    /// is shared and outlives any one connection: another window may have
+    /// closed the thread, or emptied the pointer outright by backgrounding
+    /// its own. Neither is an instruction to *this* window — a client
+    /// asking for no conversation is speaking for itself, and adopting that
+    /// verbatim opens the new window on a blank transcript with nothing
+    /// selected. Reloading the store per connection used to hide this,
+    /// because `ThreadStore::load` elects on the way out.
+    ///
+    /// The election only reads, so seeding one connection cannot move
+    /// another's view.
     pub async fn restore_foreground(&self) {
         let tm = self.thread_mgr.lock().await;
-        let restored = tm.foreground_id().filter(|id| tm.get(*id).is_some());
+        let restored = tm
+            .foreground_id()
+            .filter(|id| tm.get(*id).is_some())
+            .or_else(|| tm.elect_foreground());
         drop(tm);
         crate::set_foreground(&self.foreground, restored);
     }
