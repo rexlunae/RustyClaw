@@ -1890,7 +1890,17 @@ pub(crate) async fn handle_connection(
                         }
             }
             // Handle messages from spawned model tasks
-            tick = panel_rx.recv(), if panel_open => {
+            // Both of these carry the same `drain_deadline` guard as the
+            // frame arm above, and for a sharper reason than "the client has
+            // left". A wake taken while draining consumes the process-wide
+            // announcement claim, which is never released, and then has its
+            // freshly spawned turn aborted by the drain arm moments later —
+            // so every other window on this agent is told the transfer is
+            // already someone else's to announce, and it is announced
+            // nowhere. Leaving it unclaimed lets a connection that can still
+            // serve it do so. The panel arm is the milder case: frames
+            // written to a client that has gone away.
+            tick = panel_rx.recv(), if panel_open && drain_deadline.is_none() => {
                 match tick {
                     Some(()) => {
                         download_handler::send_downloads_update(&mut *writer, &agent_session.agent_id).await?;
@@ -1905,7 +1915,7 @@ pub(crate) async fn handle_connection(
                     }
                 }
             }
-            finished = wake_rx.recv(), if wakes_open => {
+            finished = wake_rx.recv(), if wakes_open && drain_deadline.is_none() => {
                 let Some(download) = finished else {
                     // Unreachable: this scope holds a sender for the life of
                     // the loop. Disabling the arm rather than looping is the
