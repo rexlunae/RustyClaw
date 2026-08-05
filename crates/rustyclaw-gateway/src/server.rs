@@ -2329,7 +2329,12 @@ pub(crate) async fn handle_connection(
                 if let Ok(event) = thread_event {
                     // Only send updates for events that affect sidebar display
                     if event.triggers_sidebar_update() {
-                        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
+                        // Healed first: one of these events is another
+                        // window closing the thread this one is in, and
+                        // reporting the pointer as it stands would tell the
+                        // client it has nothing open.
+                        let foreground = agent_session.heal_foreground().await;
+                        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, foreground).await?;
                     }
                 }
             }
@@ -4869,6 +4874,75 @@ mod tests {
         in_b.lock().await.push_back(None);
         handle_a.await.expect("A panicked")?;
         handle_b.await.expect("B panicked")?;
+        Ok(())
+    }
+
+    /// Closing a thread from one window must not strand another window in it.
+    ///
+    /// The pointer is per-connection but the threads are not: whoever issues
+    /// the close re-elects for itself, and before this every *other* window
+    /// kept an id that no longer resolved — reported downstream as nothing
+    /// selected, with no history and no row highlighted, recoverable only by
+    /// clicking. The manager's own `remove` used to elect for everyone.
+    #[tokio::test]
+    async fn closing_a_thread_does_not_strand_the_window_watching_it() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (first, second) = seed_two_threads(&cfg, "first", "second")?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let (incoming_a, outgoing_a, _a) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        let (incoming_b, outgoing_b, _b) = spawn_live_connection(&cfg, &model_ctx, vec![]);
+        for out in [&outgoing_a, &outgoing_b] {
+            await_frame(out, "the connection to settle", |f| {
+                matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+            })
+            .await;
+        }
+
+        // B parks itself in `second`; A stays in `first`.
+        incoming_b.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadSwitch,
+            payload: ClientPayload::ThreadSwitch {
+                thread_id: second.0,
+            },
+        }));
+        await_frame(&outgoing_b, "B's switch", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+        // `await_frame` searches everything received so far, and B's opening
+        // update already names a thread that is not `second` — exactly what
+        // the assertion below looks for. Clear, so the frame it finds can
+        // only be one sent after the close.
+        outgoing_b.lock().await.clear();
+
+        // A closes the thread B is sitting in.
+        incoming_a.lock().await.push_back(Some(ClientFrame {
+            frame_type: ClientFrameType::ThreadClose,
+            payload: ClientPayload::ThreadClose {
+                thread_id: second.0,
+            },
+        }));
+
+        // B's next sidebar refresh should put it somewhere real.
+        let update = await_frame(&outgoing_b, "B's update after the close", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadsUpdate)
+                && !matches!(
+                    &f.payload,
+                    ServerPayload::ThreadsUpdate { foreground_id, .. }
+                        if *foreground_id == Some(second.0)
+                )
+        })
+        .await;
+        let ServerPayload::ThreadsUpdate { foreground_id, .. } = update.payload else {
+            panic!("expected a ThreadsUpdate payload");
+        };
+        assert_eq!(
+            foreground_id,
+            Some(first.0),
+            "the surviving thread should be elected for the window left behind"
+        );
         Ok(())
     }
 

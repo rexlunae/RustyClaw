@@ -44,15 +44,37 @@ static MANAGERS: LazyLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<ThreadM
 
 /// The manager for the store at `threads_path`, loading it from disk when
 /// nobody currently holds one and returning the live one when somebody does.
+///
+/// The load happens *outside* the registry lock. `ThreadStore::load` reads
+/// every thread's log into memory — see the note on [`MANAGERS`] — and this
+/// runs on every connect and every agent switch, so holding the lock across
+/// it would make one agent's history the thing every other window waits on
+/// to open an unrelated agent. Same hazard the deletion path is shaped
+/// around, and it deserves the same treatment.
+///
+/// The empty manager goes into the map *locked*, which is what keeps the
+/// one-manager-per-path invariant while the lock is not held: a concurrent
+/// caller finds this entry rather than building a second authority for the
+/// path, and gets an `Arc` it cannot read until the load finishes and the
+/// guard drops. It waits on the manager's own mutex — the one it would have
+/// to take to use it regardless — instead of on the registry.
 pub fn manager_for(threads_path: &Path) -> SharedThreadMgr {
-    let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
-    if let Some(live) = managers.get(threads_path).and_then(Weak::upgrade) {
-        return live;
-    }
-    let manager = Arc::new(tokio::sync::Mutex::new(ThreadStore::load_or_migrate(
-        threads_path,
-    )));
-    managers.insert(threads_path.to_path_buf(), Arc::downgrade(&manager));
+    let (manager, mut loading) = {
+        let mut managers = MANAGERS.lock().expect("thread manager registry poisoned");
+        if let Some(live) = managers.get(threads_path).and_then(Weak::upgrade) {
+            return live;
+        }
+        let manager = Arc::new(tokio::sync::Mutex::new(ThreadManager::new()));
+        // Fresh and unpublished, so this cannot fail — and `try_lock_owned`
+        // rather than `blocking_lock`, which panics inside a runtime.
+        let loading = manager
+            .clone()
+            .try_lock_owned()
+            .expect("a just-created manager cannot already be locked");
+        managers.insert(threads_path.to_path_buf(), Arc::downgrade(&manager));
+        (manager, loading)
+    };
+    *loading = ThreadStore::load_or_migrate(threads_path);
     manager
 }
 
@@ -445,6 +467,41 @@ mod tests {
         std::fs::create_dir_all(&agent).unwrap();
         assert!(remove_store_dir_if_unused(&agent).unwrap());
         assert!(!agent.exists());
+        forget_managers_under(&dir);
+    }
+
+    /// What is on disk is in the manager by the time a caller can read it.
+    ///
+    /// The load moved out from under the registry lock, so the entry now
+    /// goes into the map *before* it holds anything — empty, and locked
+    /// until the read finishes. That is what keeps a concurrent caller from
+    /// building a second authority for the path, but it is also a way to
+    /// hand out a manager that never got filled: forget the write-back and
+    /// every agent silently opens with no history.
+    #[tokio::test]
+    async fn a_store_is_loaded_before_the_manager_is_readable() {
+        let dir = temp_dir("loaded");
+        let path = dir.join("threads.json");
+
+        // Put something on disk, then let go of everything holding it.
+        {
+            let seeded = manager_for(&path);
+            let mut tm = seeded.lock().await;
+            tm.create_chat("written before the reload");
+            ThreadStore::at_legacy_path(&path).persist(&mut tm).unwrap();
+        }
+        forget_managers_under(&dir);
+
+        let reopened = manager_for(&path);
+        assert!(
+            reopened
+                .lock()
+                .await
+                .list()
+                .iter()
+                .any(|t| t.label == "written before the reload"),
+            "a manager handed out before its load finished would look empty"
+        );
         forget_managers_under(&dir);
     }
 
