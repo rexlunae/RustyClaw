@@ -226,7 +226,14 @@ pub async fn exec_execute_command_streaming(
                                 command,
                                 &cwd,
                                 started_at,
-                                timeout_secs,
+                                // The budget as the loop has it, not the
+                                // one the arguments asked for: pausing
+                                // pushes `timeout_deadline` out, and the
+                                // session measures from `started_at`, so
+                                // handing over the raw timeout would bill
+                                // the command for the time it spent
+                                // stopped.
+                                timeout_deadline.saturating_duration_since(started_at),
                                 out_buf,
                                 err_buf,
                             )
@@ -331,7 +338,7 @@ async fn adopt_child(
     command: &str,
     cwd: &Path,
     started_at: Instant,
-    timeout_secs: u64,
+    timeout: Duration,
     out_buf: Arc<Mutex<Vec<u8>>>,
     err_buf: Arc<Mutex<Vec<u8>>>,
 ) -> ToolResult {
@@ -381,7 +388,7 @@ async fn adopt_child(
     let session = crate::process_manager::ExecSession::adopt(
         command.to_string(),
         cwd.to_string_lossy().into_owned(),
-        Some(Duration::from_secs(timeout_secs)),
+        Some(timeout),
         started_at,
         crate::process_manager::AdoptedChild::new(out_buf, err_buf, finished, stdin_tx, kill_tx),
         None,
