@@ -52,10 +52,18 @@ pub struct ExecProcessStatus {
     /// Resident memory in bytes.
     pub memory_bytes: Option<u64>,
     /// Human-readable scheduler state ("running", "sleeping",
-    /// "blocked on I/O", "paused", …).
+    /// "blocked on I/O", "paused", "exited", …).
     pub state: Option<String>,
     /// Whether the user paused this process via [`control`].
     pub paused: bool,
+    /// Whether the process still exists as something worth waiting on.
+    ///
+    /// False once it has gone from the process table, and false for a
+    /// zombie — which has already exited and is only waiting to be
+    /// reaped. An entry outlives its process by however long the exec
+    /// loop takes to notice, so a registered pid is not by itself
+    /// evidence that anything is still running.
+    pub alive: bool,
 }
 
 // ── Registry internals ──────────────────────────────────────────────────────
@@ -152,8 +160,8 @@ pub fn sample_active() -> Vec<ExecProcessStatus> {
     for (&pid, entry) in entries.iter() {
         let proc_info = system.process(Pid::from_u32(pid));
         let first_sample = sampled_once.insert(pid, ()).is_none();
-        let (cpu_percent, memory_bytes, state) = match proc_info {
-            Some(p) => (
+        let (cpu_percent, memory_bytes, state, alive) = match proc_info {
+            Some(p) if !is_finished(p.status()) => (
                 // The first refresh has no prior measurement to diff
                 // against, so its CPU value is meaningless — hide it.
                 (!first_sample).then(|| p.cpu_usage()),
@@ -163,8 +171,13 @@ pub fn sample_active() -> Vec<ExecProcessStatus> {
                 } else {
                     state_label(p.status()).to_string()
                 }),
+                true,
             ),
-            None => (None, None, None),
+            // Gone from the process table, or still in it only as a
+            // zombie. Report it as finished rather than as a process with
+            // no stats: the difference is what stops a caller presenting
+            // a dead pid as something it is still waiting on.
+            _ => (None, None, Some("exited".to_string()), false),
         };
         out.push(ExecProcessStatus {
             pid,
@@ -174,6 +187,7 @@ pub fn sample_active() -> Vec<ExecProcessStatus> {
             memory_bytes,
             state,
             paused: entry.paused,
+            alive,
         });
     }
     out.sort_by_key(|s| s.elapsed_ms);
@@ -188,11 +202,26 @@ pub fn control(pid: u32, action: ProcessControlAction) -> Result<String, String>
     // Verify registration first — this is the safety boundary that stops
     // a client frame from signalling arbitrary host processes.
     {
-        let reg = registry()
+        let mut reg = registry()
             .lock()
             .map_err(|_| "process registry lock poisoned".to_string())?;
         if !reg.entries.contains_key(&pid) {
             return Err(format!("no controllable process with pid {pid}"));
+        }
+        // Registration alone is not enough. An entry outlives its process
+        // by however long the exec loop takes to reap it, and the OS is
+        // free to hand that number straight to something else — so
+        // signalling on the strength of a stale entry can hit a process
+        // this registry never admitted. Confirm it is still there.
+        let target = Pid::from_u32(pid);
+        reg.system
+            .refresh_processes(ProcessesToUpdate::Some(&[target]), true);
+        let live = reg
+            .system
+            .process(target)
+            .is_some_and(|p| !is_finished(p.status()));
+        if !live {
+            return Err(format!("process {pid} has already exited"));
         }
     }
 
@@ -269,6 +298,19 @@ fn send_signal(pid: u32, action: ProcessControlAction) -> Result<(), String> {
     }
 }
 
+/// Whether a scheduler state means the process is over.
+///
+/// A zombie has already exited — it lingers in the table only until its
+/// parent reaps it — so it counts as finished even though it is still
+/// listed, which is what makes "present in the process table" the wrong
+/// liveness test on its own.
+fn is_finished(status: sysinfo::ProcessStatus) -> bool {
+    matches!(
+        status,
+        sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+    )
+}
+
 /// Map a sysinfo scheduler state to a short human-readable label.
 fn state_label(status: sysinfo::ProcessStatus) -> &'static str {
     use sysinfo::ProcessStatus::*;
@@ -310,6 +352,70 @@ mod tests {
     fn control_rejects_unregistered_pid() {
         let err = control(u32::MAX - 13, ProcessControlAction::Kill).unwrap_err();
         assert!(err.contains("no controllable process"), "got: {err}");
+    }
+
+    /// A registered pid whose process is gone reports as finished rather
+    /// than as a live process with no stats.
+    ///
+    /// The entry outlives the process — the exec loop removes it only when
+    /// its wait ends — so this is the window in which a status line could
+    /// go on naming a pid that no longer existed.
+    #[test]
+    fn a_registered_pid_that_is_gone_reads_as_exited() {
+        let dead = u32::MAX - 21;
+        let _guard = register(dead, "already over");
+
+        let sampled = sample_active()
+            .into_iter()
+            .find(|s| s.pid == dead)
+            .expect("a registered pid is still sampled");
+        assert!(!sampled.alive, "a pid with no process is not alive");
+        assert_eq!(sampled.state.as_deref(), Some("exited"));
+        assert_eq!(sampled.cpu_percent, None);
+        assert_eq!(sampled.memory_bytes, None);
+    }
+
+    /// Being registered is not a licence to signal: the process must still
+    /// be there. Otherwise a stale entry lets a control frame land on
+    /// whatever the OS has since given the number to.
+    #[test]
+    fn control_refuses_a_registered_pid_that_has_exited() {
+        let dead = u32::MAX - 23;
+        let _guard = register(dead, "already over");
+
+        let err = control(dead, ProcessControlAction::Kill).unwrap_err();
+        assert!(err.contains("already exited"), "got: {err}");
+    }
+
+    /// A child that exited but has not been reaped is a zombie: still in
+    /// the process table, but nothing to wait on.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreaped_child_reads_as_exited_not_running() {
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn true");
+        let pid = child.id();
+        let _guard = register(pid, "true");
+
+        // Deliberately not reaped yet, so the kernel keeps the entry as a
+        // zombie — the state this is about.
+        let mut sampled = None;
+        for _ in 0..200 {
+            let s = sample_active()
+                .into_iter()
+                .find(|s| s.pid == pid)
+                .expect("registered pid is sampled");
+            if !s.alive {
+                sampled = Some(s);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let sampled = sampled.expect("an exited child should stop reading as alive");
+        assert_eq!(sampled.state.as_deref(), Some("exited"));
+
+        let _ = child.wait();
     }
 
     #[cfg(unix)]
