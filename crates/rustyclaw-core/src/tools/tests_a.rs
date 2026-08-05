@@ -936,3 +936,47 @@ fn deleting_an_agent_forgets_its_cached_thread_manager() {
     crate::threads::forget_managers_under(&root);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// An agent another window still has open cannot be deleted out from under
+/// it.
+///
+/// Evicting the cached manager does not reach a connection already holding
+/// it, and that connection's next write recreates the directory — bringing
+/// the conversations back, and leaving an agent later created under the same
+/// id sharing a store with a manager nobody can see. Refusing is the only
+/// answer that keeps one authority per store.
+#[test]
+fn an_agent_open_elsewhere_cannot_be_deleted() {
+    use crate::agents::AgentRegistry;
+
+    let root = std::env::temp_dir().join(format!("rustyclaw-agent-busy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let registry = AgentRegistry::new(&root, "Main");
+    registry
+        .create(Some("busy"), "Busy", None, None, None)
+        .expect("create");
+    let threads_path = registry.agent_dir("busy").join("sessions/threads.json");
+
+    // A window has it open.
+    let session = crate::threads::open_session(&threads_path);
+    let refused = registry.delete("busy");
+    assert!(
+        refused.is_err(),
+        "deleting a store another session is using must be refused"
+    );
+    assert!(
+        registry.agent_dir("busy").exists(),
+        "and must not have removed anything"
+    );
+
+    // The window closes; now it can go.
+    drop(session);
+    registry
+        .delete("busy")
+        .expect("delete once nobody has it open");
+    assert!(!registry.agent_dir("busy").exists());
+
+    let _ = std::fs::remove_dir_all(&root);
+}

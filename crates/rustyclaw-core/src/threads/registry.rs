@@ -64,6 +64,61 @@ pub fn forget_managers_under(dir: &Path) {
         .retain(|path, _| !path.starts_with(dir));
 }
 
+/// Counts of live sessions per store, so a store nobody is using can be
+/// told apart from one that is open somewhere.
+static OPEN_SESSIONS: LazyLock<Mutex<HashMap<PathBuf, usize>>> = LazyLock::new(Default::default);
+
+/// A live user of the store at `threads_path`. Releases on drop.
+///
+/// Evicting a manager removes it from the table, but anything already
+/// holding the `Arc` keeps writing through it — and `ThreadStore::persist`
+/// recreates the store directory, so a deleted agent's conversations come
+/// back and a later agent under the same id loads a *second* manager beside
+/// the stale one. Exactly the two-authorities condition this module exists
+/// to prevent, reached from the other direction.
+///
+/// Counting live users is what lets deletion refuse instead.
+pub struct StoreSession {
+    path: PathBuf,
+}
+
+impl Drop for StoreSession {
+    fn drop(&mut self) {
+        let mut open = OPEN_SESSIONS
+            .lock()
+            .expect("thread manager registry poisoned");
+        if let Some(count) = open.get_mut(&self.path) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                open.remove(&self.path);
+            }
+        }
+    }
+}
+
+/// Register a live user of a store for as long as the returned value lives.
+pub fn open_session(threads_path: &Path) -> StoreSession {
+    *OPEN_SESSIONS
+        .lock()
+        .expect("thread manager registry poisoned")
+        .entry(threads_path.to_path_buf())
+        .or_insert(0) += 1;
+    StoreSession {
+        path: threads_path.to_path_buf(),
+    }
+}
+
+/// How many live users any store under `dir` has.
+pub fn sessions_open_under(dir: &Path) -> usize {
+    OPEN_SESSIONS
+        .lock()
+        .expect("thread manager registry poisoned")
+        .iter()
+        .filter(|(path, _)| path.starts_with(dir))
+        .map(|(_, count)| *count)
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
