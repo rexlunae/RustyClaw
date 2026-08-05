@@ -208,6 +208,12 @@ pub(crate) async fn handle_thread_switch(
     // summarising. The prompt is taken under the lock and the summary
     // applied under it again; the provider round trip in between holds
     // nothing.
+    //
+    // Read before the decision below, not after it: with no model there is
+    // nothing to summarise *with*, and a thread marked as being summarised
+    // by a request that was never made stays marked for the life of the
+    // process — never eligible again, its context growing without bound.
+    let current_model_ctx = shared_model_ctx.read().await.clone();
     let to_compact = {
         // A write lock, because deciding to compact and marking the thread
         // as being compacted have to be one step. Between them is exactly
@@ -215,8 +221,9 @@ pub(crate) async fn handle_thread_switch(
         // again, and that window is open for a whole provider round trip
         // now that the call no longer blocks the loop.
         let mut tm = thread_mgr.lock().await;
-        let candidate = tm
-            .foreground()
+        let candidate = current_model_ctx
+            .as_ref()
+            .and_then(|_| tm.foreground())
             .map(|t| t.task_id())
             .filter(|fg_id| *fg_id != target_id && !busy_threads.contains(fg_id))
             .and_then(|fg_id| tm.get(fg_id))
@@ -247,11 +254,15 @@ pub(crate) async fn handle_thread_switch(
         candidate
     };
     if let Some((fg_id, label, prompt, covered)) = to_compact {
-        // Notify client about compaction
-        send_info(writer, &format!("Compacting thread '{}'...", label)).await?;
-
-        let current_model_ctx = shared_model_ctx.read().await.clone();
+        // `to_compact` is only ever `Some` when there is a model, so this
+        // cannot fail — but taking it by `if let` keeps the claim above and
+        // the spawn below with nothing fallible in between. That is what
+        // makes "marked as being summarised" and "a task exists to clear
+        // the mark" the same condition rather than two that have to be kept
+        // in step by hand.
         if let Some(ctx) = current_model_ctx {
+            // Kept for the notice below, since the task takes the original.
+            let notice_label = label.clone();
             let summary_req = ProviderRequest {
                 messages: vec![ChatMessage::text("user", &prompt)],
                 model: ctx.model.clone(),
@@ -348,6 +359,11 @@ pub(crate) async fn handle_thread_switch(
                 // out, and if it is lost the only cost is summarising again
                 // on the next switch.
             });
+            // Sent after the spawn rather than before it: this is the one
+            // fallible step here, and a failed write must not be able to
+            // leave a thread marked as being summarised with nothing running
+            // to unmark it.
+            send_info(writer, &format!("Compacting thread '{}'...", notice_label)).await?;
         }
     }
 

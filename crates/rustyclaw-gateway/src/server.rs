@@ -4531,6 +4531,93 @@ mod tests {
         Ok(())
     }
 
+    /// A switch with no model configured must leave the thread compactable.
+    ///
+    /// The in-flight marker is only cleared by the task that sets it, so
+    /// marking a thread without starting one strands it: `!compacting` is
+    /// false for the rest of the process and the thread is never summarised
+    /// again, its context growing without bound. Nothing surfaces that — it
+    /// looks exactly like a thread that has not needed compacting yet.
+    ///
+    /// One connection throughout, with the model appearing partway. The
+    /// marker is not persisted, so a second connection would load a clean
+    /// manager and could not see the leak at all — which is how the first
+    /// version of this test passed while the bug was present.
+    #[tokio::test]
+    async fn a_switch_without_a_model_leaves_the_thread_compactable() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (stale, _busy, target) = seed_for_compaction(&cfg)?;
+
+        let switch_to = |id: u64| {
+            Some(ClientFrame {
+                frame_type: ClientFrameType::ThreadSwitch,
+                payload: ClientPayload::ThreadSwitch { thread_id: id },
+            })
+        };
+
+        // Switch away from `stale` with nothing to summarise with.
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+        let (incoming, outgoing, handle) =
+            spawn_live_connection(&cfg, &model_ctx, vec![switch_to(target.0)]);
+        await_frame(&outgoing, "the first switch to be acknowledged", |f| {
+            matches!(f.frame_type, ServerFrameType::ThreadSwitched)
+        })
+        .await;
+        assert!(
+            !outgoing.lock().await.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::Info { message } if message.contains("Compacting")
+            )),
+            "nothing should be announced as compacting when there is no model"
+        );
+
+        // A model is configured on the same connection.
+        let gate = ModelGate::new();
+        let addr = spawn_mock_model_gated(Some(gate.clone())).await;
+        *model_ctx.write().await = Some(Arc::new(rustyclaw_core::gateway::ModelContext {
+            provider: "openai".to_string(),
+            model: "mock-model".to_string(),
+            base_url: format!("http://{addr}/v1"),
+            api_key: Some("test-key".to_string()),
+        }));
+
+        // Back to `stale`, then away from it again — the switch that should
+        // now summarise it.
+        incoming.lock().await.push_back(switch_to(stale.0));
+        incoming.lock().await.push_back(switch_to(target.0));
+        let served = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let n = outgoing
+                    .lock()
+                    .await
+                    .iter()
+                    .filter(|f| matches!(f.frame_type, ServerFrameType::ThreadSwitched))
+                    .count();
+                if n >= 3 {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(served.is_ok(), "all three switches should have been served");
+
+        assert!(
+            outgoing.lock().await.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::Info { message } if message.contains("Compacting")
+            )),
+            "the thread was left permanently ineligible by a switch that \
+             never started a summary"
+        );
+
+        gate.release();
+        incoming.lock().await.push_back(None);
+        handle.await.expect("connection task panicked")?;
+        Ok(())
+    }
+
     /// The gateway returns the right messages, in the right threads, in
     /// the right order — whatever order the client asks in.
     ///
