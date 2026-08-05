@@ -64,6 +64,26 @@ fn claim_download_announcement(id: &str) -> bool {
         .insert(id.to_string())
 }
 
+/// Drop claims for transfers the registry has forgotten.
+///
+/// Without this the set is the one thing here that grows for the life of the
+/// process: `RESUMED_TURNS` is bounded by how many threads exist, but a claim
+/// is minted per transfer and every download ever started would keep its
+/// entry. Ids are unique for the life of the process, so a dropped claim can
+/// never be re-minted by a later transfer — forgetting is safe exactly
+/// because the id will not come back.
+pub(crate) fn forget_download_announcements(ids: &[rustyclaw_core::downloads::DownloadId]) {
+    if ids.is_empty() {
+        return;
+    }
+    let mut claimed = ANNOUNCED_DOWNLOADS
+        .lock()
+        .expect("download announcement registry poisoned");
+    for id in ids {
+        claimed.remove(id);
+    }
+}
+
 /// Everything a spawned turn takes from its connection — owned clones, so
 /// the turn outlives the borrow of the loop that started it. Built per
 /// spawn by the Chat arm and by the resume path, which is the point:
@@ -649,6 +669,22 @@ pub(crate) async fn handle_connection(
                     // there is no agent left to wake.
                     if watcher_wake_tx.send(download).is_err() {
                         break;
+                    }
+                }
+                Ok(rustyclaw_core::downloads::DownloadEvent::Removed { agent, .. }) => {
+                    // A panel tick and nothing else. The agent is never woken
+                    // for a removal: forgetting a finished transfer is the
+                    // user tidying their list, not news worth a turn.
+                    let mine = {
+                        let current = watcher_agent.read().expect("current agent cell poisoned");
+                        *current == agent
+                    };
+                    if !mine {
+                        continue;
+                    }
+                    match watcher_panel_tx.try_send(()) {
+                        Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(())) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => break,
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
@@ -2358,6 +2394,32 @@ mod tests {
         // A different transfer is unaffected — the claim is per transfer, not
         // a latch that silences everything after the first.
         assert!(claim_download_announcement("dl-claim-test-another"));
+    }
+
+    /// The claim set is the one structure here that would otherwise grow for
+    /// the life of the process — `RESUMED_TURNS` is bounded by how many
+    /// threads exist, but a claim is minted per transfer. Clearing a finished
+    /// transfer is the moment its id stops meaning anything, so it is the
+    /// moment to let go of the claim.
+    #[test]
+    fn forgetting_a_transfer_releases_its_claim() {
+        let id = "dl-forget-test".to_string();
+        assert!(claim_download_announcement(&id));
+        assert!(!claim_download_announcement(&id), "claimed while it exists");
+
+        forget_download_announcements(std::slice::from_ref(&id));
+
+        // Re-claimable only because ids are never reused: this proves the
+        // entry is gone rather than that a later transfer could steal it.
+        assert!(
+            claim_download_announcement(&id),
+            "a forgotten transfer should leave nothing behind"
+        );
+        forget_download_announcements(std::slice::from_ref(&id));
+
+        // An empty list is a no-op rather than a lock round-trip, since a
+        // clear that removed nothing is the common case.
+        forget_download_announcements(&[]);
     }
 
     /// A finished transfer parked under `thread`, for the deferral tests.

@@ -227,6 +227,16 @@ pub enum DownloadEvent {
     /// record rather than a delta: consumers redraw or narrate from it, and
     /// neither wants to reassemble state from fragments.
     Changed(Download),
+    /// Transfers were dropped from the registry.
+    ///
+    /// A separate variant because a removal is not a state a `Download` can
+    /// be in — it no longer exists — and because the two consumers must treat
+    /// it differently: a panel re-reads the list, and the agent is told
+    /// nothing. Forgetting a finished transfer is bookkeeping, not news.
+    ///
+    /// Carries the agent so a panel can tell whether it was its list that
+    /// changed, and the ids so anything keyed by them can drop its entries.
+    Removed { agent: String, ids: Vec<DownloadId> },
 }
 
 /// The set of transfers this process knows about.
@@ -341,12 +351,23 @@ impl DownloadManager {
     }
 
     /// Drop `agent`'s finished transfers, leaving its running ones — and every
-    /// other agent's — alone. Returns how many went.
-    pub fn clear_finished_for(&mut self, agent: &str) -> usize {
-        let before = self.downloads.len();
-        self.downloads
-            .retain(|_, d| !d.status.is_terminal() || !d.belongs_to(agent));
-        before - self.downloads.len()
+    /// other agent's — alone.
+    ///
+    /// Returns the ids that went, rather than a count. Two things outside this
+    /// module are keyed by transfer id and have no other way to learn an id
+    /// stopped meaning anything — the panels on *other* connections, which
+    /// would otherwise keep rendering entries the registry has forgotten, and
+    /// the gateway's announcement claim set, which would otherwise grow for
+    /// the life of the process.
+    pub fn clear_finished_for(&mut self, agent: &str) -> Vec<DownloadId> {
+        let going: Vec<DownloadId> = self
+            .downloads
+            .values()
+            .filter(|d| d.status.is_terminal() && d.belongs_to(agent))
+            .map(|d| d.id.clone())
+            .collect();
+        self.downloads.retain(|id, _| !going.contains(id));
+        going
     }
 
     /// Drop finished transfers, leaving running ones alone. Returns how many
@@ -414,6 +435,21 @@ fn events() -> &'static tokio::sync::broadcast::Sender<DownloadEvent> {
 /// headless run has nobody watching and the registry is still the record.
 pub fn announce(download: Download) {
     let _ = events().send(DownloadEvent::Changed(download));
+}
+
+/// Tell every watcher that `agent`'s transfers named by `ids` are gone.
+///
+/// Separate from [`announce`] because the audiences differ: this reaches the
+/// panels and must not reach the agent. Sending nothing when nothing went
+/// keeps a no-op clear from redrawing every window.
+pub fn announce_removed(agent: &str, ids: Vec<DownloadId>) {
+    if ids.is_empty() {
+        return;
+    }
+    let _ = events().send(DownloadEvent::Removed {
+        agent: agent.to_string(),
+        ids,
+    });
 }
 
 fn now_ms() -> u64 {
@@ -748,7 +784,7 @@ mod tests {
             m.cancel(&id, "researcher").is_some(),
             "a reconnected client must still be able to stop its own transfer"
         );
-        assert_eq!(m.clear_finished_for("researcher"), 1);
+        assert_eq!(m.clear_finished_for("researcher"), vec![id.clone()]);
         assert!(m.get(&id).is_none());
     }
 
@@ -799,6 +835,61 @@ mod tests {
         );
         // Leave the global registry as it was found.
         lock_registry().clear_finished();
+    }
+
+    /// Clearing has to tell the ids that went, not just how many.
+    ///
+    /// Two things outside this module are keyed by transfer id and have no
+    /// other way to learn an id has stopped meaning anything: the panels on
+    /// other connections, which would keep rendering entries the registry has
+    /// forgotten, and the gateway's announcement claim set, which would
+    /// otherwise keep an entry per download for the life of the process.
+    #[test]
+    fn clearing_names_the_transfers_that_went() {
+        let mut m = mgr();
+        let origin = Some(DownloadOrigin {
+            agent: "researcher".into(),
+            connection: 1,
+            thread: Some(2),
+        });
+        let done = m
+            .register(
+                "https://e/a".into(),
+                PathBuf::from("/tmp/a"),
+                None,
+                origin.clone(),
+            )
+            .id;
+        let running = m
+            .register("https://e/b".into(), PathBuf::from("/tmp/b"), None, origin)
+            .id;
+        // Another agent's finished transfer, which must not be swept up.
+        let theirs = m
+            .register(
+                "https://e/c".into(),
+                PathBuf::from("/tmp/c"),
+                None,
+                Some(DownloadOrigin {
+                    agent: "archivist".into(),
+                    connection: 2,
+                    thread: Some(1),
+                }),
+            )
+            .id;
+        m.finish(&done, DownloadStatus::Complete);
+        m.finish(&theirs, DownloadStatus::Complete);
+
+        assert_eq!(m.clear_finished_for("researcher"), vec![done.clone()]);
+        assert!(m.get(&done).is_none());
+        assert!(m.get(&running).is_some(), "a running transfer stays");
+        assert!(
+            m.get(&theirs).is_some(),
+            "another agent's finished transfer is not this agent's to clear"
+        );
+
+        // A second clear finds nothing, so nothing is announced and no panel
+        // redraws for a no-op.
+        assert!(m.clear_finished_for("researcher").is_empty());
     }
 
     #[test]
