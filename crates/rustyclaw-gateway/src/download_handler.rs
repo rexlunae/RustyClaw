@@ -17,25 +17,25 @@ use rustyclaw_core::downloads::download_manager;
 use rustyclaw_core::gateway::protocol::server::send_frame;
 use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, protocol, transport};
 
-/// Snapshot this connection's transfers for the wire.
+/// Snapshot this agent's transfers for the wire.
 ///
 /// The lock is taken and released here rather than held across the send: the
 /// registry is a `std::sync::Mutex` shared with every running transfer's write
 /// loop, and holding it across a network write would stall them all.
-fn snapshot(connection_id: u64) -> Result<Vec<protocol::DownloadInfoDto>> {
+fn snapshot(agent: &str) -> Result<Vec<protocol::DownloadInfoDto>> {
     let downloads = download_manager()
         .lock()
         .map_err(|_| anyhow::anyhow!("the download registry is poisoned"))?
-        .list_for(connection_id);
+        .list_for(agent);
     Ok(downloads.into_iter().map(Into::into).collect())
 }
 
 /// Send the current transfer list to the client.
 pub(crate) async fn send_downloads_update(
     writer: &mut dyn transport::TransportWriter,
-    connection_id: u64,
+    agent: &str,
 ) -> Result<()> {
-    let downloads = snapshot(connection_id)?;
+    let downloads = snapshot(agent)?;
     debug!(count = downloads.len(), "Sending DownloadsUpdate");
     send_frame(
         writer,
@@ -55,17 +55,17 @@ pub(crate) async fn send_downloads_update(
 /// the user can find or delete it, rather than being removed on their behalf.
 pub(crate) async fn handle_download_cancel(
     writer: &mut dyn transport::TransportWriter,
-    connection_id: u64,
+    agent: &str,
     id: &str,
 ) -> Result<()> {
     let cancelled = download_manager()
         .lock()
         .map_err(|_| anyhow::anyhow!("the download registry is poisoned"))?
-        .cancel(id, connection_id);
+        .cancel(id, agent);
     match cancelled {
         Some(download) => {
             // Announced so every watcher agrees on the ending — including
-            // this connection's own wake channel, which is how the agent
+            // this agent's own wake channel, which is how the agent
             // learns the file it was waiting for is not coming.
             rustyclaw_core::downloads::announce(download);
             // The announcement drives the panel update, so nothing is sent
@@ -74,31 +74,31 @@ pub(crate) async fn handle_download_cancel(
             Ok(())
         }
         None => {
-            // Unknown id, already finished, or another connection's. Saying
+            // Unknown id, already finished, or another agent's. Saying
             // which would confirm the existence of a transfer this client was
             // never shown, so it gets one answer for all three — and a fresh
             // list, which is the honest correction if its panel was stale.
             debug!(
                 id,
-                "Ignoring a cancel for a transfer this connection cannot stop"
+                "Ignoring a cancel for a transfer this agent cannot stop"
             );
-            send_downloads_update(writer, connection_id).await
+            send_downloads_update(writer, agent).await
         }
     }
 }
 
-/// Handle a `DownloadsClearFinished`: forget this connection's finished
-/// transfers. Running ones stay, here and on every other connection.
+/// Handle a `DownloadsClearFinished`: forget this agent's finished transfers.
+/// Running ones stay, here and for every other agent.
 pub(crate) async fn handle_downloads_clear_finished(
     writer: &mut dyn transport::TransportWriter,
-    connection_id: u64,
+    agent: &str,
 ) -> Result<()> {
     let cleared = download_manager()
         .lock()
         .map_err(|_| anyhow::anyhow!("the download registry is poisoned"))?
-        .clear_finished_for(connection_id);
+        .clear_finished_for(agent);
     debug!(cleared, "Cleared finished transfers");
     // Nothing announces a removal — the broadcast carries changes to
     // transfers, and these no longer exist — so the update is sent directly.
-    send_downloads_update(writer, connection_id).await
+    send_downloads_update(writer, agent).await
 }
