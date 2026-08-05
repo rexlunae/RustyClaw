@@ -362,6 +362,9 @@ pub(super) fn apply_gw_event(
         mut load_status,
         mut show_system_info,
         show_services_dialog: _,
+        mut show_downloads_dialog,
+        mut downloads_data,
+        mut downloads_cursor,
         mut services_data,
         mut show_engines_dialog,
         mut engines_data,
@@ -1711,6 +1714,21 @@ pub(super) fn apply_gw_event(
                 model_label
             )));
             messages.set(m);
+        }
+        // ── Downloads panel ──────────────────────────────────────────────
+        GwEvent::ShowDownloads => {
+            show_downloads_dialog.set(true);
+        }
+        GwEvent::DownloadsUpdate { downloads } => {
+            // Clamped rather than reset: a transfer finishing while the panel
+            // is open shortens the list, and a cursor left past the end would
+            // highlight nothing until the user moved it.
+            downloads_cursor.set(
+                downloads_cursor
+                    .get()
+                    .min(downloads.len().saturating_sub(1)),
+            );
+            downloads_data.set(Some(rustyclaw_view::DownloadsData { downloads }));
         }
         // ── Gateway panels (cron / memory / MCP / channels) ──────────────
         GwEvent::ShowCron => {

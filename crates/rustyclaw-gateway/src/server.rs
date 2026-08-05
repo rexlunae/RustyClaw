@@ -27,7 +27,7 @@ use crate::thread_updates::{
 use crate::{
     SharedConfig, SharedCopilotSession, SharedModelCtx, SharedModelRegistry, SharedObserver,
     SharedSkillManager, SharedTaskManager, SharedVault, TOTP_LOCKOUT_SECS, ToolCancelFlag, admin,
-    auth, concurrent, plugin_handler, project_handler, providers, thread_handler,
+    auth, concurrent, download_handler, plugin_handler, project_handler, providers, thread_handler,
 };
 
 /// When this gateway process started. A turn marker in the log older than
@@ -554,11 +554,17 @@ pub(crate) async fn handle_connection(
     // ── Download completions ───────────────────────────────────────
     //
     // The download registry is process-global and its broadcast carries every
-    // transfer's every change. This connection wants a narrow slice of that:
-    // the transfers *its* agent started, and only where they ended. The
-    // watcher does the filtering so the loop below never sees progress ticks
-    // for another connection's file.
+    // transfer's every change. This connection wants two different slices of
+    // that, and the watcher below splits them: the panel redraws on every
+    // change to a transfer this connection started, while the agent is woken
+    // only where one ended. Waking on progress would start a turn every
+    // quarter-megabyte; redrawing only on completion would be a progress bar
+    // that never moves.
     let connection_id = rustyclaw_core::downloads::next_connection_id();
+    // The panel side. A tick rather than the changed record: the update sends
+    // the whole list, so what arrived matters less than that something did,
+    // and a burst of progress on several transfers collapses into one redraw.
+    let (panel_tx, mut panel_rx) = tokio::sync::mpsc::channel::<()>(1);
     // Unbounded on purpose. The loop is the only receiver, and the loop sends
     // into it too — deferring a completion that arrived while the thread was
     // busy, then re-offering it once the turn ends. A bounded channel would
@@ -566,6 +572,7 @@ pub(crate) async fn handle_connection(
     let (wake_tx, mut wake_rx) =
         tokio::sync::mpsc::unbounded_channel::<rustyclaw_core::downloads::Download>();
     let watcher_wake_tx = wake_tx.clone();
+    let watcher_panel_tx = panel_tx.clone();
     let watcher_cancel = cancel.clone();
     tokio::spawn(async move {
         let mut events = rustyclaw_core::downloads::subscribe();
@@ -576,7 +583,20 @@ pub(crate) async fn handle_connection(
             };
             match event {
                 Ok(rustyclaw_core::downloads::DownloadEvent::Changed(download)) => {
-                    if !download.wakes(connection_id) {
+                    if !download.belongs_to(connection_id) {
+                        continue;
+                    }
+                    let terminal = download.status.is_terminal();
+                    // A full channel already holds an unread tick, and the
+                    // update it triggers will read the list *after* this
+                    // change — so dropping this one loses nothing. That is
+                    // what keeps a fast transfer from queueing a redraw per
+                    // chunk behind a slow writer.
+                    match watcher_panel_tx.try_send(()) {
+                        Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(())) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => break,
+                    }
+                    if !terminal {
                         continue;
                     }
                     // The receiver is the connection loop; once it is gone
@@ -611,9 +631,10 @@ pub(crate) async fn handle_connection(
         rustyclaw_core::threads::ThreadId,
         Vec<rustyclaw_core::downloads::Download>,
     > = std::collections::HashMap::new();
-    // Cleared only if the wake channel is somehow closed, which this scope's
-    // own sender makes impossible; see the arm that reads it.
+    // Cleared only if the corresponding channel is somehow closed, which this
+    // scope's own senders make impossible; see the arms that read them.
     let mut wakes_open = true;
+    let mut panel_open = true;
 
     // Counter for turn ids, so a turn's completion cannot retire the turn
     // that replaced it.
@@ -1386,6 +1407,15 @@ pub(crate) async fn handle_connection(
                                     );
                                 }
                             }
+                            ClientPayload::DownloadsRequest => {
+                                download_handler::send_downloads_update(&mut *writer, connection_id).await?;
+                            }
+                            ClientPayload::DownloadCancel { id } => {
+                                download_handler::handle_download_cancel(&mut *writer, connection_id, &id).await?;
+                            }
+                            ClientPayload::DownloadsClearFinished => {
+                                download_handler::handle_downloads_clear_finished(&mut *writer, connection_id).await?;
+                            }
                             ClientPayload::TasksRequest { session } => {
                                 thread_handler::handle_tasks_request(&mut *writer, &task_mgr, session).await?;
                             }
@@ -1796,6 +1826,21 @@ pub(crate) async fn handle_connection(
                         }
             }
             // Handle messages from spawned model tasks
+            tick = panel_rx.recv(), if panel_open => {
+                match tick {
+                    Some(()) => {
+                        download_handler::send_downloads_update(&mut *writer, connection_id).await?;
+                    }
+                    None => {
+                        // Unreachable for the same reason as the wake channel
+                        // below, and disabled for the same reason: `recv` on a
+                        // closed channel returns instantly, so an arm that
+                        // ignored this would spin a core.
+                        error!("Download event channel closed; the downloads panel will not update");
+                        panel_open = false;
+                    }
+                }
+            }
             finished = wake_rx.recv(), if wakes_open => {
                 let Some(download) = finished else {
                     // Unreachable: this scope holds a sender for the life of

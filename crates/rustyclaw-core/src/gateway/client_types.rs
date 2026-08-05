@@ -15,10 +15,10 @@ use crate::user_prompt_types::UserPrompt;
 pub use crate::gateway::protocol::SecretEntryDto;
 pub use crate::gateway::protocol::ServiceInfoDto;
 pub use crate::gateway::protocol::frames::{
-    ChannelStatusDto, CronJobDto, EngineInfoDto, EngineModelDto, HistoryEntryDto, McpServerDto,
-    MemoryEntryDto, MessengerAccountDto, MessengerProfileDto, ModelUsageDto, PluginActionDto,
-    PluginInfoDto, RoutableThreadDto, SessionUsageDto, ThreadRouteDto, ToolConfigDto,
-    UsageTotalsDto, WorkspaceEntryDto,
+    ChannelStatusDto, CronJobDto, DownloadInfoDto, EngineInfoDto, EngineModelDto, HistoryEntryDto,
+    McpServerDto, MemoryEntryDto, MessengerAccountDto, MessengerProfileDto, ModelUsageDto,
+    PluginActionDto, PluginInfoDto, RoutableThreadDto, SessionUsageDto, ThreadRouteDto,
+    ToolConfigDto, UsageTotalsDto, WorkspaceEntryDto,
 };
 
 // ── Events (server → client) ────────────────────────────────────────────────
@@ -445,6 +445,10 @@ pub enum GatewayEvent {
         lines: Vec<String>,
         message: Option<String>,
     },
+
+    /// The transfers this connection started, newest first. Arrives whenever
+    /// one changes, not only when asked for.
+    DownloadsUpdate { downloads: Vec<DownloadInfoDto> },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -878,6 +882,18 @@ pub enum GatewayCommand {
         messenger: String,
         channel: Option<String>,
     },
+
+    /// Ask for the current transfers.
+    #[serde(rename = "downloads_request")]
+    DownloadsRequest,
+
+    /// Stop a running transfer.
+    #[serde(rename = "download_cancel")]
+    DownloadCancel { id: String },
+
+    /// Forget the transfers that have finished.
+    #[serde(rename = "downloads_clear_finished")]
+    DownloadsClearFinished,
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -1201,6 +1217,18 @@ impl GatewayCommand {
             GatewayCommand::Reload => ClientFrame {
                 frame_type: ClientFrameType::Reload,
                 payload: ClientPayload::Reload,
+            },
+            GatewayCommand::DownloadsRequest => ClientFrame {
+                frame_type: ClientFrameType::DownloadsRequest,
+                payload: ClientPayload::DownloadsRequest,
+            },
+            GatewayCommand::DownloadCancel { id } => ClientFrame {
+                frame_type: ClientFrameType::DownloadCancel,
+                payload: ClientPayload::DownloadCancel { id },
+            },
+            GatewayCommand::DownloadsClearFinished => ClientFrame {
+                frame_type: ClientFrameType::DownloadsClearFinished,
+                payload: ClientPayload::DownloadsClearFinished,
             },
             GatewayCommand::TasksRequest { session } => ClientFrame {
                 frame_type: ClientFrameType::TasksRequest,
@@ -1559,6 +1587,9 @@ impl GatewayEvent {
                     .collect(),
                 foreground_id,
             }),
+            ServerPayload::DownloadsUpdate { downloads } => {
+                Some(GatewayEvent::DownloadsUpdate { downloads })
+            }
             ServerPayload::PluginsUpdate { plugins } => {
                 Some(GatewayEvent::PluginsUpdate { plugins })
             }

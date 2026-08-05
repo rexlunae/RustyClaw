@@ -59,6 +59,12 @@ pub enum CommandAction {
     EngineModelSearch(String),
     /// List the GGUF files (quantizations) inside a Hugging Face repo
     EngineModelFiles(String),
+    /// Show the downloads panel (fetches the transfer list)
+    ShowDownloads,
+    /// Stop a running transfer, by id
+    DownloadCancel(String),
+    /// Forget the transfers that have finished
+    DownloadsClearFinished,
     /// Show the cron panel (fetches the job list)
     ShowCron,
     /// Cron job action: (job id, action)
@@ -174,6 +180,9 @@ fn base_command_names() -> Vec<String> {
         "uv".into(),
         "npm".into(),
         "quit".into(),
+        "downloads".into(),
+        "downloads cancel".into(),
+        "downloads clear".into(),
         "cron".into(),
         "cron add".into(),
         "cron pause".into(),
@@ -414,6 +423,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /tools                   - Edit tool permissions (allow/deny/ask/skill)"
                     .to_string(),
                 "  /secrets                 - Open the secrets vault".to_string(),
+                "  /downloads               - File transfers panel (cancel/clear)".to_string(),
                 "  /cron                    - Scheduled jobs panel (add/pause/resume/rm)"
                     .to_string(),
                 "  /memory [query]          - Browse MEMORY.md (add/rm/history)".to_string(),
@@ -620,6 +630,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             },
         },
         "engines" | "engine" => handle_engines_subcommand(&parts[1..]),
+        "downloads" | "dl" => handle_downloads_subcommand(&parts[1..]),
         "cron" => handle_cron_subcommand(&parts[1..]),
         "memory" | "mem" => handle_memory_subcommand(&parts[1..]),
         "mcp" => handle_mcp_subcommand(&parts[1..]),
@@ -962,6 +973,38 @@ fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
                 usage()
             }
         }
+    }
+}
+
+fn handle_downloads_subcommand(args: &[&str]) -> CommandResponse {
+    let usage = || CommandResponse {
+        messages: vec![
+            "Usage: /downloads — open the downloads panel".to_string(),
+            "       /downloads cancel <id>".to_string(),
+            "       /downloads clear — forget the finished transfers".to_string(),
+        ],
+        action: CommandAction::None,
+    };
+
+    match args.first() {
+        // Opening is also how the panel is refreshed: the gateway pushes
+        // every later change unprompted, so this is the only request it makes.
+        None | Some(&"list") => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowDownloads,
+        },
+        Some(&"cancel" | &"stop") => match args.get(1) {
+            Some(id) => CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::DownloadCancel((*id).to_string()),
+            },
+            None => usage(),
+        },
+        Some(&"clear") => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::DownloadsClearFinished,
+        },
+        _ => usage(),
     }
 }
 

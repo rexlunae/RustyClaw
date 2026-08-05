@@ -434,6 +434,13 @@ pub struct AppState {
     /// Whether the system info panel is visible.
     pub show_system_info: bool,
 
+    /// Whether the downloads panel is visible.
+    pub show_downloads_dialog: bool,
+
+    /// File transfers the agent started. Pushed by the gateway whenever one
+    /// changes, so this is a live view rather than something the panel polls.
+    pub downloads: rustyclaw_view::DownloadsData,
+
     /// Whether the services dialog is visible.
     pub show_services_dialog: bool,
 
@@ -586,6 +593,8 @@ impl Default for AppState {
             host_info: None,
             load_status: None,
             show_system_info: false,
+            show_downloads_dialog: false,
+            downloads: Default::default(),
             show_services_dialog: false,
             services_data: None,
             show_engines_dialog: false,

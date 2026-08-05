@@ -346,6 +346,13 @@ pub(crate) enum GwEvent {
     ClearMessages,
     /// Show gateway connection status (/gateway).
     ShowGatewayStatus,
+    /// Open the downloads panel (data arrives via DownloadsUpdate).
+    ShowDownloads,
+    /// Transfer list received. Arrives whenever one changes, not only when
+    /// asked for, so the panel moves without polling.
+    DownloadsUpdate {
+        downloads: Vec<rustyclaw_view::DownloadData>,
+    },
     /// Open the cron panel (data arrives via CronListResult).
     ShowCron,
     /// Cron job list received.

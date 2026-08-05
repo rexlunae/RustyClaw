@@ -33,6 +33,7 @@ mod credential_request;
 mod cron;
 mod device_flow;
 mod dir_picker;
+mod downloads;
 mod edit_dialogs;
 mod editor;
 mod engines;
@@ -67,6 +68,7 @@ pub use connection::ConnectionDialog;
 pub use credential_request::CredentialRequestDialog;
 pub use cron::CronDialog;
 pub use device_flow::DeviceFlowDialog;
+pub use downloads::DownloadsDialog;
 pub use edit_dialogs::{EditProjectDialog, EditThreadDialog};
 pub use editor::{EDITOR_PLUGIN, Editor, EditorAction};
 #[allow(unused_imports)]

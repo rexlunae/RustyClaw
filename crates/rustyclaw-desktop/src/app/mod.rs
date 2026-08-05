@@ -1201,6 +1201,23 @@ pub fn App() -> Element {
                         });
                     }
                 }
+            } else if event.id == ids.downloads {
+                let v = state.read().show_downloads_dialog;
+                state.write().show_downloads_dialog = !v;
+                if !v {
+                    // Opening: ask for the current list. Later changes arrive
+                    // unprompted, so this is the only request the panel makes.
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn_reporting("load downloads", async move {
+                            client
+                                .send(GatewayCommand::DownloadsRequest)
+                                .await
+                                .context("sending DownloadsRequest")?;
+                            Ok(())
+                        });
+                    }
+                }
             } else if event.id == ids.services {
                 let v = state.read().show_services_dialog;
                 state.write().show_services_dialog = !v;
