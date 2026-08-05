@@ -70,9 +70,12 @@ struct TurnDeps {
     dom_queries: Arc<crate::pending::PendingResponses<(String, bool)>>,
     thread_mgr: crate::SharedThreadMgr,
     threads_path: std::path::PathBuf,
-    /// The connection this turn belongs to, so a download the turn starts
-    /// knows which agent to come back and wake.
+    /// The connection this turn belongs to, so a download the turn starts can
+    /// be routed back to the right client.
     connection_id: u64,
+    /// The agent this turn belongs to. What a download the turn starts is
+    /// owned by — the connection is not, because it can switch agents.
+    agent_id: String,
 }
 
 /// Spawn one turn: run the conversation through `handle_chat_frame` in its
@@ -97,6 +100,7 @@ fn spawn_turn(
     // the alternative is a parameter on every tool signature between here and
     // it.
     let origin = rustyclaw_core::downloads::DownloadOrigin {
+        agent: deps.agent_id.clone(),
         connection: deps.connection_id,
         thread: turn_thread.map(|t| t.0),
     };
@@ -571,6 +575,12 @@ pub(crate) async fn handle_connection(
     // let that self-send block on a receiver that is the sender's own caller.
     let (wake_tx, mut wake_rx) =
         tokio::sync::mpsc::unbounded_channel::<rustyclaw_core::downloads::Download>();
+    // Which agent this connection is currently showing. A connection can
+    // switch agents wholesale, and the watcher below outlives any one of them,
+    // so it cannot capture an agent id — it has to read the current one per
+    // event. Mirrors `thread_mgr_cell`, which exists for the same reason.
+    let current_agent = Arc::new(std::sync::RwLock::new(agent_session.agent_id.clone()));
+    let watcher_agent = current_agent.clone();
     let watcher_wake_tx = wake_tx.clone();
     let watcher_panel_tx = panel_tx.clone();
     // Its own token, not the connection's. The connection's is a child of the
@@ -593,7 +603,14 @@ pub(crate) async fn handle_connection(
             };
             match event {
                 Ok(rustyclaw_core::downloads::DownloadEvent::Changed(download)) => {
-                    if !download.belongs_to(connection_id) {
+                    // Read per event, never captured: between two events this
+                    // connection may have switched to a different agent, and
+                    // the previous agent's transfers are no longer its to see.
+                    let mine = {
+                        let agent = watcher_agent.read().expect("current agent cell poisoned");
+                        download.belongs_to(&agent)
+                    };
+                    if !mine {
                         continue;
                     }
                     let terminal = download.status.is_terminal();
@@ -772,6 +789,7 @@ pub(crate) async fn handle_connection(
                     thread_mgr: agent_session.thread_mgr.clone(),
                     threads_path: agent_session.threads_path.clone(),
                     connection_id,
+                    agent_id: agent_session.agent_id.clone(),
                 },
                 messages,
                 stream_id,
@@ -1387,6 +1405,7 @@ pub(crate) async fn handle_connection(
                                             thread_mgr: agent_session.thread_mgr.clone(),
                                             threads_path: agent_session.threads_path.clone(),
                                             connection_id,
+                                            agent_id: agent_session.agent_id.clone(),
                                         },
                                         messages,
                                         stream_id,
@@ -1418,13 +1437,13 @@ pub(crate) async fn handle_connection(
                                 }
                             }
                             ClientPayload::DownloadsRequest => {
-                                download_handler::send_downloads_update(&mut *writer, connection_id).await?;
+                                download_handler::send_downloads_update(&mut *writer, &agent_session.agent_id).await?;
                             }
                             ClientPayload::DownloadCancel { id } => {
-                                download_handler::handle_download_cancel(&mut *writer, connection_id, &id).await?;
+                                download_handler::handle_download_cancel(&mut *writer, &agent_session.agent_id, &id).await?;
                             }
                             ClientPayload::DownloadsClearFinished => {
-                                download_handler::handle_downloads_clear_finished(&mut *writer, connection_id).await?;
+                                download_handler::handle_downloads_clear_finished(&mut *writer, &agent_session.agent_id).await?;
                             }
                             ClientPayload::TasksRequest { session } => {
                                 thread_handler::handle_tasks_request(&mut *writer, &task_mgr, session).await?;
@@ -1708,6 +1727,22 @@ pub(crate) async fn handle_connection(
                                     // had already gone out, and the client asks
                                     // for a transcript as soon as it sees one.
                                     thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
+                                    // The downloads watcher reads this per
+                                    // event; until it moves, the panel would go
+                                    // on showing the previous agent's URLs and
+                                    // destination paths.
+                                    *current_agent
+                                        .write()
+                                        .expect("current agent cell poisoned") =
+                                        agent_session.agent_id.clone();
+                                    // The panel is stale the moment the agent
+                                    // changes, so correct it rather than
+                                    // waiting for the next transfer event.
+                                    download_handler::send_downloads_update(
+                                        &mut *writer,
+                                        &agent_session.agent_id,
+                                    )
+                                    .await?;
                                 }
                             }
                             ClientPayload::AgentCreate { name, agent_id, description } => {
@@ -1839,7 +1874,7 @@ pub(crate) async fn handle_connection(
             tick = panel_rx.recv(), if panel_open => {
                 match tick {
                     Some(()) => {
-                        download_handler::send_downloads_update(&mut *writer, connection_id).await?;
+                        download_handler::send_downloads_update(&mut *writer, &agent_session.agent_id).await?;
                     }
                     None => {
                         // Unreachable for the same reason as the wake channel
@@ -1861,10 +1896,25 @@ pub(crate) async fn handle_connection(
                     wakes_open = false;
                     continue;
                 };
+                // The thread id is only meaningful inside the store it was
+                // minted in, and this connection may have switched agents
+                // while the bytes were arriving. Ids restart low in every
+                // agent's store, so resolving it against the wrong one does
+                // not fail — it lands on an unrelated conversation, files a
+                // notice there and spawns a turn on it. Checked before the
+                // thread id is read, not after.
+                if !download.belongs_to(&agent_session.agent_id) {
+                    debug!(
+                        download = %download.id,
+                        "Download finished for an agent this connection is no longer showing; not announcing it"
+                    );
+                    continue;
+                }
                 // A transfer started outside any conversation — the CLI's
                 // one-shot paths — has no transcript to be announced in.
                 let Some(thread) = download
                     .origin
+                    .as_ref()
                     .and_then(|o| o.thread)
                     .map(rustyclaw_core::threads::ThreadId)
                 else {
@@ -1943,6 +1993,7 @@ pub(crate) async fn handle_connection(
                         thread_mgr: agent_session.thread_mgr.clone(),
                         threads_path: agent_session.threads_path.clone(),
                         connection_id,
+                        agent_id: agent_session.agent_id.clone(),
                     },
                     messages,
                     stream_id,
@@ -2248,6 +2299,7 @@ mod tests {
             std::path::PathBuf::from("/tmp/a"),
             None,
             Some(rustyclaw_core::downloads::DownloadOrigin {
+                agent: "researcher".into(),
                 connection: 1,
                 thread: Some(thread),
             }),

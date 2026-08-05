@@ -27,16 +27,28 @@ pub type DownloadId = String;
 /// Who started a transfer.
 ///
 /// This registry is process-global, but a completion is not: waking "the
-/// agent" is meaningless in a gateway serving several connections, and thread
-/// ids restart low in every agent's store — so a bare thread id would name a
-/// conversation belonging to whichever agent asked first. The connection id
-/// is what makes the pair unambiguous.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// agent" is meaningless in a gateway serving several of them, and thread ids
+/// restart low in every agent's store — so a bare thread id would name a
+/// conversation belonging to whichever agent asked first.
+///
+/// The agent id is what disambiguates it, and the connection id is not a
+/// substitute for two reasons that pull in opposite directions. One connection
+/// can change agents wholesale — `handle_agent_switch` replaces the session
+/// and its thread store — so a connection is too *broad*: thread 3 means a
+/// different conversation before and after. And one agent outlives its
+/// connections, so a connection is also too *narrow*: reconnect and the
+/// transfers you started become invisible and uncancellable, which is the
+/// opposite of what a background download in a daemon should do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadOrigin {
-    /// The connection whose agent ran the tool. Unique per process.
+    /// The agent that ran the tool. This is what ownership is decided by.
+    pub agent: String,
+    /// The connection it ran on. Kept for routing live updates only — never
+    /// for deciding who a transfer belongs to.
     pub connection: u64,
     /// The conversation the tool call belonged to, when there was one.
+    /// Meaningful only together with `agent`.
     pub thread: Option<u64>,
 }
 
@@ -71,7 +83,7 @@ where
 /// `None` outside a turn — the CLI's one-shot paths, and tests — which simply
 /// means nothing gets woken.
 pub fn current_origin() -> Option<DownloadOrigin> {
-    ORIGIN.try_with(|o| *o).ok()
+    ORIGIN.try_with(|o| o.clone()).ok()
 }
 
 /// Where a transfer has got to.
@@ -116,8 +128,9 @@ pub struct Download {
     pub started_ms: u64,
     /// When it reached a terminal status.
     pub finished_ms: Option<u64>,
-    /// Which connection and conversation started it. `None` when nothing was
-    /// listening — a transfer still gets tracked, it just wakes nobody.
+    /// Which agent, connection and conversation started it. `None` when
+    /// nothing was listening — a transfer still gets tracked, it just wakes
+    /// nobody.
     pub origin: Option<DownloadOrigin>,
 }
 
@@ -130,26 +143,26 @@ impl Download {
         }
     }
 
-    /// Whether this event is one the agent on `connection` should be woken
-    /// for.
+    /// Whether `agent` should be woken for this event.
     ///
     /// Both halves matter and neither is obvious from the call site, which is
     /// why the rule lives here with its tests. Progress must not wake anyone
     /// — a large file would otherwise start a turn every quarter-megabyte —
-    /// and an untagged transfer belongs to no connection, so a gateway
-    /// serving two agents must not let either claim it.
-    pub fn wakes(&self, connection: u64) -> bool {
-        self.status.is_terminal() && self.belongs_to(connection)
+    /// and an untagged transfer belongs to no agent, so a gateway serving two
+    /// of them must not let either claim it.
+    pub fn wakes(&self, agent: &str) -> bool {
+        self.status.is_terminal() && self.belongs_to(agent)
     }
 
-    /// Whether `connection` is the one that started this transfer.
+    /// Whether `agent` is the one that started this transfer.
     ///
     /// What the panel filters on. Progress belongs in a panel and not in a
     /// turn, so this is the weaker of the two tests — but it is the same
     /// ownership rule, and the panel must not show a client another agent's
-    /// URLs and destination paths.
-    pub fn belongs_to(&self, connection: u64) -> bool {
-        self.origin.map(|o| o.connection) == Some(connection)
+    /// URLs and destination paths, including after a switch on the same
+    /// connection.
+    pub fn belongs_to(&self, agent: &str) -> bool {
+        self.origin.as_ref().map(|o| o.agent.as_str()) == Some(agent)
     }
 
     /// How this transfer ended, in a sentence.
@@ -295,45 +308,44 @@ impl DownloadManager {
         all
     }
 
-    /// Every transfer `connection` started, newest first.
+    /// Every transfer `agent` started, newest first.
     ///
     /// What a client's panel is shown. A gateway can be serving several
     /// agents, and one agent's files are not another's to see, cancel, or
     /// learn the paths of.
-    pub fn list_for(&self, connection: u64) -> Vec<Download> {
+    pub fn list_for(&self, agent: &str) -> Vec<Download> {
         let mut all: Vec<Download> = self
             .downloads
             .values()
-            .filter(|d| d.origin.map(|o| o.connection) == Some(connection))
+            .filter(|d| d.belongs_to(agent))
             .cloned()
             .collect();
         all.sort_by_key(|d| std::cmp::Reverse(d.started_ms));
         all
     }
 
-    /// Stop a running transfer on `connection`'s behalf.
+    /// Stop a running transfer on `agent`'s behalf.
     ///
     /// Returns the cancelled record, or `None` if the id is unknown, the
-    /// transfer has already ended, or it belongs to another connection. The
+    /// transfer has already ended, or it belongs to another agent. The
     /// ownership check is here rather than at the call site because it is the
     /// same rule as [`Download::wakes`] and [`Self::list_for`]: ids are
     /// process-wide, so a client that guessed one could otherwise stop a
     /// download it was never shown.
-    pub fn cancel(&mut self, id: &str, connection: u64) -> Option<Download> {
+    pub fn cancel(&mut self, id: &str, agent: &str) -> Option<Download> {
         let d = self.downloads.get(id)?;
-        if d.origin.map(|o| o.connection) != Some(connection) {
+        if !d.belongs_to(agent) {
             return None;
         }
         self.finish(id, DownloadStatus::Cancelled)
     }
 
-    /// Drop `connection`'s finished transfers, leaving its running ones — and
-    /// every other connection's — alone. Returns how many went.
-    pub fn clear_finished_for(&mut self, connection: u64) -> usize {
+    /// Drop `agent`'s finished transfers, leaving its running ones — and every
+    /// other agent's — alone. Returns how many went.
+    pub fn clear_finished_for(&mut self, agent: &str) -> usize {
         let before = self.downloads.len();
-        self.downloads.retain(|_, d| {
-            !d.status.is_terminal() || d.origin.map(|o| o.connection) != Some(connection)
-        });
+        self.downloads
+            .retain(|_, d| !d.status.is_terminal() || !d.belongs_to(agent));
         before - self.downloads.len()
     }
 
@@ -505,10 +517,11 @@ mod tests {
             "outside a turn there is nobody to wake"
         );
         let origin = DownloadOrigin {
+            agent: "researcher".into(),
             connection: 7,
             thread: Some(3),
         };
-        let seen = with_origin(origin, async { current_origin() }).await;
+        let seen = with_origin(origin.clone(), async { current_origin() }).await;
         assert_eq!(seen, Some(origin));
     }
 
@@ -520,6 +533,7 @@ mod tests {
     #[tokio::test]
     async fn a_spawned_transfer_cannot_read_the_turns_origin() {
         let origin = DownloadOrigin {
+            agent: "researcher".into(),
             connection: 7,
             thread: Some(3),
         };
@@ -532,13 +546,13 @@ mod tests {
         assert_eq!(from_spawned, None);
     }
 
-    /// Only the connection that started a transfer hears about it.
+    /// Only the agent that started a transfer hears about it.
     ///
     /// Every connection in the process reads the same broadcast. Without this
     /// filter, a second agent would be told about a file it never asked for —
     /// and would be woken into a conversation of its own to discuss it.
     #[test]
-    fn a_completion_wakes_only_the_connection_that_started_it() {
+    fn a_completion_wakes_only_the_agent_that_started_it() {
         let mut m = mgr();
         let mine = m
             .register(
@@ -546,6 +560,7 @@ mod tests {
                 PathBuf::from("/tmp/a"),
                 None,
                 Some(DownloadOrigin {
+                    agent: "researcher".into(),
                     connection: 1,
                     thread: Some(4),
                 }),
@@ -555,8 +570,11 @@ mod tests {
             .finish(&mine, DownloadStatus::Complete)
             .expect("first ending");
 
-        assert!(finished.wakes(1));
-        assert!(!finished.wakes(2), "another connection must not be woken");
+        assert!(finished.wakes("researcher"));
+        assert!(
+            !finished.wakes("archivist"),
+            "another agent must not be woken"
+        );
     }
 
     /// A quarter-megabyte of progress is not worth a turn.
@@ -569,18 +587,19 @@ mod tests {
                 PathBuf::from("/tmp/a"),
                 Some(1_000_000),
                 Some(DownloadOrigin {
+                    agent: "researcher".into(),
                     connection: 1,
                     thread: Some(4),
                 }),
             )
             .id;
         let ticked = m.advance(&id, 262_144).expect("still running");
-        assert!(!ticked.wakes(1));
+        assert!(!ticked.wakes("researcher"));
     }
 
     /// A transfer nobody owns wakes nobody, rather than whoever asks first.
     #[test]
-    fn an_untagged_transfer_belongs_to_no_connection() {
+    fn an_untagged_transfer_belongs_to_no_agent() {
         let mut m = mgr();
         let id = m
             .register("https://e/a".into(), PathBuf::from("/tmp/a"), None, None)
@@ -588,8 +607,8 @@ mod tests {
         let finished = m
             .finish(&id, DownloadStatus::Complete)
             .expect("first ending");
-        assert!(!finished.wakes(1));
-        assert!(!finished.wakes(2));
+        assert!(!finished.wakes("researcher"));
+        assert!(!finished.wakes("archivist"));
     }
 
     /// A failure is as much worth waking for as a success — more so, since it
@@ -604,6 +623,7 @@ mod tests {
                 PathBuf::from("/tmp/a.bin"),
                 None,
                 Some(DownloadOrigin {
+                    agent: "researcher".into(),
                     connection: 1,
                     thread: Some(4),
                 }),
@@ -618,7 +638,7 @@ mod tests {
             )
             .expect("first ending");
 
-        assert!(failed.wakes(1));
+        assert!(failed.wakes("researcher"));
         assert!(
             failed.summary().contains("connection reset"),
             "the agent has to know what went wrong to decide whether to retry: {}",
@@ -639,6 +659,71 @@ mod tests {
         let a = next_connection_id();
         let b = next_connection_id();
         assert_ne!(a, b);
+    }
+
+    /// One connection can change agents wholesale — `handle_agent_switch`
+    /// swaps the session and its thread store — so the connection is not what
+    /// a transfer belongs to. Were it, the panel would go on showing the
+    /// previous agent's URLs and destination paths after a switch, and a
+    /// completion would be filed against whatever conversation now happens to
+    /// hold the remembered thread number.
+    #[test]
+    fn a_switch_on_one_connection_does_not_inherit_the_previous_agents_transfers() {
+        let mut m = mgr();
+        let id = m
+            .register(
+                "https://e/private.tar".into(),
+                PathBuf::from("/tmp/private.tar"),
+                None,
+                Some(DownloadOrigin {
+                    agent: "researcher".into(),
+                    connection: 9,
+                    thread: Some(3),
+                }),
+            )
+            .id;
+
+        // Same connection, different agent — the case the connection id cannot
+        // tell apart.
+        assert!(
+            m.list_for("archivist").is_empty(),
+            "the switched-to agent must not see the previous agent's transfers"
+        );
+        assert!(
+            m.cancel(&id, "archivist").is_none(),
+            "nor be able to stop them"
+        );
+        assert_eq!(m.list_for("researcher").len(), 1);
+    }
+
+    /// The other half of the same rule: an agent outlives the connection it
+    /// was reached on. After a reconnect the client gets a fresh connection id,
+    /// and a transfer scoped to the old one would be invisible, uncancellable
+    /// and unclearable for the life of the process.
+    #[test]
+    fn a_reconnect_still_owns_the_transfers_it_started() {
+        let mut m = mgr();
+        let id = m
+            .register(
+                "https://e/big.iso".into(),
+                PathBuf::from("/tmp/big.iso"),
+                None,
+                Some(DownloadOrigin {
+                    agent: "researcher".into(),
+                    connection: 1,
+                    thread: Some(2),
+                }),
+            )
+            .id;
+
+        // Reconnected: same agent, new connection id. Ownership must survive.
+        assert_eq!(m.list_for("researcher").len(), 1);
+        assert!(
+            m.cancel(&id, "researcher").is_some(),
+            "a reconnected client must still be able to stop its own transfer"
+        );
+        assert_eq!(m.clear_finished_for("researcher"), 1);
+        assert!(m.get(&id).is_none());
     }
 
     #[test]
