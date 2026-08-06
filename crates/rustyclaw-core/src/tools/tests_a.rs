@@ -402,8 +402,17 @@ async fn an_adopted_child_reports_its_own_exit() {
         .and_then(|v| v["sessionId"].as_str().map(str::to_owned))
         .expect("a yielded command reports its session");
 
+    // 15s, where this used to allow 4s. The child sleeps 0.6s, so the old
+    // budget looked generous — but a loaded CI runner starves this poll loop
+    // and it timed out in three separate runs, always with `None` rather than
+    // a wrong code. Waiting longer takes nothing away from what the test
+    // checks: the claim is about *which* exit code arrives, and a re-spawned
+    // copy would still report 2 however long we wait for it.
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
+    const POLL_ATTEMPTS: usize = 750;
+
     let mut status = None;
-    for _ in 0..200 {
+    for _ in 0..POLL_ATTEMPTS {
         {
             let mgr = process_manager();
             let mut mgr = mgr.lock().expect("process manager lock");
@@ -416,11 +425,24 @@ async fn an_adopted_child_reports_its_own_exit() {
         if status.is_some() {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
+
+    // Separated from the assertion below because the two failures mean
+    // entirely different things: no exit at all is this loop being too
+    // impatient, while a wrong code is the bug the test exists to catch.
+    // Folding them together produced a `None != Some(Exited(1))` that needed
+    // a trip to the CI log to tell one from the other.
+    let status = status.unwrap_or_else(|| {
+        panic!(
+            "no exit reported within {:?} — the child never finished, which is \
+             a stalled or starved poll rather than a re-spawn",
+            POLL_INTERVAL * POLL_ATTEMPTS as u32
+        )
+    });
     assert_eq!(
         status,
-        Some(SessionStatus::Exited(1)),
+        SessionStatus::Exited(1),
         "the session should report the original child's exit, not a restart's"
     );
 }
