@@ -555,13 +555,26 @@ pub fn App() -> Element {
                                 event: GatewayEvent::DomQuery { id, js },
                                 ..
                             } => {
+                                // Off this task, not awaited in place. It
+                                // evaluates script in the webview and then
+                                // waits for room on the command queue, and
+                                // this task is the only drain for gateway
+                                // events — so either wait, held here, is a
+                                // stalled connection. In its own task both
+                                // are free to block: nothing else is waiting
+                                // on them, so the reply may take as long as
+                                // it takes.
+                                //
                                 // The page already ran the script; this is
                                 // the answer going back. Losing it leaves the
                                 // caller waiting on a reply that will never
                                 // arrive, so it is worth naming.
-                                if let Err(e) = handle_dom_query(&client_ui, id, js).await {
-                                    tracing::error!(error = ?e, "Action failed");
-                                }
+                                let dom_client = client_ui.clone();
+                                spawn(async move {
+                                    if let Err(e) = handle_dom_query(&dom_client, id, js).await {
+                                        tracing::error!(error = ?e, "Action failed");
+                                    }
+                                });
                             }
                             BufferEntry::Event { thread_id, event } => {
                                 let triggers_refresh = matches!(
@@ -595,7 +608,12 @@ pub fn App() -> Element {
                                     // even after the user logged in. Same shape
                                     // as the history guard below. `AuthSuccess`
                                     // fires this again, so the retry is free.
-                                    match client_ui.send(GatewayCommand::ThreadList).await {
+                                    // `try_send`, never `send`: this task is
+                                    // the only drain for gateway events, and
+                                    // awaiting the command queue from here
+                                    // deadlocks the connection outright (see
+                                    // `GatewayClient::try_send`).
+                                    match client_ui.try_send(GatewayCommand::ThreadList) {
                                         Ok(()) => refreshed_threads_this_connection = true,
                                         Err(e) => tracing::error!(
                                             error = %e,
@@ -625,10 +643,15 @@ pub fn App() -> Element {
                                     // message count while the transcript that
                                     // was never requested stayed empty for the
                                     // rest of the session.
-                                    match client_ui
-                                        .send(GatewayCommand::ThreadHistoryRequest { thread_id })
-                                        .await
-                                    {
+                                    // `try_send` for the same reason as the
+                                    // refresh above. This is the send that
+                                    // closed the loop in practice: it follows
+                                    // the `ThreadsUpdate` at the end of a
+                                    // turn, which is exactly when a long
+                                    // turn's frames have filled the queues.
+                                    match client_ui.try_send(GatewayCommand::ThreadHistoryRequest {
+                                        thread_id,
+                                    }) {
                                         Ok(()) => last_foreground_history_request = Some(thread_id),
                                         Err(e) => tracing::error!(
                                             thread_id,

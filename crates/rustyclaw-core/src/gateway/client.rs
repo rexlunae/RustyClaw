@@ -408,12 +408,42 @@ impl GatewayClient {
         }
     }
 
-    /// Send a command to the gateway.
+    /// Send a command to the gateway, waiting for room in the queue.
+    ///
+    /// Safe from anywhere *except* a task that is also responsible for
+    /// draining events — see [`try_send`](Self::try_send) for why.
     pub async fn send(&self, cmd: GatewayCommand) -> Result<()> {
         self.cmd_tx
             .send(cmd)
             .await
             .map_err(|_| anyhow!("the gateway connection is no longer accepting commands"))
+    }
+
+    /// Queue a command without waiting for room.
+    ///
+    /// For callers that must not park: every channel between the two
+    /// processes is bounded, and they form a cycle. Client events, client
+    /// commands, the gateway's inbound frames and its outbound frames each
+    /// have a fixed queue, so a consumer that stops consuming eventually
+    /// backs up all the way round to itself. A task that both drains events
+    /// and awaits this queue closes that cycle: it stops draining while it
+    /// waits, the events it is not draining are what keep the gateway from
+    /// reading, and the gateway not reading is what keeps this queue full.
+    /// Nothing times out and nothing errors — the connection simply stops,
+    /// with a restart as the only way out.
+    ///
+    /// A full queue means the connection is already in that much trouble, so
+    /// the honest answer is to say the command did not go rather than to
+    /// wait for a gap that this caller is holding shut. Callers that latch
+    /// "already asked" state should treat the error as not-asked and retry.
+    pub fn try_send(&self, cmd: GatewayCommand) -> Result<()> {
+        use tokio::sync::mpsc::error::TrySendError;
+        self.cmd_tx.try_send(cmd).map_err(|e| match e {
+            TrySendError::Full(_) => anyhow!("the gateway command queue is full"),
+            TrySendError::Closed(_) => {
+                anyhow!("the gateway connection is no longer accepting commands")
+            }
+        })
     }
 
     /// Receive the next event from the gateway (blocks until one arrives).
@@ -546,6 +576,74 @@ mod tests {
         assert!(
             last.is_err(),
             "a send on a dead command channel must surface an error, not vanish"
+        );
+    }
+
+    /// Spawn a child that never reads its stdin. The write side is perfectly
+    /// healthy — it just fills, exactly as a gateway that has stopped reading
+    /// because its own outbound queue is backed up behind this client.
+    fn deaf_child() -> tokio::process::Child {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawning a shell should succeed")
+    }
+
+    /// A caller that cannot afford to park must be able to find out.
+    ///
+    /// Every channel between client and gateway is bounded and they form a
+    /// cycle, so a task that both drains events and awaits the command queue
+    /// deadlocks the connection: it stops draining while it waits, and its
+    /// not-draining is what holds the queue shut. On the desktop that task
+    /// is the sole event consumer, and the send that closed the loop was the
+    /// history request issued on the `ThreadsUpdate` that ends a turn — the
+    /// moment a long turn's frames have filled everything. The symptom was a
+    /// client that took a prompt, showed it as processing, and never moved
+    /// again, with no error anywhere.
+    #[tokio::test]
+    async fn a_full_command_queue_refuses_rather_than_parking() {
+        let (conn, writer, reader) =
+            SshConnection::from_child(deaf_child()).expect("splitting the child");
+        let client = GatewayClient::from_transport(conn, writer, reader, None);
+
+        // Fill the pipe the writer is draining into, then the queue behind it.
+        let bulk = "x".repeat(64 * 1024);
+        let mut refusal = None;
+        for _ in 0..64 {
+            match client.try_send(GatewayCommand::Chat {
+                message: bulk.clone(),
+                thread_id: None,
+            }) {
+                Ok(()) => tokio::task::yield_now().await,
+                Err(e) => {
+                    refusal = Some(e);
+                    break;
+                }
+            }
+        }
+
+        let refusal = refusal.expect("a queue behind a blocked writer must eventually refuse");
+        assert!(
+            refusal.to_string().contains("full"),
+            "a full queue is not a closed one — the connection is alive: {refusal}"
+        );
+
+        // The other half of the point: the blocking form parks here, and on
+        // the event-draining task that park is permanent.
+        let parked = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            client.send(GatewayCommand::ThreadList),
+        )
+        .await;
+        assert!(
+            parked.is_err(),
+            "`send` must be the one that waits — if it returned here the test \
+             is no longer reproducing a full queue"
         );
     }
 
