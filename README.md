@@ -127,6 +127,28 @@ git clone https://github.com/rexlunae/RustyClaw.git && cd RustyClaw
 ./scripts/setup.sh --only rust rustyclaw  # just Rust + RustyClaw
 ```
 
+#### Choosing what gets compiled
+
+Run interactively and the script asks which of the four binaries to build and
+which optional features to compile in. Both are also selectable up front:
+
+```bash
+./scripts/setup.sh --list-features            # what you can pick from
+./scripts/setup.sh --clients cli gateway      # headless: no GUI clients
+./scripts/setup.sh --with mcp matrix          # add MCP and Matrix
+./scripts/setup.sh --without semantic-memory  # drop the ONNX Runtime dep
+```
+
+Clients are `cli`, `gateway`, `tui` and `desktop`; all four are built by
+default. Skipping `desktop` also skips its WebKitGTK and libxdo requirement,
+which is otherwise a hard prerequisite on Linux.
+
+Features are `semantic-memory` (on by default, gateway only), `mcp`,
+`browser`, `matrix`, `whatsapp`, `signal-cli`, `qr` and `freenet`. `web-tools`
+and `image-gen` are default features of `rustyclaw-core` and are always
+present. For anything not on that list, `--features` still passes raw cargo
+features straight through.
+
 ### Install RustyClaw Only
 
 ```bash

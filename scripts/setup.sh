@@ -48,6 +48,26 @@ SKIP=""
 ONLY=""
 EXO_DIR="${EXO_DIR:-$HOME/exo}"
 RUSTYCLAW_FEATURES=""
+
+# ── Clients ──────────────────────────────────────────────────────────────────
+# The four binaries this repo installs. `cli` is the entry point the others are
+# reached through (`rustyclaw tui`, `rustyclaw desktop`) and `gateway` is what
+# it spawns to do the work, so those two are the default pair; the rest is
+# taste. A headless box wants no desktop client, and building one costs a
+# WebKitGTK toolchain it has no other use for.
+ALL_CLIENTS="cli gateway tui desktop"
+DEFAULT_CLIENTS="cli gateway tui desktop"
+CLIENTS_ARG=""
+
+# ── Optional features ────────────────────────────────────────────────────────
+# Cargo features that are off unless asked for, plus `semantic-memory`, which
+# the gateway turns on for itself. `web-tools` and `image-gen` are not here:
+# they are default features of `rustyclaw-core`, and the crates that depend on
+# it do not pass `default-features = false`, so no flag on this command line
+# can turn them off. Listing them as choices would be a lie.
+OPTIONAL_FEATURES="semantic-memory mcp browser matrix whatsapp signal-cli qr freenet"
+WITH_FEATURES=""
+WITHOUT_FEATURES=""
 FROM_SOURCE=false
 FORCE=false
 INSTALL_ALL=false
@@ -69,12 +89,21 @@ Options:
   --skip <component...>     Skip listed components
   --only <component...>     Install only listed components
   --exo-dir <path>          Where to clone exo (default: ~/exo)
-  --features <features>     Extra cargo features for RustyClaw (e.g. "rustyclaw-core/matrix")
+  --clients <client...>     Which RustyClaw binaries to build (default: all)
+  --with <feature...>       Turn optional features on
+  --without <feature...>    Turn optional features off
+  --list-features           Show the clients and features you can choose from
+  --features <features>     Extra raw cargo features, passed through verbatim
+                            (e.g. "rustyclaw-core/matrix"). For anything the
+                            --with list does not cover.
   --from-source             Build RustyClaw from local workspace instead of crates.io
   --force                   Overwrite existing RustyClaw binaries
   --help                    Show this help
 
 Components: rust, rustyclaw, uv, ollama, node, exo
+Clients:    cli, gateway, tui, desktop
+Features:   semantic-memory (on), mcp, browser, matrix, whatsapp, signal-cli,
+            qr, freenet          — see --list-features for what each one is
 
 Examples:
   ./scripts/setup.sh                          # interactive — choose components
@@ -82,6 +111,67 @@ Examples:
   ./scripts/setup.sh --skip exo ollama        # skip exo and ollama
   ./scripts/setup.sh --only rust rustyclaw    # just Rust + RustyClaw
   ./scripts/setup.sh --from-source            # build from local checkout
+  ./scripts/setup.sh --clients cli gateway    # headless box: no GUI clients
+  ./scripts/setup.sh --with mcp matrix        # add MCP and Matrix support
+  ./scripts/setup.sh --without semantic-memory  # skip the ONNX runtime dep
+EOF
+    exit 0
+}
+
+# ── Client and feature descriptions ─────────────────────────────────────────
+client_desc() {
+    case "$1" in
+        cli)     echo "rustyclaw — the command-line entry point (spawns the rest)" ;;
+        gateway) echo "rustyclaw-gateway — the daemon that runs the agent" ;;
+        tui)     echo "rustyclaw-tui — terminal UI client" ;;
+        desktop) echo "rustyclaw-desktop — GUI client (needs WebKitGTK + libxdo)" ;;
+        *)       echo "" ;;
+    esac
+}
+
+feature_desc() {
+    case "$1" in
+        semantic-memory) echo "vector memory recall (heavy: ONNX Runtime; no 32-bit ARM)" ;;
+        mcp)             echo "Model Context Protocol servers" ;;
+        browser)         echo "headless browser automation (pulls in chromiumoxide)" ;;
+        matrix)          echo "Matrix messenger" ;;
+        whatsapp)        echo "WhatsApp messenger" ;;
+        signal-cli)      echo "Signal messenger via signal-cli" ;;
+        qr)              echo "QR codes for device pairing" ;;
+        freenet)         echo "Freenet tools (freenet, river, atlas)" ;;
+        *)               echo "" ;;
+    esac
+}
+
+print_feature_list() {
+    cat <<EOF
+🦀🦞 RustyClaw build options
+
+Clients (--clients), all built by default:
+EOF
+    for c in $ALL_CLIENTS; do
+        printf '  %-10s %s\n' "$c" "$(client_desc "$c")"
+    done
+    cat <<EOF
+
+Optional features (--with / --without):
+EOF
+    for f in $OPTIONAL_FEATURES; do
+        local mark="  "
+        [[ "$f" == "semantic-memory" ]] && mark="* "
+        printf '  %s%-16s %s\n' "$mark" "$f" "$(feature_desc "$f")"
+    done
+    cat <<'EOF'
+
+  * on by default
+
+Always compiled in: web-tools and image-gen. They are default features of
+rustyclaw-core and the crates depending on it do not opt out, so nothing on
+this command line can remove them.
+
+Features apply to the CLI and the gateway. The TUI and desktop clients define
+no features of their own. semantic-memory is a gateway-only feature — it is
+the only component that runs it.
 EOF
     exit 0
 }
@@ -108,6 +198,25 @@ while [[ $# -gt 0 ]]; do
             done
             INTERACTIVE=false
             ;;
+        --clients)
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                CLIENTS_ARG="$CLIENTS_ARG $1"; shift
+            done
+            ;;
+        --with)
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                WITH_FEATURES="$WITH_FEATURES $1"; shift
+            done
+            ;;
+        --without)
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                WITHOUT_FEATURES="$WITHOUT_FEATURES $1"; shift
+            done
+            ;;
+        --list-features) print_feature_list ;;
         --exo-dir)   EXO_DIR="$2"; shift 2 ;;
         --features)  RUSTYCLAW_FEATURES="$2"; shift 2 ;;
         --from-source) FROM_SOURCE=true; shift ;;
@@ -298,6 +407,79 @@ toggle_selected() {
     fi
 }
 
+# ── Client / feature selection state ────────────────────────────────────────
+# Feature names carry hyphens and variable names cannot, so every name is
+# folded to underscores before it becomes part of one.
+var_key() { echo "${1//-/_}"; }
+
+get_client()    { eval "echo \${SEL_CLIENT_$(var_key "$1"):-0}"; }
+set_client()    { eval "SEL_CLIENT_$(var_key "$1")=$2"; }
+toggle_client() {
+    if [[ "$(get_client "$1")" == "1" ]]; then set_client "$1" 0; else set_client "$1" 1; fi
+}
+want_client()   { [[ "$(get_client "$1")" == "1" ]]; }
+
+get_feat()    { eval "echo \${SEL_FEAT_$(var_key "$1"):-0}"; }
+set_feat()    { eval "SEL_FEAT_$(var_key "$1")=$2"; }
+toggle_feat() {
+    if [[ "$(get_feat "$1")" == "1" ]]; then set_feat "$1" 0; else set_feat "$1" 1; fi
+}
+want_feat()   { [[ "$(get_feat "$1")" == "1" ]]; }
+
+# Defaults: every client, and the same features the build has today — the
+# gateway's `semantic-memory` and nothing else. Running setup with no new
+# flags must install exactly what it installed before.
+for _c in $ALL_CLIENTS; do set_client "$_c" 0; done
+for _c in $DEFAULT_CLIENTS; do set_client "$_c" 1; done
+for _f in $OPTIONAL_FEATURES; do set_feat "$_f" 0; done
+set_feat semantic-memory 1
+
+known_client()  { echo "$ALL_CLIENTS" | grep -qw -- "$1"; }
+known_feature() { echo "$OPTIONAL_FEATURES" | grep -qw -- "$1"; }
+
+# An unrecognised name is a typo, and a typo that is quietly ignored produces
+# a build missing exactly what was asked for — discovered much later, after
+# the compile. Refuse it now, while it costs nothing.
+if [[ -n "$CLIENTS_ARG" ]]; then
+    for _c in $ALL_CLIENTS; do set_client "$_c" 0; done
+    for _c in $CLIENTS_ARG; do
+        if [[ "$_c" == "all" ]]; then
+            for _a in $ALL_CLIENTS; do set_client "$_a" 1; done
+        elif known_client "$_c"; then
+            set_client "$_c" 1
+        else
+            err "Unknown client: $_c"
+            err "Known clients: $ALL_CLIENTS"
+            exit 1
+        fi
+    done
+fi
+
+for _f in $WITH_FEATURES; do
+    if [[ "$_f" == "all" ]]; then
+        for _a in $OPTIONAL_FEATURES; do set_feat "$_a" 1; done
+    elif known_feature "$_f"; then
+        set_feat "$_f" 1
+    else
+        err "Unknown feature: $_f"
+        err "Known features: $OPTIONAL_FEATURES"
+        err "For a feature this script does not list, use --features to pass it through."
+        exit 1
+    fi
+done
+
+for _f in $WITHOUT_FEATURES; do
+    if [[ "$_f" == "all" ]]; then
+        for _a in $OPTIONAL_FEATURES; do set_feat "$_a" 0; done
+    elif known_feature "$_f"; then
+        set_feat "$_f" 0
+    else
+        err "Unknown feature: $_f"
+        err "Known features: $OPTIONAL_FEATURES"
+        exit 1
+    fi
+done
+
 show_menu() {
     echo -e "${BOLD}🦀🦞 RustyClaw Setup${NC}"
     echo -e "${DIM}   OS: $OS ($ARCH)${NC}"
@@ -388,6 +570,39 @@ if [[ "$INTERACTIVE" == true ]]; then
     echo ""
 fi
 
+# ── Interactive client + feature selection ──────────────────────────────────
+# Only worth asking when RustyClaw itself is being built; these choices are
+# what goes into the cargo invocation and nothing else uses them.
+show_build_menu() {
+    echo -e "${BOLD}🦀🦞 RustyClaw build options${NC}"
+    echo ""
+    echo -e "${BOLD}Clients to build:${NC}"
+    local i=1
+    for c in $ALL_CLIENTS; do
+        local check="[ ]"
+        [[ "$(get_client "$c")" == "1" ]] && check="[${GREEN}✓${NC}]"
+        echo -e "  ${BOLD}$i)${NC} $check ${CYAN}$c${NC} - $(client_desc "$c")"
+        i=$((i + 1))
+    done
+
+    echo ""
+    echo -e "${BOLD}Optional features:${NC}"
+    echo -e "${DIM}(web-tools and image-gen are always on — they are crate defaults)${NC}"
+    local letters="asdfghjk"
+    local n=0
+    for f in $OPTIONAL_FEATURES; do
+        local check="[ ]"
+        [[ "$(get_feat "$f")" == "1" ]] && check="[${GREEN}✓${NC}]"
+        echo -e "  ${BOLD}${letters:$n:1})${NC} $check ${CYAN}$f${NC} - $(feature_desc "$f")"
+        n=$((n + 1))
+    done
+
+    echo ""
+    echo -e "  ${BOLD}Enter)${NC} Build with this selection"
+    echo -e "  ${BOLD}q)${NC} Cancel"
+    echo ""
+}
+
 # ── Determine what to install ───────────────────────────────────────────────
 should_install() {
     local comp="$1"
@@ -426,6 +641,57 @@ should_install() {
     
     return 1
 }
+
+if [[ "$INTERACTIVE" == true ]] && should_install rustyclaw; then
+    while true; do
+        show_build_menu
+        read -rsn1 key
+
+        # Features are keyed off the list itself rather than a hard-coded
+        # case arm, so adding one to OPTIONAL_FEATURES needs no change here.
+        matched=false
+        letters="asdfghjk"
+        n=0
+        for f in $OPTIONAL_FEATURES; do
+            if [[ "$key" == "${letters:$n:1}" ]]; then
+                toggle_feat "$f"
+                matched=true
+                break
+            fi
+            n=$((n + 1))
+        done
+        [[ "$matched" == true ]] && continue
+
+        case "$key" in
+            1) toggle_client cli ;;
+            2) toggle_client gateway ;;
+            3) toggle_client tui ;;
+            4) toggle_client desktop ;;
+            x|X|q|Q)
+                echo "Cancelled."
+                exit 0
+                ;;
+            "")
+                break
+                ;;
+        esac
+    done
+    echo ""
+fi
+
+# A `rustyclaw` component with nothing under it builds nothing and then
+# reports success, which is worse than saying so.
+if should_install rustyclaw; then
+    SELECTED_CLIENTS=""
+    for _c in $ALL_CLIENTS; do
+        want_client "$_c" && SELECTED_CLIENTS="$SELECTED_CLIENTS $_c"
+    done
+    if [[ -z "${SELECTED_CLIENTS// /}" ]]; then
+        err "No RustyClaw clients selected — nothing to build."
+        err "Pick at least one of: $ALL_CLIENTS"
+        exit 1
+    fi
+fi
 
 echo ""
 echo -e "${BOLD}🦀🦞 RustyClaw Full Setup${NC}"
@@ -530,32 +796,44 @@ if should_install rustyclaw; then
                     warn "glib-2.0.pc not found by pkg-config; install your distro's GLib dev package and set PKG_CONFIG_PATH if needed"
                 fi
 
-                if pkg-config --exists "gdk-3.0 >= 3.22"; then
-                    success "gdk-3.0 development package detected"
-                else
-                    warn "gdk-3.0.pc not found; install your distro's GTK3 development package"
-                fi
+                # Everything below here exists for the desktop client alone.
+                # Demanding a WebKitGTK toolchain from someone who asked for
+                # `--clients cli gateway` is asking them to install a browser
+                # engine to run a headless daemon — and the check used to
+                # abort setup outright when they would not.
+                if want_client desktop; then
+                    if pkg-config --exists "gdk-3.0 >= 3.22"; then
+                        success "gdk-3.0 development package detected"
+                    else
+                        warn "gdk-3.0.pc not found; install your distro's GTK3 development package"
+                    fi
 
-                if pkg-config --exists "webkit2gtk-4.1"; then
-                    success "webkit2gtk-4.1 development package detected"
-                else
-                    warn "webkit2gtk-4.1.pc not found; install your distro's WebKitGTK 4.1 development package"
-                fi
+                    if pkg-config --exists "webkit2gtk-4.1"; then
+                        success "webkit2gtk-4.1 development package detected"
+                    else
+                        warn "webkit2gtk-4.1.pc not found; install your distro's WebKitGTK 4.1 development package"
+                    fi
 
-                # The desktop client (rustyclaw-desktop) hard-requires
-                # JavaScriptCore + WebKitGTK 4.1 + libxdo; if they're missing
-                # the cargo build fails only after several minutes of compile
-                # time, so fail fast here with install instructions instead.
-                if pkg-config --exists "javascriptcoregtk-4.1" && pkg-config --exists "libxdo"; then
-                    success "JavaScriptCore + libxdo development packages detected"
+                    # The desktop client (rustyclaw-desktop) hard-requires
+                    # JavaScriptCore + WebKitGTK 4.1 + libxdo; if they're
+                    # missing the cargo build fails only after several minutes
+                    # of compile time, so fail fast here with install
+                    # instructions instead.
+                    if pkg-config --exists "javascriptcoregtk-4.1" && pkg-config --exists "libxdo"; then
+                        success "JavaScriptCore + libxdo development packages detected"
+                    else
+                        err "WebKitGTK/JavaScriptCore 4.1 and libxdo dev packages not found — rustyclaw-desktop cannot build without them"
+                        err "Install them, e.g.:"
+                        err "  Debian/Ubuntu: sudo apt-get install libwebkit2gtk-4.1-dev libxdo-dev"
+                        err "  Fedora:        sudo dnf install webkit2gtk4.1-devel xdotool-devel"
+                        err "  Arch:          sudo pacman -S webkit2gtk-4.1 xdotool"
+                        err "  Alpine:        sudo apk add webkit2gtk-dev xdotool-dev"
+                        err ""
+                        err "Or build without the GUI client: --clients cli gateway tui"
+                        exit 1
+                    fi
                 else
-                    err "WebKitGTK/JavaScriptCore 4.1 and libxdo dev packages not found — rustyclaw-desktop cannot build without them"
-                    err "Install them, e.g.:"
-                    err "  Debian/Ubuntu: sudo apt-get install libwebkit2gtk-4.1-dev libxdo-dev"
-                    err "  Fedora:        sudo dnf install webkit2gtk4.1-devel xdotool-devel"
-                    err "  Arch:          sudo pacman -S webkit2gtk-4.1 xdotool"
-                    err "  Alpine:        sudo apk add webkit2gtk-dev xdotool-dev"
-                    exit 1
+                    info "Skipping GTK/WebKit checks — no desktop client selected"
                 fi
             fi
             ;;
@@ -579,19 +857,71 @@ if should_install rustyclaw; then
     FORCE_FLAG=""
     [[ "$FORCE" == true ]] && FORCE_FLAG="--force"
 
-    # The gateway daemon (`rustyclaw-gateway`) is a separate binary crate that
-    # the `rustyclaw` CLI spawns. It must be installed alongside the CLI or
-    # `gateway start/restart` fails with "Could not find the rustyclaw-gateway
-    # binary". It shares the messenger features but NOT the CLI-only tui/desktop
-    # features, so filter those out before installing it.
+    # ── Compose the cargo feature flags ──────────────────────────────────
+    # The features live on `rustyclaw-core`, so they are named through it.
+    # That spelling resolves from any crate that depends on core, which is
+    # both the CLI and the gateway, so one name serves both.
+    join_features() {
+        echo "$1" | tr ' ' '\n' | sed '/^$/d' | tr '\n' ',' | sed 's/,$//'
+    }
+
+    CLI_FEATURES=""
     GATEWAY_FEATURES=""
-    for f in $(echo "$RUSTYCLAW_FEATURES" | tr ',' ' '); do
+    for f in $OPTIONAL_FEATURES; do
+        want_feat "$f" || continue
         case "$f" in
-            tui|desktop) ;;  # CLI-only features; the gateway has no such features
+            # Handled entirely through the gateway's defaults below — it is
+            # already one of them, so naming it here would add a flag that
+            # changes nothing. The CLI never gets it: the gateway is the only
+            # component that runs semantic memory, and it costs an ONNX
+            # Runtime build.
+            semantic-memory) ;;
+            *)
+                CLI_FEATURES="$CLI_FEATURES rustyclaw-core/$f"
+                GATEWAY_FEATURES="$GATEWAY_FEATURES rustyclaw-core/$f"
+                ;;
+        esac
+    done
+
+    # Whatever `--features` was handed, verbatim and unexamined — it exists
+    # for the features this script does not know about. `tui`/`desktop` are
+    # CLI-only names the gateway would reject, so they stay out of its list.
+    for f in $(echo "$RUSTYCLAW_FEATURES" | tr ',' ' '); do
+        CLI_FEATURES="$CLI_FEATURES $f"
+        case "$f" in
+            tui|desktop) ;;
             *) GATEWAY_FEATURES="$GATEWAY_FEATURES $f" ;;
         esac
     done
-    GATEWAY_FEATURES="$(echo "$GATEWAY_FEATURES" | sed 's/^ *//;s/ *$//')"
+
+    # `semantic-memory` and `image-gen` are the gateway's *own* default
+    # features, so declining the first means declining defaults — which takes
+    # the second down with it. Ask for it back by name, or turning off vector
+    # memory would quietly turn off image generation too.
+    GATEWAY_NO_DEFAULT=""
+    if ! want_feat semantic-memory; then
+        GATEWAY_NO_DEFAULT="--no-default-features"
+        GATEWAY_FEATURES="$GATEWAY_FEATURES image-gen"
+    fi
+
+    CLI_FEATURES="$(join_features "$CLI_FEATURES")"
+    GATEWAY_FEATURES="$(join_features "$GATEWAY_FEATURES")"
+
+    # The CLI spawns the gateway for `gateway start/restart`. Installing one
+    # without the other is legitimate — a workstation talking to a gateway on
+    # another host wants exactly that — but it is worth saying out loud,
+    # because the failure otherwise turns up much later as "Could not find the
+    # rustyclaw-gateway binary".
+    if want_client cli && ! want_client gateway; then
+        warn "Installing the CLI without the gateway daemon"
+        warn "  'rustyclaw gateway start' will need a gateway on this machine or another"
+    fi
+
+    info "Clients:  $(echo "$SELECTED_CLIENTS" | sed 's/^ *//')"
+    info "Features: ${CLI_FEATURES:-none beyond crate defaults}"
+    if [[ -n "$GATEWAY_NO_DEFAULT" ]]; then
+        info "Gateway:  building without semantic memory"
+    fi
 
     if [[ "$FROM_SOURCE" == true || "$IN_REPO" == true ]]; then
         if [[ "$IN_REPO" == true ]]; then
@@ -607,64 +937,96 @@ if should_install rustyclaw; then
         TUI_PATH="$CRATES_DIR/rustyclaw-tui"
         DESKTOP_PATH="$CRATES_DIR/rustyclaw-desktop"
 
-        if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
-            cargo install --path "$INSTALL_PATH" --features "$RUSTYCLAW_FEATURES" $FORCE_FLAG
-        else
-            cargo install --path "$INSTALL_PATH" $FORCE_FLAG
+        if want_client cli; then
+            info "Installing CLI (rustyclaw)..."
+            if [[ -n "$CLI_FEATURES" ]]; then
+                cargo install --path "$INSTALL_PATH" --features "$CLI_FEATURES" $FORCE_FLAG
+            else
+                cargo install --path "$INSTALL_PATH" $FORCE_FLAG
+            fi
         fi
-        info "Installing gateway daemon (rustyclaw-gateway)..."
-        if [[ -n "$GATEWAY_FEATURES" ]]; then
-            cargo install --path "$GATEWAY_PATH" --features "$GATEWAY_FEATURES" $FORCE_FLAG
-        else
-            cargo install --path "$GATEWAY_PATH" $FORCE_FLAG
+        if want_client gateway; then
+            info "Installing gateway daemon (rustyclaw-gateway)..."
+            if [[ -n "$GATEWAY_FEATURES" ]]; then
+                cargo install --path "$GATEWAY_PATH" $GATEWAY_NO_DEFAULT --features "$GATEWAY_FEATURES" $FORCE_FLAG
+            else
+                cargo install --path "$GATEWAY_PATH" $GATEWAY_NO_DEFAULT $FORCE_FLAG
+            fi
         fi
-        # The TUI and desktop clients are standalone binaries (no extra
-        # features); the `rustyclaw tui`/`desktop` subcommands spawn them.
-        info "Installing terminal UI client (rustyclaw-tui)..."
-        cargo install --path "$TUI_PATH" $FORCE_FLAG
-        info "Installing desktop GUI client (rustyclaw-desktop)..."
-        cargo install --path "$DESKTOP_PATH" $FORCE_FLAG
+        # The TUI and desktop clients define no features of their own; the
+        # `rustyclaw tui`/`desktop` subcommands spawn them.
+        if want_client tui; then
+            info "Installing terminal UI client (rustyclaw-tui)..."
+            cargo install --path "$TUI_PATH" $FORCE_FLAG
+        fi
+        if want_client desktop; then
+            info "Installing desktop GUI client (rustyclaw-desktop)..."
+            cargo install --path "$DESKTOP_PATH" $FORCE_FLAG
+        fi
     else
         info "Installing from crates.io..."
-        if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
-            cargo install rustyclaw --features "$RUSTYCLAW_FEATURES" $FORCE_FLAG
-        else
-            cargo install rustyclaw $FORCE_FLAG
+        if want_client cli; then
+            info "Installing CLI (rustyclaw)..."
+            if [[ -n "$CLI_FEATURES" ]]; then
+                cargo install rustyclaw --features "$CLI_FEATURES" $FORCE_FLAG
+            else
+                cargo install rustyclaw $FORCE_FLAG
+            fi
         fi
-        info "Installing gateway daemon (rustyclaw-gateway)..."
-        if [[ -n "$GATEWAY_FEATURES" ]]; then
-            cargo install rustyclaw-gateway --features "$GATEWAY_FEATURES" $FORCE_FLAG
-        else
-            cargo install rustyclaw-gateway $FORCE_FLAG
+        if want_client gateway; then
+            info "Installing gateway daemon (rustyclaw-gateway)..."
+            if [[ -n "$GATEWAY_FEATURES" ]]; then
+                cargo install rustyclaw-gateway $GATEWAY_NO_DEFAULT --features "$GATEWAY_FEATURES" $FORCE_FLAG
+            else
+                cargo install rustyclaw-gateway $GATEWAY_NO_DEFAULT $FORCE_FLAG
+            fi
         fi
-        info "Installing terminal UI client (rustyclaw-tui)..."
-        cargo install rustyclaw-tui $FORCE_FLAG
-        info "Installing desktop GUI client (rustyclaw-desktop)..."
-        cargo install rustyclaw-desktop $FORCE_FLAG
+        if want_client tui; then
+            info "Installing terminal UI client (rustyclaw-tui)..."
+            cargo install rustyclaw-tui $FORCE_FLAG
+        fi
+        if want_client desktop; then
+            info "Installing desktop GUI client (rustyclaw-desktop)..."
+            cargo install rustyclaw-desktop $FORCE_FLAG
+        fi
     fi
 
-    if has rustyclaw; then
-        success "RustyClaw $(rustyclaw --version 2>/dev/null || echo 'installed')"
-        INSTALLED="$INSTALLED rustyclaw"
-    else
-        err "RustyClaw binary not found in PATH after install"
-        FAILED="$FAILED rustyclaw"
+    # Only what was asked for is checked. A client nobody selected is missing
+    # on purpose, and reporting that as a problem trains people to ignore the
+    # warnings that do mean something.
+    if want_client cli; then
+        if has rustyclaw; then
+            success "RustyClaw $(rustyclaw --version 2>/dev/null || echo 'installed')"
+            INSTALLED="$INSTALLED rustyclaw"
+        else
+            err "RustyClaw binary not found in PATH after install"
+            FAILED="$FAILED rustyclaw"
+        fi
     fi
-    if has rustyclaw-gateway; then
-        success "RustyClaw gateway daemon installed"
-    else
-        warn "rustyclaw-gateway not found in PATH after install — 'gateway start/restart' will fail until it is installed"
+    if want_client gateway; then
+        if has rustyclaw-gateway; then
+            success "RustyClaw gateway daemon installed"
+        else
+            err "rustyclaw-gateway not found in PATH after install — 'gateway start/restart' will fail until it is installed"
+            FAILED="$FAILED rustyclaw-gateway"
+        fi
     fi
-    if has rustyclaw-tui; then
-        success "RustyClaw terminal UI client installed"
-    else
-        warn "rustyclaw-tui not found in PATH after install — 'rustyclaw tui' will fail until it is installed"
+    if want_client tui; then
+        if has rustyclaw-tui; then
+            success "RustyClaw terminal UI client installed"
+        else
+            err "rustyclaw-tui not found in PATH after install — 'rustyclaw tui' will fail until it is installed"
+            FAILED="$FAILED rustyclaw-tui"
+        fi
     fi
-    if has rustyclaw-desktop; then
-        success "RustyClaw desktop client installed"
-        install_desktop_launcher
-    else
-        warn "rustyclaw-desktop not found in PATH after install — 'rustyclaw desktop' will fail (desktop also needs GTK/WebKit dev libs on Linux)"
+    if want_client desktop; then
+        if has rustyclaw-desktop; then
+            success "RustyClaw desktop client installed"
+            install_desktop_launcher
+        else
+            err "rustyclaw-desktop not found in PATH after install — 'rustyclaw desktop' will fail (desktop also needs GTK/WebKit dev libs on Linux)"
+            FAILED="$FAILED rustyclaw-desktop"
+        fi
     fi
 else
     SKIPPED="$SKIPPED rustyclaw"
