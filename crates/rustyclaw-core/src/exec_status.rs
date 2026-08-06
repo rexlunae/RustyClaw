@@ -333,6 +333,7 @@ fn state_label(status: sysinfo::ProcessStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ignore::Ignore;
 
     #[test]
     fn register_and_drop_removes_entry() {
@@ -415,7 +416,7 @@ mod tests {
         let sampled = sampled.expect("an exited child should stop reading as alive");
         assert_eq!(sampled.state.as_deref(), Some("exited"));
 
-        let _ = child.wait();
+        child.wait().ignore();
     }
 
     #[cfg(unix)]
@@ -443,7 +444,7 @@ mod tests {
         drop(guard);
         // Reap the child so the test process doesn't leave a zombie.
         let mut child = child;
-        let _ = child.wait();
+        child.wait().ignore();
     }
 
     #[test]

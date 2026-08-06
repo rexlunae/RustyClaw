@@ -1,5 +1,6 @@
 //! (onboard submodule)
 
+use rustyclaw_core::ignore::Ignore;
 use std::io::{self, BufRead, Write};
 
 use anyhow::Result;
@@ -285,7 +286,7 @@ pub(crate) fn fuzzy_select(items: &[impl AsRef<str>], heading_text: &str) -> Res
     })();
 
     // Always restore cooked mode.
-    let _ = ct::disable_raw_mode();
+    ct::disable_raw_mode().ignore();
 
     result
 }
@@ -417,7 +418,7 @@ pub(crate) fn arrow_select(items: &[impl AsRef<str>], heading_text: &str) -> Res
     })();
 
     // Always restore cooked mode.
-    let _ = ct::disable_raw_mode();
+    ct::disable_raw_mode().ignore();
 
     result
 }
@@ -457,7 +458,7 @@ pub(crate) fn prompt_secret(_reader: &mut impl BufRead, prompt: &str) -> Result<
     })();
 
     // Always restore cooked mode, even on error.
-    let _ = terminal::disable_raw_mode();
+    terminal::disable_raw_mode().ignore();
     // Print newline since Enter was consumed without echo.
     println!();
 

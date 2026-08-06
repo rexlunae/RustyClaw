@@ -16,6 +16,7 @@
 //! so do two installations pointed at different settings directories, which
 //! keying by agent id would have collapsed into one.
 
+use crate::ignore::Ignore;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
@@ -180,7 +181,7 @@ fn sweep_abandoned_deletes(agents_root: &Path) {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         if name.starts_with('.') && name.contains(".deleting.") {
-            let _ = std::fs::remove_dir_all(entry.path());
+            std::fs::remove_dir_all(entry.path()).ignore();
         }
     }
 }
@@ -254,7 +255,7 @@ mod tests {
             "rustyclaw-mgr-registry-{}-{name}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

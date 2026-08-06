@@ -3,6 +3,7 @@
 //! Wraps the existing `tools/ollama.rs` logic behind the [`LocalEngine`] trait.
 
 use super::*;
+use crate::ignore::Ignore;
 use anyhow::Result;
 use serde_json::Value;
 
@@ -173,10 +174,12 @@ impl LocalEngine for OllamaEngine {
         let os = std::env::consts::OS;
         match os {
             "macos" => {
-                let _ = Self::sh("brew services start ollama 2>/dev/null || nohup ollama serve > /dev/null 2>&1 &").await;
+                Self::sh("brew services start ollama 2>/dev/null || nohup ollama serve > /dev/null 2>&1 &").await.ignore();
             }
             _ => {
-                let _ = Self::sh("nohup ollama serve > /dev/null 2>&1 &").await;
+                Self::sh("nohup ollama serve > /dev/null 2>&1 &")
+                    .await
+                    .ignore();
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -283,15 +286,15 @@ impl LocalEngine for OllamaEngine {
                     };
                     last_status = status.clone();
                     if let Some(ref tx) = sink {
-                        let _ = tx
-                            .send(PullProgress {
-                                model: model.to_string(),
-                                status,
-                                percent: pct,
-                                downloaded_bytes: completed,
-                                total_bytes: total,
-                            })
-                            .await;
+                        tx.send(PullProgress {
+                            model: model.to_string(),
+                            status,
+                            percent: pct,
+                            downloaded_bytes: completed,
+                            total_bytes: total,
+                        })
+                        .await
+                        .ignore();
                     }
                 }
             }

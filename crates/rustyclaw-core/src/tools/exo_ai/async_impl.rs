@@ -2,6 +2,7 @@
 
 #![allow(unused_imports)]
 use super::*;
+use crate::ignore::Ignore;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -65,8 +66,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> ToolR
                 existing
             } else {
                 let target = exo_repo_dir();
-                let _ =
-                    tokio::fs::create_dir_all(target.parent().unwrap_or(Path::new("/tmp"))).await;
+                tokio::fs::create_dir_all(target.parent().unwrap_or(Path::new("/tmp"))).await.ignore();
                 match sh_async(&format!(
                     "git clone https://github.com/exo-explore/exo '{}' 2>&1",
                     target.display()

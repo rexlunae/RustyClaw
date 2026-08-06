@@ -4,6 +4,7 @@
 //! model provider, storing an API key, picking a default model, and
 //! initialising the SOUL.
 
+use rustyclaw_core::ignore::Ignore;
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
@@ -150,8 +151,8 @@ pub fn run_onboard_wizard(
 
     // On reset, remove the old vault so we start fresh.
     if reset && vault_exists {
-        let _ = std::fs::remove_file(&vault_path);
-        let _ = std::fs::remove_file(&key_path);
+        std::fs::remove_file(&vault_path).ignore();
+        std::fs::remove_file(&key_path).ignore();
         config.secrets_password_protected = false;
         config.totp_enabled = false;
         println!("  {}", t::icon_ok("Previous secrets vault removed."));

@@ -1,6 +1,7 @@
 //! Keyboard event handling for the TUI root: dialog focus + dispatch.
 
 use iocraft::prelude::*;
+use rustyclaw_core::ignore::Ignore;
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -191,7 +192,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::Quit);
+                                tx.send(UserInput::Quit).ignore();
                             }
                         }
                     }
@@ -226,7 +227,7 @@ pub(super) fn apply_key_event(
                             auth_error.set("Verifying…".to_string());
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::AuthResponse(code_val));
+                                    tx.send(UserInput::AuthResponse(code_val)).ignore();
                                 }
                             }
                         }
@@ -244,7 +245,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::Quit);
+                                tx.send(UserInput::Quit).ignore();
                             }
                         }
                     }
@@ -264,8 +265,8 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ =
-                                    tx.send(UserInput::ToolApprovalResponse { id, approved: true });
+                                tx.send(UserInput::ToolApprovalResponse { id, approved: true })
+                                    .ignore();
                             }
                         }
                     }
@@ -281,10 +282,11 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::ToolApprovalResponse {
+                                tx.send(UserInput::ToolApprovalResponse {
                                     id,
                                     approved: false,
-                                });
+                                })
+                                .ignore();
                             }
                         }
                     }
@@ -307,7 +309,8 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::ToolApprovalResponse { id, approved });
+                                tx.send(UserInput::ToolApprovalResponse { id, approved })
+                                    .ignore();
                             }
                         }
                     }
@@ -342,7 +345,7 @@ pub(super) fn apply_key_event(
                             show_provider_selector.set(false);
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::SelectProvider(id.clone()));
+                                    tx.send(UserInput::SelectProvider(id.clone())).ignore();
                                 }
                             }
                         }
@@ -377,10 +380,11 @@ pub(super) fn apply_key_event(
                             api_key_input.set(String::new());
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::SubmitApiKey {
+                                    tx.send(UserInput::SubmitApiKey {
                                         provider,
                                         key: key_val,
-                                    });
+                                    })
+                                    .ignore();
                                 }
                             }
                         }
@@ -398,7 +402,7 @@ pub(super) fn apply_key_event(
                         device_flow_browser_opened.set(false);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::CancelProviderFlow);
+                                tx.send(UserInput::CancelProviderFlow).ignore();
                             }
                         }
                     }
@@ -443,10 +447,11 @@ pub(super) fn apply_key_event(
                             if let Ok(guard) = tx_for_keys.lock()
                                 && let Some(ref tx) = *guard
                             {
-                                let _ = tx.send(UserInput::SelectModel {
+                                tx.send(UserInput::SelectModel {
                                     provider,
                                     model: model.clone(),
-                                });
+                                })
+                                .ignore();
                             }
                         }
                     }
@@ -485,7 +490,7 @@ pub(super) fn apply_key_event(
                                 && let Some(ref tx) = *guard
                             {
                                 // Dialog closes when AgentSwitched arrives.
-                                let _ = tx.send(UserInput::AgentSwitch(agent.id.clone()));
+                                tx.send(UserInput::AgentSwitch(agent.id.clone())).ignore();
                             }
                         }
                     }
@@ -501,7 +506,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::Quit);
+                                tx.send(UserInput::Quit).ignore();
                             }
                         }
                     }
@@ -530,7 +535,7 @@ pub(super) fn apply_key_event(
                             vault_error.set("Unlocking…".to_string());
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::VaultUnlock(pw));
+                                    tx.send(UserInput::VaultUnlock(pw)).ignore();
                                 }
                             }
                         }
@@ -549,7 +554,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::Quit);
+                                tx.send(UserInput::Quit).ignore();
                             }
                         }
                     }
@@ -593,11 +598,12 @@ pub(super) fn apply_key_event(
                                     // Send connection request to async handler
                                     if let Ok(guard) = tx_for_keys.lock() {
                                         if let Some(ref tx) = *guard {
-                                            let _ = tx.send(UserInput::PairingConnect {
+                                            tx.send(UserInput::PairingConnect {
                                                 host,
                                                 port,
                                                 public_key,
-                                            });
+                                            })
+                                            .ignore();
                                         }
                                     }
                                 }
@@ -685,7 +691,7 @@ pub(super) fn apply_key_event(
                             let name = result.name.clone();
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::HatchingComplete(payload));
+                                    tx.send(UserInput::HatchingComplete(payload)).ignore();
                                 }
                             }
                             let mut m = messages.read().clone();
@@ -718,7 +724,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::Quit);
+                                tx.send(UserInput::Quit).ignore();
                             }
                         }
                     }
@@ -732,11 +738,11 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::UserPromptResponse {
+                                tx.send(UserInput::UserPromptResponse {
                                         id,
                                         dismissed: true,
                                         value: rustyclaw_core::user_prompt_types::PromptResponseValue::Text(String::new()),
-                                    });
+                                    }).ignore();
                             }
                         }
                     }
@@ -909,11 +915,12 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::UserPromptResponse {
+                                tx.send(UserInput::UserPromptResponse {
                                     id,
                                     dismissed: false,
                                     value,
-                                });
+                                })
+                                .ignore();
                             }
                         }
                     }
@@ -929,7 +936,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::Quit);
+                                tx.send(UserInput::Quit).ignore();
                             }
                         }
                     }
@@ -942,11 +949,12 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::CredentialResponse {
+                                tx.send(UserInput::CredentialResponse {
                                     id,
                                     dismissed: true,
                                     value: None,
-                                });
+                                })
+                                .ignore();
                             }
                         }
                     }
@@ -971,11 +979,12 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::CredentialResponse {
+                                tx.send(UserInput::CredentialResponse {
                                     id,
                                     dismissed: false,
                                     value: Some(input),
-                                });
+                                })
+                                .ignore();
                             }
                         }
                     }

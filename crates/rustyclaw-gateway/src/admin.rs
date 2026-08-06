@@ -5,6 +5,7 @@
 //! model), `SetAgentName`, and `SetWorkingDirectory`. Each updates the relevant
 //! shared state and, where appropriate, streams a status frame back.
 
+use rustyclaw_core::ignore::Ignore;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -79,7 +80,7 @@ pub(crate) async fn handle_reload(
                     } else {
                         format!("{}/{}", ctx.provider, ctx.model)
                     };
-                    let _ = reg.set_active(&qualified);
+                    reg.set_active(&qualified).ignore();
                 }
             }
 

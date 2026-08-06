@@ -21,6 +21,7 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::{
     BulmaColor, Modal, ModalCard, ModalCardBody, ModalCardFoot, ModalCardHead,
 };
+use rustyclaw_core::ignore::Ignore;
 use rustyclaw_view::Tone;
 
 mod analytics;
@@ -101,7 +102,7 @@ pub use vault_unlock::VaultUnlockDialog;
 pub(crate) fn copy_to_clipboard(text: String) {
     spawn(async move {
         let js = format!("navigator.clipboard.writeText({:?})", text);
-        let _ = document::eval(&js).await;
+        document::eval(&js).await.ignore();
     });
 }
 

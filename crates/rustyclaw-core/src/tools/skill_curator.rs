@@ -6,6 +6,7 @@
 //! 2. A scheduled curator that grades existing skills, merges duplicates,
 //!    and prunes low-value ones (modeled on Hermes' ~7-day cycle).
 
+use crate::ignore::Ignore;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -275,7 +276,7 @@ fn exec_merge(args: &Value, workspace_dir: &Path) -> ToolResult {
 
         // Remove source directory
         let source_dir = skills_dir.join(source);
-        let _ = std::fs::remove_dir_all(&source_dir);
+        std::fs::remove_dir_all(&source_dir).ignore();
 
         debug!(source, target, "Skills merged");
         Ok(json!({

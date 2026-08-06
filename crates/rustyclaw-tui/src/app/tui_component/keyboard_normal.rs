@@ -1,6 +1,7 @@
 //! Normal-mode (no dialog open) keyboard handling for the TUI root.
 
 use iocraft::prelude::*;
+use rustyclaw_core::ignore::Ignore;
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -301,7 +302,7 @@ pub(super) fn handle_normal_key(
         let send_input = |input: UserInput| {
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(input);
+                    tx.send(input).ignore();
                 }
             }
         };
@@ -585,7 +586,7 @@ pub(super) fn handle_normal_key(
         let send_input = |input: UserInput| {
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(input);
+                    tx.send(input).ignore();
                 }
             }
         };
@@ -719,7 +720,7 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            let _ = tx.send(UserInput::ToggleSkill { name });
+                            tx.send(UserInput::ToggleSkill { name }).ignore();
                         }
                     }
                 }
@@ -770,7 +771,7 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            let _ = tx.send(UserInput::CycleToolPermission { name });
+                            tx.send(UserInput::CycleToolPermission { name }).ignore();
                         }
                     }
                 }
@@ -803,7 +804,7 @@ pub(super) fn handle_normal_key(
                         if !name.is_empty() && !value.is_empty() {
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::AddSecret { name, value });
+                                    tx.send(UserInput::AddSecret { name, value }).ignore();
                                 }
                             }
                         }
@@ -881,10 +882,11 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            let _ = tx.send(UserInput::CycleSecretPolicy {
+                            tx.send(UserInput::CycleSecretPolicy {
                                 name,
                                 current_policy: policy,
-                            });
+                            })
+                            .ignore();
                         }
                     }
                 }
@@ -898,7 +900,7 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            let _ = tx.send(UserInput::DeleteSecret { name });
+                            tx.send(UserInput::DeleteSecret { name }).ignore();
                         }
                     }
                 }
@@ -926,7 +928,7 @@ pub(super) fn handle_normal_key(
             should_quit.set(true);
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::Quit);
+                    tx.send(UserInput::Quit).ignore();
                 }
             }
         }
@@ -945,10 +947,11 @@ pub(super) fn handle_normal_key(
                 };
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        let _ = tx.send(UserInput::ProcessControl {
+                        tx.send(UserInput::ProcessControl {
                             pid: ap.pid,
                             action,
-                        });
+                        })
+                        .ignore();
                     }
                 }
                 // Flip optimistically so the inline hint switches between
@@ -965,10 +968,11 @@ pub(super) fn handle_normal_key(
             if let Some(ap) = active_process.read().clone() {
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        let _ = tx.send(UserInput::ProcessControl {
+                        tx.send(UserInput::ProcessControl {
                             pid: ap.pid,
                             action: rustyclaw_core::exec_status::ProcessControlAction::Stop,
-                        });
+                        })
+                        .ignore();
                     }
                 }
             }
@@ -979,10 +983,11 @@ pub(super) fn handle_normal_key(
             if let Some(ap) = active_process.read().clone() {
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        let _ = tx.send(UserInput::ProcessControl {
+                        tx.send(UserInput::ProcessControl {
                             pid: ap.pid,
                             action: rustyclaw_core::exec_status::ProcessControlAction::Kill,
-                        });
+                        })
+                        .ignore();
                     }
                 }
             }
@@ -1002,12 +1007,13 @@ pub(super) fn handle_normal_key(
             messages.set(m);
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::CancelCurrentRequest {
+                    tx.send(UserInput::CancelCurrentRequest {
                         // Stop what the user is looking at. With a turn
                         // running in several threads, the one on screen is
                         // the only one they can have meant.
                         thread_id: foreground_thread_id.get(),
-                    });
+                    })
+                    .ignore();
                 }
             }
         }
@@ -1184,7 +1190,7 @@ pub(super) fn handle_normal_key(
                 // Send thread switch request
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        let _ = tx.send(UserInput::ThreadSwitch(thread.id));
+                        tx.send(UserInput::ThreadSwitch(thread.id)).ignore();
                     }
                 }
             }
@@ -1208,8 +1214,8 @@ pub(super) fn handle_normal_key(
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
                         if val.starts_with('/') {
-                            let _ = tx
-                                .send(UserInput::Command(val.trim_start_matches('/').to_string()));
+                            tx.send(UserInput::Command(val.trim_start_matches('/').to_string()))
+                                .ignore();
                         } else {
                             let mut m = messages.read().clone();
                             m.push(DisplayMessage::user(&val));
@@ -1228,10 +1234,11 @@ pub(super) fn handle_normal_key(
                                 running.insert(thread);
                                 in_flight.set(running);
                             }
-                            let _ = tx.send(UserInput::Chat {
+                            tx.send(UserInput::Chat {
                                 text: val,
                                 thread_id: foreground_thread_id.get(),
-                            });
+                            })
+                            .ignore();
                         }
                     }
                 }
@@ -1398,7 +1405,7 @@ pub(super) fn handle_normal_key(
                 let dir = dirs::home_dir()
                     .map(|h| h.join(".rustyclaw").join("messages"))
                     .unwrap_or_else(|| std::path::PathBuf::from("."));
-                let _ = std::fs::create_dir_all(&dir);
+                std::fs::create_dir_all(&dir).ignore();
                 let filename = format!("{}.md", chrono::Utc::now().format("%Y%m%dT%H%M%SZ"));
                 let path = dir.join(&filename);
                 let saved = std::fs::write(&path, &content);
@@ -1465,9 +1472,10 @@ pub(super) fn refresh_slash_completions(
             model_completion_loading.set(Some(current_pid.clone()));
             if let Ok(guard) = tx.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::FetchModelCompletions {
+                    tx.send(UserInput::FetchModelCompletions {
                         provider: current_pid.clone(),
-                    });
+                    })
+                    .ignore();
                 }
             }
         }
@@ -1482,10 +1490,11 @@ pub(super) fn refresh_slash_completions(
                 hub_completion_loading.set(Some(ctx.query.clone()));
                 if let Ok(guard) = tx.lock() {
                     if let Some(ref tx) = *guard {
-                        let _ = tx.send(UserInput::FetchHubModelCompletions {
+                        tx.send(UserInput::FetchHubModelCompletions {
                             query: ctx.query.clone(),
                             gguf_only: ctx.gguf_only,
-                        });
+                        })
+                        .ignore();
                     }
                 }
             }

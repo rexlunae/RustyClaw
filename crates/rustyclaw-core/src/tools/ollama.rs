@@ -6,6 +6,7 @@
 //
 // Provides both sync and async implementations.
 
+use crate::ignore::Ignore;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -66,10 +67,12 @@ pub async fn exec_ollama_manage_async(args: &Value, _workspace_dir: &Path) -> To
             let os = std::env::consts::OS;
             match os {
                 "macos" => {
-                    let _ = sh_async("brew services start ollama 2>/dev/null || nohup ollama serve > /dev/null 2>&1 &").await;
+                    sh_async("brew services start ollama 2>/dev/null || nohup ollama serve > /dev/null 2>&1 &").await.ignore();
                 }
                 _ => {
-                    let _ = sh_async("nohup ollama serve > /dev/null 2>&1 &").await;
+                    sh_async("nohup ollama serve > /dev/null 2>&1 &")
+                        .await
+                        .ignore();
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -533,12 +536,12 @@ pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
             let os = std::env::consts::OS;
             match os {
                 "macos" => {
-                    let _ = sh(
+                    sh(
                         "brew services start ollama 2>/dev/null || nohup ollama serve > /dev/null 2>&1 &",
-                    );
+                    ).ignore();
                 }
                 _ => {
-                    let _ = sh("nohup ollama serve > /dev/null 2>&1 &");
+                    sh("nohup ollama serve > /dev/null 2>&1 &").ignore();
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(2));

@@ -11,6 +11,7 @@
 //   The iocraft component owns ALL UI state and runs entirely on smol.
 //   No Arc<Mutex<_>> shared state — just channels.
 
+use rustyclaw_core::ignore::Ignore;
 use rustyclaw_view::anyhow::Result;
 use rustyclaw_view::{tokio, tracing, url};
 use std::sync::mpsc as sync_mpsc;
@@ -483,16 +484,22 @@ impl App {
                         .await
                         {
                             Ok(models) => {
-                                let _ = gw_tx2
-                                    .send(GwEvent::ModelCompletionsLoaded { provider, models });
+                                gw_tx2
+                                    .send(GwEvent::ModelCompletionsLoaded { provider, models })
+                                    .ignore();
                             }
                             Err(e) => {
-                                let _ = gw_tx2.send(GwEvent::Warning {
-                                    summary: format!("Failed to load model completions: {:#}", e),
-                                    details: Some(rustyclaw_core::error_details::render_extended(
-                                        &e,
-                                    )),
-                                });
+                                gw_tx2
+                                    .send(GwEvent::Warning {
+                                        summary: format!(
+                                            "Failed to load model completions: {:#}",
+                                            e
+                                        ),
+                                        details: Some(
+                                            rustyclaw_core::error_details::render_extended(&e),
+                                        ),
+                                    })
+                                    .ignore();
                             }
                         }
                     });
@@ -515,7 +522,9 @@ impl App {
                                 .await
                                 .map(|models| models.into_iter().map(|m| m.id).collect())
                                 .unwrap_or_default();
-                        let _ = gw_tx2.send(GwEvent::HubModelCompletionsLoaded { query, models });
+                        gw_tx2
+                            .send(GwEvent::HubModelCompletionsLoaded { query, models })
+                            .ignore();
                     });
                 }
                 Ok(UserInput::Command(cmd)) => {
@@ -547,7 +556,7 @@ impl App {
                     if let Some(skill) = skill_manager.get_skills().iter().find(|s| s.name == name)
                     {
                         let new_enabled = !skill.enabled;
-                        let _ = skill_manager.set_skill_enabled(&name, new_enabled);
+                        skill_manager.set_skill_enabled(&name, new_enabled).ignore();
                         // Re-send updated skills list
                         let skills_list: Vec<_> = skill_manager
                             .get_skills()
@@ -783,21 +792,23 @@ impl App {
                                     .await
                                     {
                                         Ok(models) => {
-                                            let _ = gw_tx2.send(GwEvent::ShowModelSelector {
-                                                provider: pid,
-                                                provider_display: display,
-                                                models,
-                                            });
+                                            gw_tx2
+                                                .send(GwEvent::ShowModelSelector {
+                                                    provider: pid,
+                                                    provider_display: display,
+                                                    models,
+                                                })
+                                                .ignore();
                                         }
                                         Err(e) => {
-                                            let _ = gw_tx2.send(GwEvent::Error {
+                                            gw_tx2.send(GwEvent::Error {
                                                 summary: format!("Failed to fetch models: {:#}", e),
                                                 details: Some(
                                                     rustyclaw_core::error_details::render_extended(
                                                         &e,
                                                     ),
                                                 ),
-                                            });
+                                            }).ignore();
                                         }
                                     }
                                 });
@@ -859,17 +870,19 @@ impl App {
                                         .await
                                         {
                                             Ok(models) => {
-                                                let _ = gw_tx2.send(GwEvent::ShowModelSelector {
-                                                    provider: pid,
-                                                    provider_display: display,
-                                                    models,
-                                                });
+                                                gw_tx2
+                                                    .send(GwEvent::ShowModelSelector {
+                                                        provider: pid,
+                                                        provider_display: display,
+                                                        models,
+                                                    })
+                                                    .ignore();
                                             }
                                             Err(e) => {
-                                                let _ = gw_tx2.send(GwEvent::Error {
+                                                gw_tx2.send(GwEvent::Error {
                                                 summary: format!("Failed to fetch models: {:#}", e),
                                                 details: Some(rustyclaw_core::error_details::render_extended(&e)),
-                                            });
+                                            }).ignore();
                                             }
                                         }
                                     });
@@ -940,17 +953,19 @@ impl App {
                                         .await
                                         {
                                             Ok(models) => {
-                                                let _ = gw_tx2.send(GwEvent::ShowModelSelector {
-                                                    provider: pid,
-                                                    provider_display: display,
-                                                    models,
-                                                });
+                                                gw_tx2
+                                                    .send(GwEvent::ShowModelSelector {
+                                                        provider: pid,
+                                                        provider_display: display,
+                                                        models,
+                                                    })
+                                                    .ignore();
                                             }
                                             Err(e) => {
-                                                let _ = gw_tx2.send(GwEvent::Error {
+                                                gw_tx2.send(GwEvent::Error {
                                                 summary: format!("Failed to fetch models: {:#}", e),
                                                 details: Some(rustyclaw_core::error_details::render_extended(&e)),
-                                            });
+                                            }).ignore();
                                             }
                                         }
                                     });
@@ -976,12 +991,15 @@ impl App {
                                                 Ok(auth_resp) => {
                                                     // A client-local flow,
                                                     // owned by no turn.
-                                                    let _ = gw_tx2.send(GwEvent::DeviceFlowCode {
-                                                        owner: crate::app::DeviceFlowOwner::Local,
-                                                        provider: pid.clone(),
-                                                        url: auth_resp.verification_uri.clone(),
-                                                        code: auth_resp.user_code.clone(),
-                                                    });
+                                                    gw_tx2
+                                                        .send(GwEvent::DeviceFlowCode {
+                                                            owner:
+                                                                crate::app::DeviceFlowOwner::Local,
+                                                            provider: pid.clone(),
+                                                            url: auth_resp.verification_uri.clone(),
+                                                            code: auth_resp.user_code.clone(),
+                                                        })
+                                                        .ignore();
                                                     // Poll for the token with the interval from the response
                                                     let interval = std::time::Duration::from_secs(
                                                         auth_resp.interval.max(5),
@@ -993,48 +1011,48 @@ impl App {
                                                     loop {
                                                         tokio::time::sleep(interval).await;
                                                         if tokio::time::Instant::now() >= deadline {
-                                                            let _ = gw_tx2
+                                                            gw_tx2
                                                                 .send(GwEvent::DeviceFlowDone(
                                                                 crate::app::DeviceFlowOwner::Local,
-                                                            ));
-                                                            let _ = gw_tx2.send(GwEvent::error(
+                                                            )).ignore();
+                                                            gw_tx2.send(GwEvent::error(
                                                                 "Device flow timed out — please try again.".to_string(),
-                                                            ));
+                                                            )).ignore();
                                                             break;
                                                         }
                                                         match rustyclaw_core::providers::poll_device_token(
                                                             df_config, &auth_resp.device_code,
                                                         ).await {
                                                             Ok(Some(token)) => {
-                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local));
-                                                                let _ = gw_tx2.send(GwEvent::Success(format!(
+                                                                gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local)).ignore();
+                                                                gw_tx2.send(GwEvent::Success(format!(
                                                                     "✓ {} authenticated!", display
-                                                                )));
-                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowToken {
+                                                                ))).ignore();
+                                                                gw_tx2.send(GwEvent::DeviceFlowToken {
                                                                     provider: pid.clone(),
                                                                     token,
-                                                                });
+                                                                }).ignore();
                                                                 break;
                                                             }
                                                             Ok(None) => {
                                                                 // Still pending — continue polling
                                                             }
                                                             Err(e) => {
-                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local));
-                                                                let _ = gw_tx2.send(GwEvent::Error {
+                                                                gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local)).ignore();
+                                                                gw_tx2.send(GwEvent::Error {
                                                                     summary: format!("Device flow failed: {:#}", e),
                                                                     details: Some(rustyclaw_core::error_details::render_extended(&e)),
-                                                                });
+                                                                }).ignore();
                                                                 break;
                                                             }
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    let _ = gw_tx2.send(GwEvent::Error {
+                                                    gw_tx2.send(GwEvent::Error {
                                                 summary: format!("Failed to start device flow: {:#}", e),
                                                 details: Some(rustyclaw_core::error_details::render_extended(&e)),
-                                            });
+                                            }).ignore();
                                                 }
                                             }
                                         });
@@ -1118,19 +1136,23 @@ impl App {
                         .await
                         {
                             Ok(models) => {
-                                let _ = gw_tx2.send(GwEvent::ShowModelSelector {
-                                    provider: pid,
-                                    provider_display: display,
-                                    models,
-                                });
+                                gw_tx2
+                                    .send(GwEvent::ShowModelSelector {
+                                        provider: pid,
+                                        provider_display: display,
+                                        models,
+                                    })
+                                    .ignore();
                             }
                             Err(e) => {
-                                let _ = gw_tx2.send(GwEvent::Error {
-                                    summary: format!("Failed to fetch models: {:#}", e),
-                                    details: Some(rustyclaw_core::error_details::render_extended(
-                                        &e,
-                                    )),
-                                });
+                                gw_tx2
+                                    .send(GwEvent::Error {
+                                        summary: format!("Failed to fetch models: {:#}", e),
+                                        details: Some(
+                                            rustyclaw_core::error_details::render_extended(&e),
+                                        ),
+                                    })
+                                    .ignore();
                             }
                         }
                     });
@@ -1206,10 +1228,14 @@ impl App {
                     tokio::spawn(async move {
                         match crate::pairing::connect_and_pair(&host, port, &public_key).await {
                             Ok(gateway_name) => {
-                                let _ = gw_tx_pair.send(GwEvent::PairingSuccess { gateway_name });
+                                gw_tx_pair
+                                    .send(GwEvent::PairingSuccess { gateway_name })
+                                    .ignore();
                             }
                             Err(e) => {
-                                let _ = gw_tx_pair.send(GwEvent::PairingError(e.to_string()));
+                                gw_tx_pair
+                                    .send(GwEvent::PairingError(e.to_string()))
+                                    .ignore();
                             }
                         }
                     });
@@ -1224,7 +1250,7 @@ impl App {
         }
 
         // Wait for render thread to finish
-        let _ = render_handle.await;
+        render_handle.await.ignore();
         Ok(())
     }
 }

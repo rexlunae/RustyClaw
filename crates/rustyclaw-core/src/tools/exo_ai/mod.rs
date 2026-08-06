@@ -2,6 +2,7 @@
 //!
 //! Async implementations live in `async_impl`.
 
+use crate::ignore::Ignore;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -227,7 +228,7 @@ fn find_exo_repo() -> Option<PathBuf> {
 fn exo_log_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let log_dir = PathBuf::from(home).join(".rustyclaw");
-    let _ = std::fs::create_dir_all(&log_dir);
+    std::fs::create_dir_all(&log_dir).ignore();
     log_dir.join("exo.log")
 }
 

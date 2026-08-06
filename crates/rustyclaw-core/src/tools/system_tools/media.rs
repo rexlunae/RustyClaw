@@ -1,6 +1,7 @@
 //! Media tools: screenshot capture and clipboard access.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
+use crate::ignore::Ignore;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -38,7 +39,7 @@ pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> ToolRe
     };
 
     if let Some(parent) = target.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        tokio::fs::create_dir_all(parent).await.ignore();
     }
 
     let mut cmd_parts = vec!["screencapture", "-x"];
@@ -60,7 +61,7 @@ pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> ToolRe
 
     let result = sh_async(&cmd).await;
     if result.is_err() || !tokio::fs::try_exists(&target).await.unwrap_or(false) {
-        let _ = sh_async(&fallback).await;
+        sh_async(&fallback).await.ignore();
     }
 
     if tokio::fs::try_exists(&target).await.unwrap_or(false) {
@@ -121,7 +122,7 @@ pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> ToolResult {
     };
 
     if let Some(parent) = target.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).ignore();
     }
 
     let mut cmd_args = vec!["-x".to_string()];

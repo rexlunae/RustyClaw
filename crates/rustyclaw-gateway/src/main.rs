@@ -44,6 +44,7 @@ mod trigger_dispatch;
 mod trigger_manager;
 mod workspace_files;
 
+use rustyclaw_core::ignore::Ignore;
 use std::io::IsTerminal;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -359,7 +360,7 @@ async fn main() -> Result<()> {
     let cancel_for_signal = cancel.clone();
     let settings_dir = config.settings_dir.clone();
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
+        tokio::signal::ctrl_c().await.ignore();
         cancel_for_signal.cancel();
     });
 

@@ -14,6 +14,7 @@
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons};
+use rustyclaw_core::ignore::Ignore;
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, PromptType, UserPrompt};
 
 #[derive(Props, Clone, PartialEq)]
@@ -192,7 +193,7 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
             onmounted: move |evt: Event<MountedData>| {
                 if focus_card {
                     spawn(async move {
-                        let _ = evt.set_focus(true).await;
+                        evt.set_focus(true).await.ignore();
                     });
                 }
             },
@@ -216,7 +217,7 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                             autofocus: true,
                             onmounted: move |evt: Event<MountedData>| {
                                 spawn(async move {
-                                    let _ = evt.set_focus(true).await;
+                                    evt.set_focus(true).await.ignore();
                                 });
                             },
                             oninput: move |evt| text_input.set(evt.value()),
@@ -309,7 +310,7 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                                     onmounted: move |evt: Event<MountedData>| {
                                         if i == 0 {
                                             spawn(async move {
-                                                let _ = evt.set_focus(true).await;
+                                                evt.set_focus(true).await.ignore();
                                             });
                                         }
                                     },

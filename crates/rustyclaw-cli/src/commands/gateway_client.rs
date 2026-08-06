@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use futures_util::{SinkExt, StreamExt};
+use rustyclaw_core::ignore::Ignore;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
@@ -340,7 +341,7 @@ pub(crate) async fn send_gateway_reload(
                                     if let ServerPayload::ReloadResult { ok, provider, model, message } = frame.payload {
                                         if ok {
                                             // Close cleanly
-                                            let _ = writer.send(Message::Close(None)).await;
+                                            writer.send(Message::Close(None)).await.ignore();
                                             return Ok((provider, model));
                                         } else {
                                             let msg = message.as_deref().unwrap_or("Unknown error");
@@ -361,7 +362,7 @@ pub(crate) async fn send_gateway_reload(
                                     let provider = val.get("provider").and_then(|p| p.as_str()).unwrap_or("unknown").to_string();
                                     let model = val.get("model").and_then(|m| m.as_str()).unwrap_or("unknown").to_string();
                                     // Close cleanly
-                                    let _ = writer.send(Message::Close(None)).await;
+                                    writer.send(Message::Close(None)).await.ignore();
                                     return Ok((provider, model));
                                 } else {
                                     let msg = val.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");

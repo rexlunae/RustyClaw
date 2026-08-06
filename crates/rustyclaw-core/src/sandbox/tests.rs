@@ -2,6 +2,7 @@
 
 use super::platform::{run_unsandboxed, run_with_path_validation};
 use super::*;
+use crate::ignore::Ignore;
 
 #[test]
 fn test_capabilities_detect() {
@@ -28,7 +29,7 @@ fn test_path_validation_denied() {
     let policy = SandboxPolicy::protect_credentials("/tmp/creds", "/tmp/workspace");
     std::fs::create_dir_all("/tmp/creds").ok();
     // Ensure the file exists so canonicalize works
-    let _ = std::fs::write("/tmp/creds/secrets.json", "test");
+    std::fs::write("/tmp/creds/secrets.json", "test").ignore();
     let result = validate_path(Path::new("/tmp/creds/secrets.json"), &policy);
     assert!(result.is_err());
 }
@@ -135,7 +136,7 @@ fn test_path_validation_blocks_credentials() {
     let policy = SandboxPolicy::protect_credentials("/tmp/test_creds", "/tmp/test_workspace");
     std::fs::create_dir_all("/tmp/test_creds").ok();
     // Ensure the file exists so canonicalize works
-    let _ = std::fs::write("/tmp/test_creds/secret.txt", "test");
+    std::fs::write("/tmp/test_creds/secret.txt", "test").ignore();
     // This should fail because /tmp/test_creds is protected
     let result = run_with_path_validation("cat /tmp/test_creds/secret.txt", &policy);
     assert!(matches!(

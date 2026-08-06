@@ -7,6 +7,7 @@
 //! action, and gateway protocol all apply without new plumbing.
 
 use super::*;
+use crate::ignore::Ignore;
 use std::path::PathBuf;
 
 /// Locate the Hugging Face CLI binary.
@@ -201,15 +202,15 @@ impl LocalEngine for HuggingFaceDownloader {
         };
         let (repo, note) = super::hub::resolve_for_pull(model, false).await?;
         if let (Some(sink), Some(note)) = (sink.as_ref(), note) {
-            let _ = sink
-                .send(PullProgress {
-                    model: repo.clone(),
-                    status: note,
-                    percent: 0.0,
-                    downloaded_bytes: 0,
-                    total_bytes: 0,
-                })
-                .await;
+            sink.send(PullProgress {
+                model: repo.clone(),
+                status: note,
+                percent: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+            })
+            .await
+            .ignore();
         }
         stream_shell(
             &format!("{} download {} 2>&1", bin, sh_quote(&repo)),

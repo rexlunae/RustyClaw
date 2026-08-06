@@ -11,6 +11,7 @@
 //! All process management uses `sysinfo` and `which` for cross-platform
 //! support (macOS, Linux, Windows) with no `cfg(unix)` gates.
 
+use crate::ignore::Ignore;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,7 +52,7 @@ pub fn read_pid(settings_dir: &Path) -> Option<u32> {
 /// Remove the PID file.
 pub fn remove_pid(settings_dir: &Path) {
     let path = pid_path(settings_dir);
-    let _ = fs::remove_file(&path);
+    fs::remove_file(&path).ignore();
 }
 
 /// Check whether a process with the given PID is alive.

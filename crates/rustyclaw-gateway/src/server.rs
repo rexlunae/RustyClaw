@@ -7,6 +7,7 @@
 //! `main.rs`.
 
 use anyhow::{Context, Result};
+use rustyclaw_core::ignore::Ignore;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::Mutex;
@@ -1124,7 +1125,7 @@ pub(crate) async fn handle_connection(
                 // running would keep model calls going and then block
                 // forever on a frame channel nobody drains.
                 active_tasks.lock().await.abort_all();
-                let _ = writer.close().await;
+                writer.close().await.ignore();
                 break;
             }
             _ = async {
@@ -2350,7 +2351,9 @@ pub(crate) async fn handle_connection(
     // close-out written just above.
     drop(writer);
     drop(out_tx);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), writer_handle).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), writer_handle)
+        .await
+        .ignore();
 
     // Persist thread state on disconnect. This is the last write of the
     // session and carries everything said during it, so a failure here is
@@ -3799,7 +3802,7 @@ mod tests {
         /// Let every held request answer, and every later one pass straight
         /// through.
         fn release(&self) {
-            let _ = self.release.send(true);
+            self.release.send(true).ignore();
         }
     }
 
@@ -3963,8 +3966,8 @@ mod tests {
                             body
                         )
                     };
-                    let _ = sock.write_all(payload.as_bytes()).await;
-                    let _ = sock.shutdown().await;
+                    sock.write_all(payload.as_bytes()).await.ignore();
+                    sock.shutdown().await.ignore();
                 });
             }
         });

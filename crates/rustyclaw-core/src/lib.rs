@@ -29,6 +29,7 @@ pub mod error_details;
 pub mod exec_status;
 pub mod gateway;
 pub mod host;
+pub mod ignore;
 pub mod load;
 pub mod logging;
 pub mod markdown;

@@ -1,6 +1,7 @@
 //! Application index, cloud storage browsing, browser cache auditing.
 
 use super::{expand_tilde, sh, sh_async};
+use crate::ignore::Ignore;
 use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -225,8 +226,9 @@ pub async fn exec_browser_cache_async(args: &Value, _workspace_dir: &Path) -> To
                 }
                 for path in paths {
                     if tokio::fs::try_exists(path).await.unwrap_or(false) {
-                        let _ =
-                            sh_async(&format!("rm -rf '{}'/* 2>/dev/null", path.display())).await;
+                        sh_async(&format!("rm -rf '{}'/* 2>/dev/null", path.display()))
+                            .await
+                            .ignore();
                         cleared
                             .push(json!({ "browser": name, "path": path.display().to_string() }));
                     }

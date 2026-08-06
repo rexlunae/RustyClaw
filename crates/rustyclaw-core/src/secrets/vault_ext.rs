@@ -1,5 +1,6 @@
 //! Credential management methods for `SecretsManager` (continued from `vault`).
 
+use crate::ignore::Ignore;
 use anyhow::{Context, Result};
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 
@@ -138,7 +139,7 @@ impl SecretsManager {
             format!("val:{}:card_extra", name),
         ];
         for key in &sub_keys {
-            let _ = self.delete_secret(key);
+            self.delete_secret(key).ignore();
         }
 
         Ok(())

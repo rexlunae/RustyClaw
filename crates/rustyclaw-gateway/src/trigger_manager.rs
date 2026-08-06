@@ -19,6 +19,7 @@
 //! take effect while the gateway runs. All children are stopped when the
 //! gateway shuts down.
 
+use rustyclaw_core::ignore::Ignore;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -135,8 +136,8 @@ pub async fn run_trigger_manager(
     // Shutdown: stop every trigger process with the gateway.
     info!(count = running.len(), "Stopping trigger processes…");
     for (id, mut rt) in running.drain() {
-        let _ = rt.child.start_kill();
-        let _ = rt.child.wait().await;
+        rt.child.start_kill().ignore();
+        rt.child.wait().await.ignore();
         debug!(trigger = %id, "Trigger process stopped");
     }
     Ok(())
@@ -180,8 +181,8 @@ async fn sync(
         .collect();
     for id in stale {
         if let Some(mut rt) = running.remove(&id) {
-            let _ = rt.child.start_kill();
-            let _ = rt.child.wait().await;
+            rt.child.start_kill().ignore();
+            rt.child.wait().await.ignore();
             tokens.lock().await.remove(&rt.token);
             info!(trigger = %id, "Trigger process stopped (definition removed/changed)");
         }
@@ -341,7 +342,7 @@ async fn spawn_trigger(
             .write_all(code.as_bytes())
             .await
             .with_context(|| format!("Failed to send trigger '{}' code", def.id))?;
-        let _ = stdin.shutdown().await;
+        stdin.shutdown().await.ignore();
     }
 
     Ok((child, token))
@@ -541,7 +542,7 @@ async fn respond(stream: &mut tokio::net::TcpStream, status: u16, text: &str) ->
         body
     );
     stream.write_all(resp.as_bytes()).await?;
-    let _ = stream.shutdown().await;
+    stream.shutdown().await.ignore();
     Ok(())
 }
 
@@ -554,7 +555,7 @@ async fn respond_value(stream: &mut tokio::net::TcpStream, value: &str) -> Resul
         value
     );
     stream.write_all(resp.as_bytes()).await?;
-    let _ = stream.shutdown().await;
+    stream.shutdown().await.ignore();
     Ok(())
 }
 
@@ -705,7 +706,7 @@ sleep 600
 
         // Clean up any lingering child.
         for (_, mut rt) in running.drain() {
-            let _ = rt.child.start_kill();
+            rt.child.start_kill().ignore();
         }
         Ok(())
     }
@@ -728,13 +729,14 @@ sleep 600
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
                 };
-                let _ = handle_connection(
+                handle_connection(
                     stream,
                     accept_tokens.clone(),
                     fire_tx.clone(),
                     accept_vault.clone(),
                 )
-                .await;
+                .await
+                .ignore();
             }
         });
 
@@ -747,7 +749,7 @@ sleep 600
             );
             s.write_all(req.as_bytes()).await.unwrap();
             let mut resp = String::new();
-            let _ = s.read_to_string(&mut resp).await;
+            s.read_to_string(&mut resp).await.ignore();
             resp
         };
 
@@ -785,7 +787,9 @@ sleep 600
         let accept_vault = test_vault(std::path::Path::new("/nonexistent"));
         tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
-                let _ = handle_connection(stream, accept_tokens, fire_tx, accept_vault).await;
+                handle_connection(stream, accept_tokens, fire_tx, accept_vault)
+                    .await
+                    .ignore();
             }
         });
 
@@ -801,7 +805,7 @@ sleep 600
         )
         .await?;
         let mut resp = String::new();
-        let _ = s.read_to_string(&mut resp).await;
+        s.read_to_string(&mut resp).await.ignore();
         assert!(
             resp.starts_with("HTTP/1.1 503 Service Unavailable"),
             "expected a well-formed 503, got: {resp}"
@@ -855,13 +859,14 @@ sleep 600
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
                 };
-                let _ = handle_connection(
+                handle_connection(
                     stream,
                     accept_tokens.clone(),
                     fire_tx.clone(),
                     accept_vault.clone(),
                 )
-                .await;
+                .await
+                .ignore();
             }
         });
 
@@ -874,7 +879,7 @@ sleep 600
             );
             s.write_all(req.as_bytes()).await.unwrap();
             let mut resp = String::new();
-            let _ = s.read_to_string(&mut resp).await;
+            s.read_to_string(&mut resp).await.ignore();
             resp
         };
 

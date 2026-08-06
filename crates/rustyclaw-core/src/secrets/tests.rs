@@ -1,6 +1,7 @@
 //! Tests for the secrets manager.
 
 use super::*;
+use crate::ignore::Ignore;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
@@ -10,7 +11,7 @@ static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 fn temp_dir() -> PathBuf {
     let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!("rustyclaw_test_{}_{}", std::process::id(), id));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -23,7 +24,7 @@ fn test_secrets_manager_creation() {
 
     // Vault files should not exist yet (lazy creation)
     assert!(!dir.join("secrets.json").exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -37,7 +38,7 @@ fn test_agent_access_control() {
 
     manager.set_agent_access(false);
     assert!(!manager.has_agent_access());
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -56,7 +57,7 @@ fn test_store_and_retrieve() {
     // Non-existent key
     let missing = manager.get_secret("nope", true).unwrap();
     assert_eq!(missing, None);
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[cfg(unix)]
@@ -83,7 +84,7 @@ fn test_key_file_permissions_owner_only() {
         "secrets.key must be owner-only (0o600), got {:o}",
         mode & 0o777
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -102,7 +103,7 @@ fn test_list_and_delete() {
     manager.delete_secret("a").unwrap();
     let keys = manager.list_secrets();
     assert_eq!(keys, vec!["b".to_string()]);
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -118,7 +119,7 @@ fn test_access_denied_without_approval() {
     // With user approval → Some
     let val = manager.get_secret("secret", true).unwrap();
     assert_eq!(val, Some("value".to_string()));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -138,7 +139,7 @@ fn test_reload_from_disk() {
         let val = m.get_secret("persist", false).unwrap();
         assert_eq!(val, Some("yes".to_string()));
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -169,7 +170,7 @@ fn test_password_based_vault() {
         assert!(m.get_secret("token", true).is_err());
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -215,7 +216,7 @@ fn test_change_password() {
         assert!(m.get_secret("api_key", true).is_err());
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -250,7 +251,7 @@ fn test_change_password_between_passwords() {
         assert!(m.get_secret("secret", true).is_err());
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -310,7 +311,7 @@ fn test_totp_setup_and_verify() {
     manager.remove_totp().unwrap();
     assert!(!manager.has_totp());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── Typed credential tests ──────────────────────────────────────
@@ -341,7 +342,7 @@ fn test_store_and_retrieve_api_key() {
         CredentialValue::Single(v) => assert_eq!(v, "sk-ant-12345"),
         _ => panic!("Expected Single"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -368,7 +369,7 @@ fn test_store_and_retrieve_username_password() {
         }
         _ => panic!("Expected UserPass"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -404,7 +405,7 @@ fn test_store_http_passkey() {
         CredentialValue::Single(v) => assert_eq!(v, "cred-id-base64"),
         _ => panic!("Expected Single"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -444,7 +445,7 @@ fn test_generate_ssh_key() {
     // Delete should clean up vault entries.
     m.delete_credential("rustyclaw_agent").unwrap();
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -479,7 +480,7 @@ fn test_list_credentials() {
     assert!(!names.contains(&"legacy_key"));
     assert_eq!(creds.len(), 2);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -531,7 +532,7 @@ fn test_list_all_entries_includes_legacy_keys() {
             .any(|n| n.starts_with("cred:") || n.starts_with("val:"))
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── Access policy tests ─────────────────────────────────────────
@@ -553,7 +554,7 @@ fn test_policy_always() {
     let ctx = AccessContext::default();
     assert!(m.get_credential("open_tok", &ctx).unwrap().is_some());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -585,7 +586,7 @@ fn test_policy_with_approval_denied() {
     let ctx = AccessContext::default();
     assert!(m.get_credential("guarded", &ctx).unwrap().is_some());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -614,7 +615,7 @@ fn test_policy_with_auth() {
     };
     assert!(m.get_credential("hs", &ctx).unwrap().is_some());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -651,7 +652,7 @@ fn test_policy_skill_only() {
     };
     assert!(m.get_credential("dk", &ctx).unwrap().is_some());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -695,7 +696,7 @@ fn test_trigger_scoped_secret() {
         .unwrap();
     assert!(m.get_secret_for_trigger("stripe", "watcher").is_err());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -719,7 +720,7 @@ fn test_delete_credential() {
     let ctx = AccessContext::default();
     assert!(m.get_credential("tmp", &ctx).unwrap().is_none());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── Web-navigation credential tests ─────────────────────────────
@@ -759,7 +760,7 @@ fn test_store_and_retrieve_form_autofill() {
         }
         _ => panic!("Expected FormFields"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -822,7 +823,7 @@ fn test_store_and_retrieve_payment_method() {
     m.delete_credential("visa_4242").unwrap();
     assert_eq!(m.list_credentials().len(), 0);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -855,7 +856,7 @@ fn test_store_and_retrieve_secure_note() {
         CredentialValue::Single(v) => assert_eq!(v, note),
         _ => panic!("Expected Single"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -883,7 +884,7 @@ fn test_form_autofill_delete_cleans_fields() {
     let raw = m.get_secret("val:login:fields", false).unwrap();
     assert_eq!(raw, None);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -917,7 +918,7 @@ fn test_disable_and_reenable_credential() {
     m.set_credential_disabled("k", false).unwrap();
     assert!(m.get_credential("k", &ctx).unwrap().is_some());
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -935,7 +936,7 @@ fn test_disable_legacy_key_promotes_to_typed() {
     let bare = all.iter().find(|(n, _)| n == "MY_BARE_KEY").unwrap();
     assert!(bare.1.disabled);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -982,7 +983,7 @@ fn test_set_credential_policy() {
     let creds = m.list_credentials();
     assert_eq!(creds[0].1.policy, AccessPolicy::WithApproval);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
@@ -1001,5 +1002,5 @@ fn test_set_policy_legacy_key_promotes_to_typed() {
     let entry = all.iter().find(|(n, _)| n == "LEGACY_KEY").unwrap();
     assert_eq!(entry.1.policy, AccessPolicy::Always);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }

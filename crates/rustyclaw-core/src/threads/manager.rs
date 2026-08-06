@@ -1,6 +1,7 @@
 //! Thread manager — manages all agent threads.
 
 use super::{AgentThread, MessageRole, ThreadEvent, ThreadId, ThreadInfo, ThreadStatus};
+use crate::ignore::Ignore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -707,7 +708,7 @@ impl ThreadManager {
             Ok(()) => Ok(()),
             Err(e) => {
                 // Don't leave the temporary behind on failure.
-                let _ = std::fs::remove_file(&tmp);
+                std::fs::remove_file(&tmp).ignore();
                 Err(e)
             }
         }
@@ -798,7 +799,7 @@ impl ThreadManager {
 
     fn emit(&self, event: ThreadEvent) {
         // Ignore send errors (no subscribers)
-        let _ = self.events_tx.send(event);
+        self.events_tx.send(event).ignore();
     }
 }
 
@@ -910,7 +911,7 @@ mod tests {
         ));
         mgr.save_to_file(&path).expect("save threads");
         let loaded = ThreadManager::load_from_file(&path).expect("load threads");
-        let _ = std::fs::remove_file(&path);
+        std::fs::remove_file(&path).ignore();
         loaded
     }
 
@@ -988,7 +989,7 @@ mod tests {
             "temporary file is renamed away, not orphaned"
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// The retention sweep spares the thread a message just named.

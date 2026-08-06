@@ -536,7 +536,13 @@ impl Default for AppState {
             .ok()
             .map(|cfg| {
                 let mut sm = rustyclaw_core::soul::SoulManager::new(cfg.soul_path());
-                let _ = sm.load();
+                // A failed load leaves the manager empty, and an empty manager
+                // reads as "never hatched" — so an unreadable SOUL.md sends the
+                // user back through first-run setup for an agent that already
+                // exists. Worth a line saying which of the two happened.
+                if let Err(e) = sm.load() {
+                    tracing::warn!("treating the agent as unhatched — SOUL.md did not load: {e}");
+                }
                 sm.needs_hatching()
             })
             .unwrap_or(false);

@@ -14,6 +14,7 @@ pub mod llamacpp;
 pub mod lmstudio;
 pub mod ollama;
 
+use crate::ignore::Ignore;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -292,19 +293,19 @@ pub async fn stream_shell(
         collected.push_str(&line);
         if let Some(sink) = sink {
             // Best-effort: a dropped receiver just stops the streaming.
-            let _ = sink
-                .send(PullProgress {
-                    model: label.to_string(),
-                    status: line,
-                    percent: 0.0,
-                    downloaded_bytes: 0,
-                    total_bytes: 0,
-                })
-                .await;
+            sink.send(PullProgress {
+                model: label.to_string(),
+                status: line,
+                percent: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+            })
+            .await
+            .ignore();
         }
     }
-    let _ = out_task.await;
-    let _ = err_task.await;
+    out_task.await.ignore();
+    err_task.await.ignore();
 
     let status = child.wait().await?;
     let trimmed = collected.trim().to_string();

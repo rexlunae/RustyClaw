@@ -8,6 +8,7 @@
 //! selected agent.
 
 use anyhow::Result;
+use rustyclaw_core::ignore::Ignore;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::debug;
@@ -62,7 +63,7 @@ impl AgentSession {
     /// directory skeleton on first use.
     pub fn load(config: &Config, agent_id: &str) -> Self {
         let sessions_dir = config.sessions_dir_for(agent_id);
-        let _ = std::fs::create_dir_all(&sessions_dir);
+        std::fs::create_dir_all(&sessions_dir).ignore();
         let threads_path = sessions_dir.join("threads.json");
         let projects_path = sessions_dir.join("projects.json");
         let thread_mgr = rustyclaw_core::threads::manager_for(&threads_path);

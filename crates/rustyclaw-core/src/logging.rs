@@ -18,6 +18,7 @@
 //! RUSTYCLAW_LOG_FORMAT=json rustyclaw gateway run
 //! ```
 
+use crate::ignore::Ignore;
 use tracing_subscriber::{
     EnvFilter,
     fmt::{self, format::FmtSpan},
@@ -154,7 +155,7 @@ pub fn init(config: LogConfig) {
                     .with_thread_ids(config.with_thread_ids)
                     .with_target(config.with_target),
             );
-            let _ = tracing::subscriber::set_global_default(subscriber);
+            tracing::subscriber::set_global_default(subscriber).ignore();
         }
         LogFormat::Compact => {
             let subscriber = tracing_subscriber::registry().with(env_filter).with(
@@ -166,7 +167,7 @@ pub fn init(config: LogConfig) {
                     .with_thread_ids(config.with_thread_ids)
                     .with_target(config.with_target),
             );
-            let _ = tracing::subscriber::set_global_default(subscriber);
+            tracing::subscriber::set_global_default(subscriber).ignore();
         }
         LogFormat::Pretty => {
             let subscriber = tracing_subscriber::registry().with(env_filter).with(
@@ -178,7 +179,7 @@ pub fn init(config: LogConfig) {
                     .with_thread_ids(config.with_thread_ids)
                     .with_target(config.with_target),
             );
-            let _ = tracing::subscriber::set_global_default(subscriber);
+            tracing::subscriber::set_global_default(subscriber).ignore();
         }
     }
 }
@@ -214,7 +215,7 @@ pub fn init_for_tui(log_path: &std::path::Path) {
             .with_target(true)
             .with_writer(std::sync::Mutex::new(file).with_max_level(tracing::Level::TRACE)),
     );
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    tracing::subscriber::set_global_default(subscriber).ignore();
 }
 
 #[cfg(test)]

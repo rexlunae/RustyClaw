@@ -4,6 +4,7 @@
 //! and delegates the model/tool loop to [`dispatch_text_message`].
 
 use anyhow::{Context, Result};
+use rustyclaw_core::ignore::Ignore;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -692,9 +693,9 @@ pub(crate) async fn dispatch_text_message(
             flushed_this_round = true;
 
             // Notify the TUI about the memory flush
-            let _ =
-                protocol::server::send_info(writer, "💾 Memory flush triggered before compaction")
-                    .await;
+            protocol::server::send_info(writer, "💾 Memory flush triggered before compaction")
+                .await
+                .ignore();
         }
 
         // ── Auto-compact if context is getting large ────────────────
@@ -704,7 +705,9 @@ pub(crate) async fn dispatch_text_message(
         // round — unless the window is critically full.
         let critically_full = estimated > (context_limit as f64 * 0.95) as usize;
         if estimated > threshold && (!flushed_this_round || critically_full) {
-            let _ = protocol::server::send_info(writer, "⏳ Compacting context…").await;
+            protocol::server::send_info(writer, "⏳ Compacting context…")
+                .await
+                .ignore();
             match providers::compact_conversation(http, &mut resolved, context_limit, writer).await
             {
                 Ok(Some(outcome)) => {
@@ -720,7 +723,7 @@ pub(crate) async fn dispatch_text_message(
                 Ok(None) => {} // nothing to compact
                 Err(err) => {
                     // Non-fatal — handle logs and continues.
-                    let _ = errors::handle(
+                    errors::handle(
                         errors::GatewayError::ContextCompaction,
                         Some(err),
                         writer,
@@ -730,7 +733,8 @@ pub(crate) async fn dispatch_text_message(
                         credentials,
                         tool_cancel,
                     )
-                    .await;
+                    .await
+                    .ignore();
                 }
             }
         }
@@ -1324,19 +1328,25 @@ pub(crate) async fn dispatch_text_message(
                 .last()
                 .map(|r| r.output.clone())
                 .unwrap_or_default();
-            let _ = protocol::server::send_info(
+            protocol::server::send_info(
                 writer,
                 &format!(
                     "Stopping after {MAX_FAILED_TOOL_ROUNDS} consecutive rounds of failed tool calls. Last error: {last_error}"
                 ),
             )
-            .await;
+            .await.ignore();
             providers::send_response_done(writer).await?;
             return Ok(());
         }
     }
 
     // If we exhausted all rounds, send what we have and stop.
+    #[allow(clippy::let_underscore_must_use)]
+    // reason: the value here is a `ControlFlow`, not a `Result` — the error is
+    // already propagated by `?` above. It answers "keep looping or stop", and
+    // the loop it refers to has just run out of rounds either way, so there is
+    // no decision left for it to inform. `.ignore()` is for `Result` alone and
+    // does not apply.
     let _ = errors::handle(
         errors::GatewayError::ToolLoopExhausted {
             rounds: MAX_TOOL_ROUNDS,
@@ -1508,11 +1518,12 @@ mod live_status_tests {
         // A process this test registers, standing in for a *different*
         // conversation's child: present in the registry, not announced here.
         let _other = rustyclaw_core::exec_status::register(std::process::id(), "other turn");
-        let _ = tx.send(rustyclaw_core::tools::ToolOutputChunk {
+        tx.send(rustyclaw_core::tools::ToolOutputChunk {
             chunk: String::new(),
             is_stderr: false,
             pid: None,
-        });
+        })
+        .ignore();
         let (_out, _is_error) = drive_tool_with_live_frames(
             &mut writer,
             "tc3",

@@ -6,6 +6,7 @@
 //! Uses Tokio's async process handling for cross-platform non-blocking I/O,
 //! but exposes a sync API for compatibility with the sync tool execute interface.
 
+use crate::ignore::Ignore;
 use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -495,7 +496,7 @@ impl ExecSession {
                     .map(|t| self.started_at.elapsed() > t)
                     .unwrap_or(false);
                 if timed_out {
-                    let _ = child.kill();
+                    child.kill().ignore();
                     self.status = SessionStatus::TimedOut;
                     self.exit_code = None;
                     return true;
@@ -530,7 +531,7 @@ impl ExecSession {
         }
 
         if self.is_timed_out() {
-            let _ = self.kill();
+            self.kill().ignore();
             self.status = SessionStatus::TimedOut;
             self.exit_code = None;
             return true;
@@ -595,7 +596,7 @@ impl ExecSession {
             // it. Once sent there is nothing to repeat: the sender is
             // consumed, and a second call finds it gone.
             if let Some(tx) = ad.kill_tx.take() {
-                let _ = tx.send(());
+                tx.send(()).ignore();
             }
             self.status = SessionStatus::Killed;
             return Ok(());

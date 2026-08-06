@@ -6,6 +6,7 @@
 //! - `-hf user/model[:quant]` for downloading from Hugging Face
 
 use super::*;
+use crate::ignore::Ignore;
 use anyhow::Result;
 use serde_json::Value;
 
@@ -192,7 +193,7 @@ impl LocalEngine for LlamaCppEngine {
             cmd.push_str(arg);
         }
         cmd.push_str(" > /dev/null 2>&1 &");
-        let _ = Self::sh(&cmd).await;
+        Self::sh(&cmd).await.ignore();
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         if Self::is_running(&endpoint).await {
             Ok("llama-server started.".into())
@@ -264,15 +265,15 @@ impl LocalEngine for LlamaCppEngine {
         let model = repo.as_str();
 
         if let Some(ref tx) = sink {
-            let _ = tx
-                .send(PullProgress {
-                    model: model.to_string(),
-                    status: note.unwrap_or_else(|| "downloading".into()),
-                    percent: 0.0,
-                    downloaded_bytes: 0,
-                    total_bytes: 0,
-                })
-                .await;
+            tx.send(PullProgress {
+                model: model.to_string(),
+                status: note.unwrap_or_else(|| "downloading".into()),
+                percent: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+            })
+            .await
+            .ignore();
         }
 
         let result = Self::sh(&format!(
@@ -284,19 +285,19 @@ impl LocalEngine for LlamaCppEngine {
         .await;
 
         if let Some(ref tx) = sink {
-            let _ = tx
-                .send(PullProgress {
-                    model: model.to_string(),
-                    status: if result.is_ok() {
-                        "complete".into()
-                    } else {
-                        "failed".into()
-                    },
-                    percent: 100.0,
-                    downloaded_bytes: 0,
-                    total_bytes: 0,
-                })
-                .await;
+            tx.send(PullProgress {
+                model: model.to_string(),
+                status: if result.is_ok() {
+                    "complete".into()
+                } else {
+                    "failed".into()
+                },
+                percent: 100.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+            })
+            .await
+            .ignore();
         }
 
         result

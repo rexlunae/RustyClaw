@@ -1,5 +1,6 @@
 //! Task manager — orchestrates task lifecycle and events.
 
+use crate::ignore::Ignore;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -209,7 +210,7 @@ impl TaskManager {
         self.outputs.write().await.insert(id, output_tx.clone());
 
         // Emit event
-        let _ = self.events_tx.send(TaskEvent::Created(task));
+        self.events_tx.send(TaskEvent::Created(task)).ignore();
 
         debug!(task_id = %id, "Task created");
 
@@ -279,7 +280,9 @@ impl TaskManager {
             if old_fg_id != id {
                 if let Some(old_task) = tasks.get_mut(&old_fg_id) {
                     old_task.background();
-                    let _ = self.events_tx.send(TaskEvent::Backgrounded(old_fg_id));
+                    self.events_tx
+                        .send(TaskEvent::Backgrounded(old_fg_id))
+                        .ignore();
                 }
             }
         }
@@ -289,7 +292,7 @@ impl TaskManager {
             task.foreground();
         }
         self.foreground_tasks.write().await.insert(session, id);
-        let _ = self.events_tx.send(TaskEvent::Foregrounded(id));
+        self.events_tx.send(TaskEvent::Foregrounded(id)).ignore();
 
         info!(task_id = %id, "Task foregrounded");
         Ok(())
@@ -311,7 +314,7 @@ impl TaskManager {
             }
         }
 
-        let _ = self.events_tx.send(TaskEvent::Backgrounded(id));
+        self.events_tx.send(TaskEvent::Backgrounded(id)).ignore();
         info!(task_id = %id, "Task backgrounded");
         Ok(())
     }
@@ -328,11 +331,13 @@ impl TaskManager {
                 task.finished_at = Some(std::time::SystemTime::now());
             }
 
-            let _ = self.events_tx.send(TaskEvent::StatusChanged {
-                id,
-                old: old_status,
-                new: new_status,
-            });
+            self.events_tx
+                .send(TaskEvent::StatusChanged {
+                    id,
+                    old: old_status,
+                    new: new_status,
+                })
+                .ignore();
         }
     }
 
@@ -347,7 +352,7 @@ impl TaskManager {
                 let mut fg = self.foreground_tasks.write().await;
                 if !fg.contains_key(session) {
                     fg.insert(session.clone(), id);
-                    let _ = self.events_tx.send(TaskEvent::Foregrounded(id));
+                    self.events_tx.send(TaskEvent::Foregrounded(id)).ignore();
                 }
             }
         }
@@ -372,7 +377,7 @@ impl TaskManager {
         };
 
         if let Some(t) = task {
-            let _ = self.events_tx.send(TaskEvent::Completed(t));
+            self.events_tx.send(TaskEvent::Completed(t)).ignore();
             info!(task_id = %id, "Task completed");
         }
     }
@@ -396,7 +401,7 @@ impl TaskManager {
         };
 
         if let Some(t) = task {
-            let _ = self.events_tx.send(TaskEvent::Failed(t));
+            self.events_tx.send(TaskEvent::Failed(t)).ignore();
             warn!(task_id = %id, error = %error, "Task failed");
         }
     }
@@ -405,7 +410,7 @@ impl TaskManager {
     pub async fn cancel(&self, id: TaskId) -> Result<(), TaskError> {
         // Send cancel command if task is running
         if let Some(control_tx) = self.controls.read().await.get(&id) {
-            let _ = control_tx.send(TaskControl::Cancel).await;
+            control_tx.send(TaskControl::Cancel).await.ignore();
         }
 
         let mut tasks = self.tasks.write().await;
@@ -417,7 +422,7 @@ impl TaskManager {
                 self.foreground_tasks.write().await.remove(session);
             }
 
-            let _ = self.events_tx.send(TaskEvent::Cancelled(id));
+            self.events_tx.send(TaskEvent::Cancelled(id)).ignore();
             info!(task_id = %id, "Task cancelled");
             Ok(())
         } else {
@@ -430,10 +435,12 @@ impl TaskManager {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(&id) {
             task.description = Some(description.to_string());
-            let _ = self.events_tx.send(TaskEvent::DescriptionChanged {
-                id,
-                description: description.to_string(),
-            });
+            self.events_tx
+                .send(TaskEvent::DescriptionChanged {
+                    id,
+                    description: description.to_string(),
+                })
+                .ignore();
             info!(task_id = %id, description, "Task description updated");
             Ok(())
         } else {
@@ -444,10 +451,12 @@ impl TaskManager {
     /// Send output for a task.
     pub async fn send_output(&self, id: TaskId, output: TaskOutput) {
         if let Some(output_tx) = self.outputs.read().await.get(&id) {
-            let _ = output_tx.send(output.clone());
+            output_tx.send(output.clone()).ignore();
         }
 
-        let _ = self.events_tx.send(TaskEvent::Output { id, output });
+        self.events_tx
+            .send(TaskEvent::Output { id, output })
+            .ignore();
     }
 
     /// Cleanup completed/cancelled tasks older than the given duration.

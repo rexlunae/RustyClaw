@@ -6,6 +6,7 @@
 //! at `~/.rustyclaw/client.json` and is intentionally simple JSON so
 //! that any client can read/write it.
 
+use crate::ignore::Ignore;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -127,7 +128,7 @@ pub fn save_client_preferences(prefs: &ClientPreferences) {
         return;
     };
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).ignore();
     }
 
     let mut value = read_raw_prefs().unwrap_or_else(|| serde_json::json!({}));

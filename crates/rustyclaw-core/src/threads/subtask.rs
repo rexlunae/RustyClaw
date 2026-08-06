@@ -13,6 +13,7 @@
 //! - Support agent-settable descriptions (shown in sidebar)
 
 use super::{SharedThreadManager, ThreadId, ThreadStatus};
+use crate::ignore::Ignore;
 use std::future::Future;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -253,7 +254,7 @@ where
         }
 
         // Send result through oneshot channel
-        let _ = result_tx.send(result);
+        result_tx.send(result).ignore();
     });
 
     SubtaskHandle {
@@ -327,7 +328,7 @@ where
             }
         }
 
-        let _ = result_tx.send(result);
+        result_tx.send(result).ignore();
     });
 
     SubtaskHandle {
@@ -398,7 +399,7 @@ where
             }
         }
 
-        let _ = result_tx.send(result);
+        result_tx.send(result).ignore();
     });
 
     SubtaskHandle {
@@ -597,7 +598,7 @@ mod tests {
             assert_eq!(thread.description.as_deref(), Some("Phase 2: Processing"));
         }
 
-        let _ = handle.join().await;
+        handle.join().await.ignore();
     }
 
     #[tokio::test]

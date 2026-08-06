@@ -228,6 +228,7 @@ struct PersistentState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ignore::Ignore;
 
     #[test]
     fn default_project_and_active() {
@@ -270,7 +271,7 @@ mod tests {
         let p_new = loaded.create("B", "/tmp/b");
         assert_ne!(p_new, p);
         assert!(p_new.0 > p.0);
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// A thread inherits its project's directory unless it pins its own, and

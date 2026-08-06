@@ -12,6 +12,7 @@
 //! `tokenizer.json` from Hugging Face into the models directory.
 
 use super::*;
+use crate::ignore::Ignore;
 use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -119,7 +120,7 @@ impl JoshuaEngine {
             cmd.push_str(arg);
         }
         cmd.push_str(" > /dev/null 2>&1 &");
-        let _ = Self::sh(&cmd).await;
+        Self::sh(&cmd).await.ignore();
 
         // GGUF loading is mmap-based and fast, but give it a moment.
         let endpoint = Self::endpoint(cfg);
@@ -420,15 +421,15 @@ impl LocalEngine for JoshuaEngine {
         let target = dir.join(model.replace('/', "_"));
 
         if let Some(ref tx) = sink {
-            let _ = tx
-                .send(PullProgress {
-                    model: model.to_string(),
-                    status: note.unwrap_or_else(|| "downloading".into()),
-                    percent: 0.0,
-                    downloaded_bytes: 0,
-                    total_bytes: 0,
-                })
-                .await;
+            tx.send(PullProgress {
+                model: model.to_string(),
+                status: note.unwrap_or_else(|| "downloading".into()),
+                percent: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+            })
+            .await
+            .ignore();
         }
 
         let result = Self::sh(&format!(
@@ -441,19 +442,19 @@ impl LocalEngine for JoshuaEngine {
         .await;
 
         if let Some(ref tx) = sink {
-            let _ = tx
-                .send(PullProgress {
-                    model: model.to_string(),
-                    status: if result.is_ok() {
-                        "complete".into()
-                    } else {
-                        "failed".into()
-                    },
-                    percent: 100.0,
-                    downloaded_bytes: 0,
-                    total_bytes: 0,
-                })
-                .await;
+            tx.send(PullProgress {
+                model: model.to_string(),
+                status: if result.is_ok() {
+                    "complete".into()
+                } else {
+                    "failed".into()
+                },
+                percent: 100.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+            })
+            .await
+            .ignore();
         }
 
         result
@@ -482,7 +483,7 @@ impl LocalEngine for JoshuaEngine {
             if already.iter().any(|id| id == model) {
                 return Ok(format!("Model '{}' is already loaded", model));
             }
-            let _ = self.stop().await;
+            self.stop().await.ignore();
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
         Self::spawn_server(cfg, &path).await
@@ -490,7 +491,7 @@ impl LocalEngine for JoshuaEngine {
 
     async fn unload(&self, model: &str, _cfg: &EngineConfig) -> Result<String> {
         // One process serves one model: unloading stops the server.
-        let _ = self.stop().await;
+        self.stop().await.ignore();
         Ok(format!("Model '{}' unloaded (joshua stopped)", model))
     }
 
@@ -553,7 +554,7 @@ mod tests {
     #[test]
     fn resolve_model_path_scans_dir() {
         let dir = std::env::temp_dir().join(format!("joshua-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = EngineConfig {
             models_dir: Some(dir.to_string_lossy().to_string()),
@@ -585,6 +586,6 @@ mod tests {
             dir.join("big-Q8_0.gguf")
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 }

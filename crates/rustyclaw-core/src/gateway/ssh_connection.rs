@@ -4,6 +4,7 @@
 //! a split reader/writer pair. Both the desktop and TUI clients use this;
 //! the higher-level event mapping stays in each client crate.
 
+use crate::ignore::Ignore;
 use anyhow::{Context, Result, anyhow};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -127,7 +128,7 @@ impl SshReader {
     /// Drain stderr and return any error text.
     pub async fn drain_stderr(&mut self) -> String {
         let mut buf = Vec::new();
-        let _ = self.stderr.read_to_end(&mut buf).await;
+        self.stderr.read_to_end(&mut buf).await.ignore();
         String::from_utf8_lossy(&buf).to_string()
     }
 }
