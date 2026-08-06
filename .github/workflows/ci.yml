@@ -146,7 +146,18 @@ jobs:
       
       - name: Run unit tests (no default features)
         run: cargo test --lib --bins --no-default-features --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
-      
+
+      # The step above does not compile rustyclaw-core's `web-tools = off`
+      # arms, and neither does any `no-default` matrix entry in `check`.
+      # rustyclaw and rustyclaw-tui both depend on rustyclaw-core with its
+      # default features, so building them together unifies `web-tools` back
+      # on however the flag is passed. Checking the package by itself is what
+      # actually reaches that code — a `#[cfg(not(feature = "web-tools"))]`
+      # function that failed to compile survived every job here until it was
+      # built alone.
+      - name: Check rustyclaw-core alone (no default features)
+        run: cargo check --package rustyclaw-core --no-default-features
+
       - name: Run doc tests
         run: cargo test --doc
 
