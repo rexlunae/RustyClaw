@@ -33,8 +33,16 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> ToolResult {
     rt.block_on(async move {
         let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
 
-        // Index workspace (idempotent - will dedupe in future)
-        let _ = index.index_workspace().await;
+        // Index workspace (idempotent - will dedupe in future).
+        //
+        // Not fatal: the search below still runs against whatever was indexed
+        // before. But a failure here means anything written since the last
+        // successful pass is invisible to it, and "no matching memories" for
+        // something the user knows they saved is a confusing answer to get
+        // with nothing in the log to explain it.
+        if let Err(e) = index.index_workspace().await {
+            tracing::warn!("searching a stale index — indexing the workspace failed: {e}");
+        }
 
         let results = index
             .search(&query_owned, max_results, Some(min_score))

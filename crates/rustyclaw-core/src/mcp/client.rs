@@ -92,8 +92,20 @@ impl McpClient {
     /// Disconnect from the MCP server.
     pub async fn disconnect(&self) -> Result<()> {
         if let Some(service) = self.service.lock().await.take() {
-            let _ = service.cancel().await;
-            info!(server = %self.name, "MCP server disconnected");
+            // The handle is taken either way, so this connection is finished
+            // from our side. But announcing a clean disconnect after a failed
+            // cancel would be reporting something that did not happen — the
+            // server may still consider the session open.
+            match service.cancel().await {
+                Ok(reason) => {
+                    info!(server = %self.name, ?reason, "MCP server disconnected")
+                }
+                Err(e) => warn!(
+                    server = %self.name,
+                    error = %e,
+                    "MCP server dropped without a clean cancel"
+                ),
+            }
         }
         Ok(())
     }

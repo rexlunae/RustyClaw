@@ -934,9 +934,19 @@ pub(crate) async fn dispatch_text_message(
                         let text = model_resp.text.clone();
                         tokio::spawn(async move {
                             if let Ok(mem) = rustyclaw_core::steel_memory::SteelMemory::new(&ws) {
-                                let _ = mem
+                                // As with the user's side in `chat.rs`: nothing
+                                // is waiting on this, but a silent drop leaves
+                                // a hole in memory that only shows up later as
+                                // recall that finds nothing.
+                                if let Err(e) = mem
                                     .add_memory(&text, "conversations", "assistant", None)
-                                    .await;
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "the assistant's reply was not written to memory"
+                                    );
+                                }
                             }
                         });
                     }
