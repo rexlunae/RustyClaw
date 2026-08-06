@@ -79,6 +79,56 @@ pub const PIPE_BUFFER_MAX_BYTES: usize = 1 << 20;
 /// written rather than on every read that crosses the line.
 const PIPE_BUFFER_TRIM_AT: usize = PIPE_BUFFER_MAX_BYTES * 2;
 
+/// How much of its own output a session keeps before the oldest is dropped.
+///
+/// [`PIPE_BUFFER_MAX_BYTES`] bounds what an adopted pipe holds while it
+/// waits to be drained; this bounds what the session keeps after draining
+/// it. Both are needed, and this one covers spawned sessions too: a command
+/// that prints steadily grows the record for as long as it runs, however
+/// the session came by the child.
+pub const SESSION_OUTPUT_MAX_BYTES: usize = 1 << 20;
+
+/// Trimming copies what it keeps, so it is done once per
+/// [`SESSION_OUTPUT_MAX_BYTES`] written rather than on every append.
+const SESSION_OUTPUT_TRIM_AT: usize = SESSION_OUTPUT_MAX_BYTES * 2;
+
+/// Append to a session's combined output, dropping the oldest if the cap is
+/// exceeded and leaving a note where the gap is.
+///
+/// Free rather than a method so callers can hold a borrow on a sibling
+/// field — the read paths are part-way through borrowing the child or the
+/// adopted pipes when they append.
+///
+/// `last_read_pos` moves with the content it points at. Where that content
+/// is itself dropped it lands on the note instead, so the next poll reports
+/// the gap rather than resuming mid-stream as though nothing had happened.
+fn push_bounded(combined_output: &mut String, last_read_pos: &mut usize, text: &str) {
+    combined_output.push_str(text);
+    if combined_output.len() <= SESSION_OUTPUT_TRIM_AT {
+        return;
+    }
+
+    // Never split a character: `String` cannot hold half of one, and
+    // slicing at a byte that is not a boundary panics.
+    let mut excess = combined_output.len() - SESSION_OUTPUT_MAX_BYTES;
+    while excess < combined_output.len() && !combined_output.is_char_boundary(excess) {
+        excess += 1;
+    }
+
+    let note = format!("[… {excess} bytes of earlier output dropped, session limit reached …]\n");
+    let mut kept = String::with_capacity(note.len() + combined_output.len() - excess);
+    kept.push_str(&note);
+    kept.push_str(&combined_output[excess..]);
+    *combined_output = kept;
+
+    // What the poller had already taken is gone at no cost to it, so its
+    // position follows the surviving content down. What it had not taken is
+    // gone for good, so it starts again at the note that says so.
+    *last_read_pos = last_read_pos
+        .checked_sub(excess)
+        .map_or(0, |pos| pos + note.len());
+}
+
 /// One pipe's worth of output that an adopted child has produced and its
 /// session has not taken yet, bounded.
 #[derive(Default)]
@@ -185,11 +235,8 @@ pub struct ExecSession {
     pub timeout: Option<Duration>,
     /// Current status.
     pub status: SessionStatus,
-    /// Accumulated stdout output.
-    stdout_buffer: Vec<u8>,
-    /// Accumulated stderr output.
-    stderr_buffer: Vec<u8>,
-    /// Combined output (interleaved stdout + stderr for display).
+    /// Combined output (interleaved stdout + stderr for display), bounded
+    /// by [`SESSION_OUTPUT_MAX_BYTES`].
     combined_output: String,
     /// Last read position for polling.
     last_read_pos: usize,
@@ -231,8 +278,6 @@ impl ExecSession {
             started_at: Instant::now(),
             timeout,
             status: SessionStatus::Running,
-            stdout_buffer: Vec::new(),
-            stderr_buffer: Vec::new(),
             combined_output: String::new(),
             last_read_pos: 0,
             child: Some(child),
@@ -265,8 +310,6 @@ impl ExecSession {
             started_at,
             timeout,
             status: SessionStatus::Running,
-            stdout_buffer: Vec::new(),
-            stderr_buffer: Vec::new(),
             combined_output: String::new(),
             last_read_pos: 0,
             child: None,
@@ -290,9 +333,9 @@ impl ExecSession {
         self.started_at.elapsed()
     }
 
-    /// Append output to the combined buffer.
+    /// Append output to the combined buffer, within the session's cap.
     pub fn append_output(&mut self, text: &str) {
-        self.combined_output.push_str(text);
+        push_bounded(&mut self.combined_output, &mut self.last_read_pos, text);
     }
 
     /// Get new output since the last poll.
@@ -353,8 +396,7 @@ impl ExecSession {
             if let Ok(n) = read_nonblocking(stdout, &mut buf) {
                 if n > 0 {
                     let text = String::from_utf8_lossy(&buf[..n]);
-                    self.combined_output.push_str(&text);
-                    self.stdout_buffer.extend_from_slice(&buf[..n]);
+                    push_bounded(&mut self.combined_output, &mut self.last_read_pos, &text);
                     read_any = true;
                 }
             }
@@ -366,8 +408,7 @@ impl ExecSession {
             if let Ok(n) = read_nonblocking(stderr, &mut buf) {
                 if n > 0 {
                     let text = String::from_utf8_lossy(&buf[..n]);
-                    self.combined_output.push_str(&text);
-                    self.stderr_buffer.extend_from_slice(&buf[..n]);
+                    push_bounded(&mut self.combined_output, &mut self.last_read_pos, &text);
                     read_any = true;
                 }
             }
@@ -382,8 +423,7 @@ impl ExecSession {
         let Self {
             adopted: Some(ad),
             combined_output,
-            stdout_buffer,
-            stderr_buffer,
+            last_read_pos,
             ..
         } = self
         else {
@@ -391,10 +431,7 @@ impl ExecSession {
         };
 
         let mut read_any = false;
-        for (buf, own) in [
-            (&ad.stdout, &mut *stdout_buffer),
-            (&ad.stderr, &mut *stderr_buffer),
-        ] {
+        for buf in [&ad.stdout, &ad.stderr] {
             // Taken, not copied from. The readers only append and this is
             // the only place that consumes, so leaving the bytes behind
             // would mean the session and the buffer each held a complete
@@ -410,12 +447,19 @@ impl ExecSession {
             // Said, not swallowed. Anything discarded was older than what
             // follows, so the note belongs ahead of it.
             if dropped > 0 {
-                combined_output.push_str(&format!(
-                    "\n[… {dropped} bytes of earlier output dropped, buffer limit reached …]\n"
-                ));
+                push_bounded(
+                    combined_output,
+                    last_read_pos,
+                    &format!(
+                        "\n[… {dropped} bytes of earlier output dropped, buffer limit reached …]\n"
+                    ),
+                );
             }
-            combined_output.push_str(&String::from_utf8_lossy(&fresh));
-            own.extend_from_slice(&fresh);
+            push_bounded(
+                combined_output,
+                last_read_pos,
+                &String::from_utf8_lossy(&fresh),
+            );
             read_any = true;
         }
         read_any
@@ -954,6 +998,128 @@ mod tests {
         );
     }
 
+    /// A session holding neither a spawned child nor an adopted one, for
+    /// exercising the record on its own.
+    fn bare_session() -> ExecSession {
+        ExecSession {
+            id: "test".to_string(),
+            command: "chatty".to_string(),
+            working_dir: "/tmp".to_string(),
+            started_at: Instant::now(),
+            timeout: None,
+            status: SessionStatus::Running,
+            combined_output: String::new(),
+            last_read_pos: 0,
+            child: None,
+            adopted: None,
+            exit_code: None,
+            owner_id: None,
+        }
+    }
+
+    /// The session's own record does not grow without end either.
+    ///
+    /// [`PIPE_BUFFER_MAX_BYTES`] bounds what an adopted pipe holds until it
+    /// is drained, but draining it moves those bytes here. A command that
+    /// keeps printing — a dev server, a log tail — would otherwise grow this
+    /// for as long as it runs, and it does that whether the session spawned
+    /// the child or adopted it.
+    #[test]
+    fn a_sessions_own_record_stays_bounded() {
+        let mut session = bare_session();
+
+        let chunk = "x".repeat(64 * 1024);
+        for _ in 0..200 {
+            session.append_output(&chunk);
+        }
+
+        assert!(
+            session.full_output().len() <= SESSION_OUTPUT_TRIM_AT,
+            "12.5MB printed should not all be held: {} bytes",
+            session.full_output().len()
+        );
+        assert!(
+            session.full_output().contains("session limit reached"),
+            "what the cap discarded, it should say it discarded"
+        );
+    }
+
+    /// A poller whose unread output was trimmed is told, not quietly resumed.
+    ///
+    /// `last_read_pos` indexes the record, so dropping the front of it
+    /// leaves that index pointing at content it was never meant to name.
+    /// Output the poller never saw is gone, and the next poll should say so
+    /// rather than carry on as though the stream were whole.
+    #[test]
+    fn a_poller_that_missed_a_trim_is_told() {
+        let mut session = bare_session();
+
+        session.append_output("the-oldest-line\n");
+        assert!(session.poll_output().contains("the-oldest-line"));
+
+        let chunk = "x".repeat(64 * 1024);
+        for _ in 0..40 {
+            session.append_output(&chunk);
+        }
+
+        let fresh = session.poll_output().to_string();
+        assert!(
+            fresh.starts_with("[…") && fresh.contains("session limit reached"),
+            "the gap belongs at the front of what follows it"
+        );
+        assert!(
+            !fresh.contains("the-oldest-line"),
+            "output that was dropped is not replayed"
+        );
+    }
+
+    /// Trimming keeps a keeping-up poller's place instead of replaying.
+    #[test]
+    fn a_poller_that_kept_up_across_a_trim_sees_only_new_output() {
+        let mut session = bare_session();
+        let chunk = "x".repeat(64 * 1024);
+
+        // Read along the way, until the record has had to trim at least once.
+        while !session.full_output().contains("session limit reached") {
+            session.append_output(&chunk);
+            let _ = session.poll_output();
+        }
+
+        session.append_output("only-this-is-new\n");
+        assert_eq!(
+            session.poll_output(),
+            "only-this-is-new\n",
+            "a poller that kept up should not be handed the backlog again"
+        );
+    }
+
+    /// The cut falls on a character boundary rather than through one.
+    ///
+    /// The record is a `String`, so slicing mid-character panics rather than
+    /// merely garbling — and multi-byte output is ordinary, from a build
+    /// that prints ✗ to any log line that is not ASCII.
+    #[test]
+    fn trimming_does_not_split_a_multibyte_character() {
+        let mut session = bare_session();
+
+        // Three bytes each, so the arithmetic lands mid-character unless the
+        // cut is moved off it.
+        let chunk = "✗".repeat(32 * 1024);
+        for _ in 0..80 {
+            session.append_output(&chunk);
+        }
+
+        assert!(session.full_output().contains("session limit reached"));
+        assert!(
+            session.full_output().len() <= SESSION_OUTPUT_TRIM_AT,
+            "the cap holds for multi-byte output too"
+        );
+        assert!(
+            session.full_output().ends_with('✗'),
+            "the newest character survives the cut intact"
+        );
+    }
+
     /// Polling an adopted session takes the reader's bytes rather than
     /// copying them.
     ///
@@ -1014,8 +1180,6 @@ mod tests {
             started_at: Instant::now(),
             timeout: None,
             status: SessionStatus::Running,
-            stdout_buffer: Vec::new(),
-            stderr_buffer: Vec::new(),
             combined_output: "line1\nline2\nline3\nline4\nline5\n".to_string(),
             last_read_pos: 0,
             child: None,
