@@ -33,7 +33,7 @@ use super::tui_component::TuiRoot;
 use rustyclaw_view::anyhow::Context;
 
 /// Messages from the iocraft render component back to tokio.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, strum::IntoStaticStr)]
 pub(crate) enum UserInput {
     /// The text, and the thread the user typed it into. The id travels with
     /// the message so the gateway files it where the user was looking, not
