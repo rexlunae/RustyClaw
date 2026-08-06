@@ -184,7 +184,7 @@ fn extract_with_selector(html: &str, selector: &str, format: &str) -> ToolResult
 
 #[cfg(not(feature = "web-tools"))]
 fn extract_with_selector(_html: &str, _selector: &str, _format: &str) -> ToolResult {
-    Err("CSS selector extraction requires the 'web-tools' feature".to_string())
+    Err("CSS selector extraction requires the 'web-tools' feature".into())
 }
 
 /// Extract page metadata (title, description, author, etc.).
