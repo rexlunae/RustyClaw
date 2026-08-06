@@ -3,6 +3,7 @@
 //! Provides async HTTP operations using reqwest.
 
 use super::helpers::vault;
+use crate::ignore::Ignore;
 use crate::security::SsrfValidator;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
@@ -413,7 +414,9 @@ async fn get_cookie_header_async(domain: &str, path: &str, is_secure: bool) -> O
 async fn store_response_cookies_async(domain: &str, headers: &[String]) {
     if let Some(vault_ref) = vault() {
         let mut vault_guard = vault_ref.lock().await;
-        let _ = vault_guard.store_cookies_from_response(domain, headers, true);
+        vault_guard
+            .store_cookies_from_response(domain, headers, true)
+            .ignore();
     }
 }
 
@@ -716,7 +719,9 @@ fn store_response_cookies_sync(domain: &str, headers: &[String]) {
     if let Some(vault_ref) = vault() {
         tokio::task::block_in_place(|| {
             let mut vault_guard = vault_ref.blocking_lock();
-            let _ = vault_guard.store_cookies_from_response(domain, headers, true);
+            vault_guard
+                .store_cookies_from_response(domain, headers, true)
+                .ignore();
         });
     }
 }
@@ -988,7 +993,7 @@ async fn start_download(
                     // user, so it should hold the bytes the panel last said
                     // had arrived rather than silently fewer.
                     let Some(updated) = updated else {
-                        let _ = file.flush().await;
+                        file.flush().await.ignore();
                         return;
                     };
                     if received - announced_at >= PROGRESS_STEP_BYTES {

@@ -22,6 +22,7 @@
 //! rewritten in full at every persistence point — is migrated on first
 //! load and the legacy file renamed out of the way.
 
+use crate::ignore::Ignore;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -217,7 +218,7 @@ impl ThreadStore {
                 continue;
             };
             if !live.contains(&ThreadId(id)) {
-                let _ = std::fs::remove_file(entry.path());
+                std::fs::remove_file(entry.path()).ignore();
             }
         }
         Ok(())
@@ -445,7 +446,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
+            std::fs::remove_file(&tmp).ignore();
             Err(e)
         }
     }
@@ -504,7 +505,7 @@ mod tests {
         assert_eq!(thread_a.label, "Alpha");
         assert_eq!(loaded.get(b).unwrap().messages.len(), 1);
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// Persisting twice appends — the second persist must not duplicate
@@ -536,7 +537,7 @@ mod tests {
             vec!["one", "two"]
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// An open turn — started, never ended — survives the round trip as
@@ -568,7 +569,7 @@ mod tests {
         let loaded = store.load().unwrap();
         assert!(!loaded.get(id).unwrap().is_open());
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// A torn tail — the half-written line a crash leaves — costs exactly
@@ -598,7 +599,7 @@ mod tests {
             "the torn record is dropped, the intact history is kept"
         );
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// The legacy single-file layout migrates on first load: same threads,
@@ -626,7 +627,7 @@ mod tests {
         let reloaded = ThreadStore::load_or_migrate(&legacy);
         assert_eq!(reloaded.get(id).map(|t| t.messages.len()), Some(1));
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// Closing a thread removes its files; it must not come back on the
@@ -650,7 +651,7 @@ mod tests {
         assert!(loaded.get(keep).is_some());
         assert!(loaded.get(drop_).is_none(), "closed threads stay closed");
 
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).ignore();
     }
 
     /// `persist` reconciles: it is not safe to call with a manager that is no

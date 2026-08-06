@@ -225,6 +225,33 @@ Use `map_err` to add context when bridging error types. Use `anyhow::Context` in
 
 Prefer concrete error enums (via `thiserror`).
 
+### Discarding a `Result` is a decision you write down
+
+`let _ = fallible()` is denied workspace-wide
+(`clippy::let_underscore_must_use`). It reads the same whether the author
+weighed the failure and dismissed it or never noticed the call could fail, and
+it is invisible to `unused_must_use` — an explicit discard is still a discard.
+
+Most fallible calls want `?`, or a `tracing::warn!` on the paths that must not
+abort. Where the failure genuinely carries nothing to act on — a notify to a
+receiver that has already hung up, an unlink while cleaning up after an error —
+say so:
+
+```rust
+use rustyclaw_core::ignore::Ignore;
+
+tx.send(event).ignore();          // receiver is gone; we are shutting down
+std::fs::remove_file(&tmp).ignore();
+```
+
+Ask "what happens when this fails?" first. If the answer is anything other than
+"nothing anyone can act on", it is not an `.ignore()`.
+
+`Ignore` is implemented for `Result` only. For a `#[must_use]` value of another
+shape, keep `let _ =` and pair an `#[allow(clippy::let_underscore_must_use)]`
+with a `// reason:` comment saying why the value does not matter — the same
+convention `[workspace.lints.clippy]` uses for its silenced lints.
+
 ---
 
 ## 6. Option, Result, and Control Flow

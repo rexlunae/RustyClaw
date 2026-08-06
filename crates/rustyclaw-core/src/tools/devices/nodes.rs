@@ -1,6 +1,7 @@
 //! Nodes tool: discover and control remote devices via SSH, ADB, VNC, RDP.
 
 use super::{get_command_array, get_node, has_command, has_command_async, sh, sh_async};
+use crate::ignore::Ignore;
 use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -438,7 +439,9 @@ async fn node_screen_snap_async(node: &str, _facing: &str) -> ToolResult {
             let local = format!("/tmp/adb_snap_{}.png", timestamp);
             sh_async(&format!("adb -s {} shell screencap -p {}", device, remote)).await?;
             sh_async(&format!("adb -s {} pull {} {}", device, remote, local)).await?;
-            let _ = sh_async(&format!("adb -s {} shell rm {}", device, remote)).await;
+            sh_async(&format!("adb -s {} shell rm {}", device, remote))
+                .await
+                .ignore();
             Ok(
                 json!({"node": node, "type": "adb", "action": "screen_snap", "path": local})
                     .to_string(),
@@ -621,11 +624,12 @@ async fn node_send_key_async(node: &str, key: &str) -> ToolResult {
 async fn node_notify_async(node: &str, title: &str, body: &str) -> ToolResult {
     match parse_node(node) {
         ParsedNode::Adb { device } => {
-            let _ = sh_async(&format!(
+            sh_async(&format!(
                 "adb -s {} shell \"cmd notification post -t '{}' 'RustyClaw' '{}'\"",
                 device, title, body
             ))
-            .await;
+            .await
+            .ignore();
             Ok(json!({"node": node, "action": "notify", "title": title, "body": body, "status": "sent"}).to_string())
         }
         ParsedNode::Ssh { user, host, port } => {
@@ -673,7 +677,9 @@ async fn adb_screen_record_async(node: &str, duration_ms: u64) -> ToolResult {
     ))
     .await?;
     sh_async(&format!("adb -s {} pull {} {}", device, remote, local)).await?;
-    let _ = sh_async(&format!("adb -s {} shell rm {}", device, remote)).await;
+    sh_async(&format!("adb -s {} shell rm {}", device, remote))
+        .await
+        .ignore();
 
     Ok(
         json!({"node": node, "action": "screen_record", "duration_secs": secs, "path": local})

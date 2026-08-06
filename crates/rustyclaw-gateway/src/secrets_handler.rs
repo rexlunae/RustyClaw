@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rustyclaw_core::ignore::Ignore;
 use rustyclaw_core::tools::error::{ToolError, ToolResult};
 use tracing::{debug, instrument, warn};
 
@@ -621,7 +622,7 @@ pub(crate) async fn handle_secrets_frame(
             let meta_key = format!("cred:{}", name);
             let is_legacy = v.get_secret(&meta_key, true).ok().flatten().is_none();
             if is_legacy {
-                let _ = v.delete_secret(&name);
+                v.delete_secret(&name).ignore();
             }
             let result = v.delete_credential(&name);
             match result {

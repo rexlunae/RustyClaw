@@ -1,6 +1,7 @@
 //! Security tools: audit sensitive data and secure file deletion.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
+use crate::ignore::Ignore;
 use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -290,7 +291,7 @@ pub fn exec_secure_delete(args: &Value, workspace_dir: &Path) -> ToolResult {
         return Ok(json!({ "status": "confirm_required", "path": target.display().to_string(), "is_directory": is_dir }).to_string());
     }
 
-    let _ = sh(&format!("rm -rf '{}'", target.display()));
+    sh(&format!("rm -rf '{}'", target.display())).ignore();
     if target.exists() {
         Err("Delete failed".into())
     } else {

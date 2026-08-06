@@ -23,6 +23,7 @@
 //! * Streaming events are forwarded to the client as binary frames; the
 //!   non-streaming path is used for internal calls (compaction, summaries).
 
+use crate::ignore::Ignore;
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::json;
@@ -193,7 +194,7 @@ async fn consume_stream(
                 // thinking simply opens a fresh block on the next
                 // ReasoningChunk.
                 if thinking_started {
-                    let _ = server::send_thinking_end(writer).await;
+                    server::send_thinking_end(writer).await.ignore();
                     thinking_started = false;
                 }
                 result.text.push_str(&chunk.content);
@@ -201,10 +202,12 @@ async fn consume_stream(
             }
             ChatStreamEvent::ReasoningChunk(chunk) => {
                 if !thinking_started {
-                    let _ = server::send_thinking_start(writer).await;
+                    server::send_thinking_start(writer).await.ignore();
                     thinking_started = true;
                 }
-                let _ = server::send_thinking_delta(writer, &chunk.content).await;
+                server::send_thinking_delta(writer, &chunk.content)
+                    .await
+                    .ignore();
             }
             ChatStreamEvent::ToolCallChunk(_) => {
                 // Tool calls are assembled from the captured content in `End`.
@@ -212,7 +215,7 @@ async fn consume_stream(
             ChatStreamEvent::ThoughtSignatureChunk(_) => {}
             ChatStreamEvent::End(end) => {
                 if thinking_started {
-                    let _ = server::send_thinking_end(writer).await;
+                    server::send_thinking_end(writer).await.ignore();
                 }
                 if let Some(content) = end.captured_content {
                     for part in content.into_parts() {

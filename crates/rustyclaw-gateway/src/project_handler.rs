@@ -257,6 +257,7 @@ async fn send_error(writer: &mut dyn transport::TransportWriter, message: String
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use rustyclaw_core::ignore::Ignore;
     use rustyclaw_core::threads::ThreadManager;
 
     struct CapturingWriter {
@@ -394,7 +395,7 @@ mod tests {
             Some(created.clone()),
             "the stored path is the expanded one"
         );
-        let _ = std::fs::remove_dir(&created);
+        std::fs::remove_dir(&created).ignore();
     }
 
     /// The workspace follows the foreground thread's *effective* directory,

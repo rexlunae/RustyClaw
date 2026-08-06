@@ -1,5 +1,6 @@
 //! Encryption/decryption logic, file I/O for the vault, and TOTP functionality.
 
+use crate::ignore::Ignore;
 use anyhow::{Context, Result};
 use securestore::KeySource;
 
@@ -128,7 +129,7 @@ impl SecretsManager {
 
         // 7. Remove the old key file if it exists — no longer needed.
         if self.key_path.exists() {
-            let _ = std::fs::remove_file(&self.key_path);
+            std::fs::remove_file(&self.key_path).ignore();
         }
 
         Ok(())

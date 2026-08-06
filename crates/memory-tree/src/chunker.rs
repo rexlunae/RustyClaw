@@ -203,6 +203,12 @@ fn compute_id(source_id: &str, content: &str) -> String {
     let mut hex = String::with_capacity(64);
     for b in digest {
         use std::fmt::Write;
+        #[allow(clippy::let_underscore_must_use)]
+        // reason: `fmt::Write` for `String` is infallible — it returns
+        // `fmt::Result` only to satisfy the trait, and the only impls that can
+        // fail are ones writing to real I/O. There is no error to handle, and
+        // this crate does not depend on rustyclaw-core, so `.ignore()` is not
+        // in reach here.
         let _ = write!(hex, "{:02x}", b);
     }
     hex

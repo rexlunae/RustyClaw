@@ -37,6 +37,7 @@
 //!   Supports both standalone server mode and OpenSSH subsystem mode.
 
 use super::protocol::{CONTROL_STREAM_ID, ClientFrame, ServerFrame, WireFrame};
+use crate::ignore::Ignore;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
@@ -215,7 +216,7 @@ pub async fn drive_writer(
                 }
             }
             Outbound::Close => {
-                let _ = writer.close().await;
+                writer.close().await.ignore();
                 break;
             }
         }

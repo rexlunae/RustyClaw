@@ -48,7 +48,12 @@ pub async fn start_command_task(
 
     // If it's a background command, move to background immediately
     if background {
-        let _ = task_mgr.set_background(task_id).await;
+        // The caller asked for this to run in the background. If the move
+        // fails the task keeps running in the foreground, which is a different
+        // thing from what was asked for — and nothing downstream would say so.
+        if let Err(e) = task_mgr.set_background(task_id).await {
+            tracing::warn!(task_id = %task_id, error = %e, "Command stays in the foreground — backgrounding it failed");
+        }
     }
 
     debug!(task_id = %task_id, command = %truncate_command(command, 50), "Command task started");

@@ -5,6 +5,7 @@
 //! [`Transport`] abstraction.
 
 use super::*;
+use rustyclaw_core::ignore::Ignore;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -499,7 +500,7 @@ impl Handler for SshHandler {
             sessions.get(&channel).map(|s| s.channel_data_tx.clone())
         };
         if let Some(tx) = tx {
-            let _ = tx.send(data.to_vec()).await;
+            tx.send(data.to_vec()).await.ignore();
         }
         Ok(())
     }

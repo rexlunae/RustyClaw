@@ -3,6 +3,7 @@
 //! Records timestamped protocol events (frames sent/received, errors) to a
 //! rotating log file. Secrets are never logged — only frame types and sizes.
 
+use crate::ignore::Ignore;
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -209,7 +210,7 @@ impl ProtocolEventLog {
 
     fn open_log_file(path: &Path) -> Option<std::fs::File> {
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).ignore();
         }
         std::fs::OpenOptions::new()
             .create(true)
@@ -220,7 +221,7 @@ impl ProtocolEventLog {
 
     fn rotate(path: &Path) {
         let rotated = path.with_extension("log.old");
-        let _ = std::fs::rename(path, rotated);
+        std::fs::rename(path, rotated).ignore();
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::ignore::Ignore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -740,7 +741,7 @@ impl SkillManager {
             for dir in &self.skills_dirs {
                 if parent.starts_with(dir) || parent == dir.as_path() {
                     if parent.is_dir() {
-                        let _ = std::fs::remove_dir_all(parent);
+                        std::fs::remove_dir_all(parent).ignore();
                     }
                     break;
                 }

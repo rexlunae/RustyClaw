@@ -15,6 +15,7 @@ mod pairing;
 mod theme;
 mod types;
 
+use rustyclaw_core::ignore::Ignore;
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -56,7 +57,7 @@ async fn main() -> Result<()> {
         .join(".rustyclaw")
         .join("tui.log");
     if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).ignore();
     }
     rustyclaw_core::logging::init_for_tui(&log_path);
 

@@ -18,6 +18,7 @@
 //! never the value. A client cannot leak what it was never sent.
 
 use anyhow::Result;
+use rustyclaw_core::ignore::Ignore;
 use std::collections::BTreeMap;
 use tracing::{debug, info, warn};
 
@@ -474,7 +475,7 @@ async fn save_account(
         // required field on the new backend during validation.
         if let Some(old_spec) = kind_spec(&entry.messenger_type) {
             for field in old_spec.fields.iter().filter(|f| f.is_secret()) {
-                let _ = entry.set_field(field.name, "");
+                entry.set_field(field.name, "").ignore();
             }
         }
     }
@@ -586,7 +587,7 @@ async fn save_account(
             };
             if let Err(e) = mgr.store_service_credential(&cred, &secret_entry, value) {
                 for cred in &created {
-                    let _ = mgr.delete_credential(cred);
+                    mgr.delete_credential(cred).ignore();
                 }
                 return Err(vec![format!("Could not store {label} in the vault: {e}")]);
             }
@@ -602,7 +603,7 @@ async fn save_account(
             }
             // The vault now owns it; leaving the plaintext twin behind would
             // defeat the entire point of moving it.
-            let _ = entry.set_field(field, "");
+            entry.set_field(field, "").ignore();
         }
     }
 
@@ -736,7 +737,7 @@ async fn discard_created_credentials(vault: &SharedVault, created: &[String]) {
     }
     let mut mgr = vault.lock().await;
     for cred in created {
-        let _ = mgr.delete_credential(cred);
+        mgr.delete_credential(cred).ignore();
     }
 }
 
@@ -775,7 +776,7 @@ async fn rename_credentials(
             Ok(value) => value,
             Err(e) => {
                 for cred in &created {
-                    let _ = mgr.delete_credential(cred);
+                    mgr.delete_credential(cred).ignore();
                 }
                 return Err(vec![format!("Could not read '{old}' while renaming: {e}")]);
             }
@@ -798,7 +799,7 @@ async fn rename_credentials(
         }
         if let Err(e) = mgr.store_service_credential(&new, &secret_entry, value.as_str()) {
             for cred in &created {
-                let _ = mgr.delete_credential(cred);
+                mgr.delete_credential(cred).ignore();
             }
             return Err(vec![format!("Could not write '{new}' while renaming: {e}")]);
         }
@@ -905,7 +906,7 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
             }
             if let Err(e) = mgr.store_service_credential(&cred, &secret_entry, &value) {
                 for cred in &created {
-                    let _ = mgr.delete_credential(cred);
+                    mgr.delete_credential(cred).ignore();
                 }
                 failure = Some(vec![format!("Could not store {}: {e}", field.label)]);
                 break;
@@ -913,7 +914,7 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
             entry.secret_refs.insert(field.field.to_string(), cred);
             // Clear only after the vault write succeeded — the ordering is the
             // difference between migrating a credential and losing one.
-            let _ = entry.set_field(field.field, "");
+            entry.set_field(field.field, "").ignore();
             moved.push(field.label);
         }
     }
@@ -2580,7 +2581,7 @@ mod tests {
         // gone", or the user gets told to retype a token that is already there.
         // A password-protected vault is one with a secrets file and no key
         // file beside it — that is what `is_locked` looks for.
-        let _ = std::fs::remove_file(config.credentials_dir().join("secrets.key"));
+        std::fs::remove_file(config.credentials_dir().join("secrets.key")).ignore();
         let locked = Arc::new(Mutex::new(rustyclaw_core::secrets::SecretsManager::locked(
             config.credentials_dir(),
         )));

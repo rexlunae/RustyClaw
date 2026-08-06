@@ -137,6 +137,7 @@ impl SoulManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ignore::Ignore;
     use std::fs;
 
     #[test]
@@ -150,7 +151,7 @@ mod tests {
     fn test_needs_hatching_no_file() {
         let temp_path = std::env::temp_dir().join("rustyclaw_test_soul_nonexistent.md");
         // Ensure file doesn't exist
-        let _ = fs::remove_file(&temp_path);
+        fs::remove_file(&temp_path).ignore();
 
         let manager = SoulManager::new(temp_path);
         assert!(
@@ -172,7 +173,7 @@ mod tests {
         );
 
         // Cleanup
-        let _ = fs::remove_file(&temp_path);
+        fs::remove_file(&temp_path).ignore();
     }
 
     #[test]
@@ -188,6 +189,6 @@ mod tests {
         );
 
         // Cleanup
-        let _ = fs::remove_file(&temp_path);
+        fs::remove_file(&temp_path).ignore();
     }
 }

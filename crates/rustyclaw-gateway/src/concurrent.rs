@@ -19,6 +19,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use rustyclaw_core::gateway::protocol::frames::{ServerFrame, ServerPayload, serialize_frame};
 use rustyclaw_core::gateway::transport::TransportWriter;
+use rustyclaw_core::ignore::Ignore;
 use rustyclaw_core::threads::ThreadId;
 use tokio::sync::mpsc;
 
@@ -129,8 +130,7 @@ impl ChannelSink {
 
     /// Signal that the task completed successfully.
     pub async fn done(&self, response: Option<String>) {
-        let _ = self
-            .tx
+        self.tx
             .send(ModelTaskMessage::Done {
                 thread_id: self.thread_id,
                 stream_id: self.stream_id,
@@ -138,13 +138,13 @@ impl ChannelSink {
                 turn_id: self.turn_id,
                 response,
             })
-            .await;
+            .await
+            .ignore();
     }
 
     /// Signal that the task failed.
     pub async fn error(&self, message: String) {
-        let _ = self
-            .tx
+        self.tx
             .send(ModelTaskMessage::Error {
                 thread_id: self.thread_id,
                 stream_id: self.stream_id,
@@ -152,7 +152,8 @@ impl ChannelSink {
                 message,
                 closed_out: self.sent_response_done,
             })
-            .await;
+            .await
+            .ignore();
     }
 }
 

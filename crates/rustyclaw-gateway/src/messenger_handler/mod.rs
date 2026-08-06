@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use rustyclaw_core::config::Config;
+use rustyclaw_core::ignore::Ignore;
 use rustyclaw_core::messengers::{Message, Messenger, MessengerManager, SendOptions};
 use rustyclaw_core::tools;
 use std::collections::HashMap;
@@ -242,7 +243,7 @@ async fn upload_staged_avatar(
     let result = messenger.set_profile_picture(&url).await;
     // Best-effort cleanup either way; a leftover file in the gateway's own
     // runtime dir is untidy, not dangerous.
-    let _ = std::fs::remove_file(&staged);
+    std::fs::remove_file(&staged).ignore();
     result
 }
 
@@ -560,7 +561,7 @@ pub async fn run_messenger_loop(
                             if let Some(channel) = &msg.channel {
                                 let mgr = messenger_mgr.lock().await;
                                 if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
-                                    let _ = messenger.set_typing(channel, true).await;
+                                    messenger.set_typing(channel, true).await.ignore();
                                 }
                             }
 
@@ -586,7 +587,7 @@ pub async fn run_messenger_loop(
                             if let Some(channel) = channel_for_typing {
                                 let mgr = messenger_mgr.lock().await;
                                 if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
-                                    let _ = messenger.set_typing(&channel, false).await;
+                                    messenger.set_typing(&channel, false).await.ignore();
                                 }
                             }
 
@@ -600,7 +601,7 @@ pub async fn run_messenger_loop(
                         if let Some(channel) = &msg.channel {
                             let mgr = messenger_mgr.lock().await;
                             if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
-                                let _ = messenger.set_typing(channel, true).await;
+                                messenger.set_typing(channel, true).await.ignore();
                             }
                         }
 
@@ -626,7 +627,7 @@ pub async fn run_messenger_loop(
                         if let Some(channel) = channel_for_typing {
                             let mgr = messenger_mgr.lock().await;
                             if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
-                                let _ = messenger.set_typing(&channel, false).await;
+                                messenger.set_typing(&channel, false).await.ignore();
                             }
                         }
 

@@ -34,6 +34,12 @@ all = { level = "deny", priority = -1 }
 too_many_arguments = "allow" # reason: complex async handlers naturally have many params; restructuring deferred
 type_complexity = "allow" # reason: complex generic types appear in gateway/messenger code
 module_inception = "allow" # reason: crate uses foo/foo.rs module patterns by convention
+# Not in the `all` group, so `all = deny` above never caught it — and neither
+# does `unused_must_use`, because `let _ =` is an *explicit* discard. That left
+# a dropped `Result` invisible to every gate in this file. Deliberate discards
+# say so with `Ignore::ignore` (rustyclaw-core), or an `#[allow]` and a reason
+# where the value is not a `Result`.
+let_underscore_must_use = "deny"
 
 # ── Workspace Features ──────────────────────────────────────────────────────
 # Features that control which components are built

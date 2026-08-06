@@ -1,5 +1,6 @@
 //! Helper functions and global state for the tools system.
 
+use crate::ignore::Ignore;
 use crate::process_manager::{ProcessManager, SharedProcessManager};
 use crate::sandbox::{Sandbox, SandboxError, SandboxMode, SandboxPolicy};
 use std::path::{Path, PathBuf};
@@ -114,7 +115,7 @@ static VAULT: OnceLock<SharedVault> = OnceLock::new();
 
 /// Called once from the gateway to register the vault for tool access.
 pub fn set_vault(vault: SharedVault) {
-    let _ = VAULT.set(vault);
+    VAULT.set(vault).ignore();
 }
 
 /// Get the global vault instance, if initialized.
@@ -124,7 +125,7 @@ pub fn vault() -> Option<&'static SharedVault> {
 
 /// Called once from the gateway to register the credentials path.
 pub fn set_credentials_dir(path: PathBuf) {
-    let _ = CREDENTIALS_DIR.set(path);
+    CREDENTIALS_DIR.set(path).ignore();
 }
 
 /// Returns `true` when a command string references the credentials directory.

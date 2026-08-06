@@ -8,6 +8,7 @@
 //! [`GatewayCommand`]s and consume [`GatewayEvent`]s — they never touch the
 //! wire protocol or stream-id bookkeeping directly.
 
+use crate::ignore::Ignore;
 use anyhow::{Context, Result, anyhow};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -173,11 +174,12 @@ impl GatewayClient {
                         frame_type: frame_type_name.clone(),
                         error: err.to_string(),
                     });
-                    let _ = event_tx_clone
+                    event_tx_clone
                         .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
                             reason: Some(err.to_string()),
                         }))
-                        .await;
+                        .await
+                        .ignore();
                     break;
                 }
             }
@@ -368,30 +370,33 @@ impl GatewayClient {
                         // EOF — drain stderr for diagnostic info.
                         let ssh_err = reader.drain_stderr().await;
                         let reason = crate::gateway::parse_ssh_error(&ssh_err);
-                        let _ = event_tx
+                        event_tx
                             .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
                                 reason: Some(reason),
                             }))
-                            .await;
+                            .await
+                            .ignore();
                         break;
                     }
                     Err(err) => {
                         event_log_rx.log_decode_error(Direction::Received, 0, &err.to_string());
-                        let _ = event_tx
+                        event_tx
                             .send(ThreadEvent::untargeted(GatewayEvent::Error {
                                 message: format!("Protocol error: {}", err),
                             }))
-                            .await;
+                            .await
+                            .ignore();
                         // A decode error is fatal — the frame stream cannot
                         // be resynced, and this loop ends here, so no
                         // close-out will ever arrive for the turns still
                         // tracked. Without a Disconnected the UI keeps its
                         // spinner and gates the composer forever.
-                        let _ = event_tx
+                        event_tx
                             .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
                                 reason: Some(format!("Protocol error: {}", err)),
                             }))
-                            .await;
+                            .await
+                            .ignore();
                         break;
                     }
                 }
@@ -542,7 +547,7 @@ mod tests {
             if !client.is_connected() {
                 break;
             }
-            let _ = client.send(GatewayCommand::ThreadList).await;
+            client.send(GatewayCommand::ThreadList).await.ignore();
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 

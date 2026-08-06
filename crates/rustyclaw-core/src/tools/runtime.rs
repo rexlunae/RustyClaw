@@ -6,6 +6,7 @@ use super::helpers::{
     VAULT_ACCESS_DENIED, command_references_credentials, is_protected_path, process_manager,
     resolve_path, run_sandboxed_command, validate_command_safe,
 };
+use crate::ignore::Ignore;
 use crate::process_manager::SessionStatus;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
@@ -145,11 +146,12 @@ pub async fn exec_execute_command_streaming(
     // ticker attributes pause/stop/kill by this announcement; guessing from
     // the registry instead would pick up another conversation's child.
     if let (Some(sink), Some(pid)) = (&sink, child_pid) {
-        let _ = sink.send(super::ToolOutputChunk {
+        sink.send(super::ToolOutputChunk {
             chunk: String::new(),
             is_stderr: false,
             pid: Some(pid),
-        });
+        })
+        .ignore();
     }
 
     let started_at = Instant::now();
@@ -189,8 +191,8 @@ pub async fn exec_execute_command_streaming(
                     Ok(Some(status)) => {
                         // Process finished — let the readers drain to EOF,
                         // then take what they accumulated.
-                        let _ = out_task.await;
-                        let _ = err_task.await;
+                        out_task.await.ignore();
+                        err_task.await.ignore();
                         let output = std::process::Output {
                             status,
                             stdout: snapshot(&out_buf),
@@ -245,7 +247,7 @@ pub async fn exec_execute_command_streaming(
                         // Check timeout
                         if now >= timeout_deadline {
                             warn!(timeout_secs, "Command timed out");
-                            let _ = child.kill().await;
+                            child.kill().await.ignore();
                             out_task.abort();
                             err_task.abort();
                             return Err(format!("Command timed out after {} seconds", timeout_secs).into());
@@ -312,11 +314,12 @@ async fn pump_stream<R>(
                     && streamed < STREAM_CAP_BYTES
                 {
                     streamed += n;
-                    let _ = sink.send(super::ToolOutputChunk {
+                    sink.send(super::ToolOutputChunk {
                         chunk: String::from_utf8_lossy(&chunk[..n]).into_owned(),
                         is_stderr,
                         pid: None,
-                    });
+                    })
+                    .ignore();
                 }
             }
         }
@@ -364,7 +367,7 @@ async fn adopt_child(
                 // A kill request wins over anything else pending.
                 biased;
                 _ = &mut kill_rx => {
-                    let _ = child.kill().await;
+                    child.kill().await.ignore();
                     break SessionStatus::Killed;
                 }
                 Some(bytes) = stdin_rx.recv() => {
@@ -409,11 +412,12 @@ async fn adopt_child(
         // grandchild that inherited the handles can hold them open after
         // the child itself is gone, and a session that never reports
         // finishing would be worse than one missing its tail.
-        let _ = tokio::time::timeout(PUMP_DRAIN_GRACE, async {
-            let _ = out_task.await;
-            let _ = err_task.await;
+        tokio::time::timeout(PUMP_DRAIN_GRACE, async {
+            out_task.await.ignore();
+            err_task.await.ignore();
         })
-        .await;
+        .await
+        .ignore();
 
         if let Ok(mut slot) = supervisor_finished.lock() {
             *slot = Some(status);
@@ -634,7 +638,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
                 }
 
                 if now >= timeout_deadline {
-                    let _ = child.kill();
+                    child.kill().ignore();
                     return Err(format!("Command timed out after {} seconds", timeout_secs).into());
                 }
 
@@ -816,7 +820,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
 
             if let Some(mut session) = mgr.remove(id) {
                 if session.status == SessionStatus::Running {
-                    let _ = session.kill();
+                    session.kill().ignore();
                 }
                 debug!(session_id = id, "Session removed");
                 Ok(format!("Removed session {}", id))
@@ -973,7 +977,7 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
             let id = session_id.ok_or("Missing sessionId for remove action")?;
             if let Some(mut session) = mgr.remove(id) {
                 if session.status == SessionStatus::Running {
-                    let _ = session.kill();
+                    session.kill().ignore();
                 }
                 Ok(format!("Removed session {}", id))
             } else {

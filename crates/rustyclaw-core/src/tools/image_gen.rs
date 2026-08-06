@@ -3,6 +3,7 @@
 //! Provider-agnostic image generation routed through the provider abstraction.
 //! Gated behind the `image-gen` Cargo feature flag.
 
+use crate::ignore::Ignore;
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -282,13 +283,13 @@ async fn download_image(
     } else {
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let media_dir = workspace_dir.join("media").join("generated");
-        let _ = std::fs::create_dir_all(&media_dir);
+        std::fs::create_dir_all(&media_dir).ignore();
         media_dir.join(format!("{}_{}.png", provider, timestamp))
     };
 
     // Ensure parent directory exists
     if let Some(parent) = file_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).ignore();
     }
 
     std::fs::write(&file_path, &bytes)
@@ -319,12 +320,12 @@ fn save_base64_image(
     } else {
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let media_dir = workspace_dir.join("media").join("generated");
-        let _ = std::fs::create_dir_all(&media_dir);
+        std::fs::create_dir_all(&media_dir).ignore();
         media_dir.join(format!("{}_{}.png", provider, timestamp))
     };
 
     if let Some(parent) = file_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).ignore();
     }
 
     std::fs::write(&file_path, &bytes)

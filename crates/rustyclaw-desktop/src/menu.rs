@@ -1,5 +1,6 @@
 //! Native OS menu bar (muda) for the desktop client.
 
+use rustyclaw_core::ignore::Ignore;
 use std::sync::OnceLock;
 
 use dioxus::desktop::muda;
@@ -101,7 +102,7 @@ pub fn build_app_menu() -> muda::Menu {
         analytics: analytics.id().clone(),
         logs: logs.id().clone(),
     };
-    let _ = APP_MENU_IDS.set(ids);
+    APP_MENU_IDS.set(ids).ignore();
 
     let file_sep = muda::PredefinedMenuItem::separator();
     let tools_sep = muda::PredefinedMenuItem::separator();

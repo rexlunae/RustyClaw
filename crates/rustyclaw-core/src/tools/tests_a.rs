@@ -2,6 +2,7 @@
 
 #![allow(unused_imports, dead_code)]
 use super::*;
+use crate::ignore::Ignore;
 use std::path::Path;
 
 /// Helper: return the project root as workspace dir for tests.
@@ -62,7 +63,7 @@ fn test_read_file_relative() {
 #[test]
 fn test_write_file_and_read_back() {
     let dir = std::env::temp_dir().join("rustyclaw_test_write");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     let args = json!({
         "path": "sub/test.txt",
         "content": "hello world"
@@ -73,7 +74,7 @@ fn test_write_file_and_read_back() {
 
     let content = std::fs::read_to_string(dir.join("sub/test.txt")).unwrap();
     assert_eq!(content, "hello world");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── edit_file ───────────────────────────────────────────────────
@@ -81,7 +82,7 @@ fn test_write_file_and_read_back() {
 #[test]
 fn test_edit_file_single_match() {
     let dir = std::env::temp_dir().join("rustyclaw_test_edit");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("f.txt"), "aaa\nbbb\nccc\n").unwrap();
 
@@ -91,13 +92,13 @@ fn test_edit_file_single_match() {
 
     let content = std::fs::read_to_string(dir.join("f.txt")).unwrap();
     assert_eq!(content, "aaa\nBBB\nccc\n");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
 fn test_edit_file_no_match() {
     let dir = std::env::temp_dir().join("rustyclaw_test_edit_no");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("f.txt"), "aaa\nbbb\n").unwrap();
 
@@ -105,13 +106,13 @@ fn test_edit_file_no_match() {
     let result = exec_edit_file(&args, &dir);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("not found"));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
 fn test_edit_file_multiple_matches() {
     let dir = std::env::temp_dir().join("rustyclaw_test_edit_multi");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("f.txt"), "aaa\naaa\n").unwrap();
 
@@ -119,7 +120,7 @@ fn test_edit_file_multiple_matches() {
     let result = exec_edit_file(&args, &dir);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("2 times"));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── list_directory ──────────────────────────────────────────────
@@ -150,7 +151,7 @@ fn test_search_files_finds_pattern() {
 #[test]
 fn test_search_files_no_match() {
     let dir = std::env::temp_dir().join("rustyclaw_test_search_none");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.txt"), "hello world\n").unwrap();
 
@@ -158,7 +159,7 @@ fn test_search_files_no_match() {
     let result = exec_search_files(&args, &dir);
     assert!(result.is_ok());
     assert!(result.unwrap().contains("No matches"));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── find_files ──────────────────────────────────────────────────
@@ -196,7 +197,7 @@ fn test_find_files_multiple_keywords() {
 #[test]
 fn test_find_files_keyword_no_match() {
     let dir = std::env::temp_dir().join("rustyclaw_test_find_kw");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("hello.txt"), "content").unwrap();
 
@@ -204,7 +205,7 @@ fn test_find_files_keyword_no_match() {
     let result = exec_find_files(&args, &dir);
     assert!(result.is_ok());
     assert!(result.unwrap().contains("No files found"));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── execute_command ─────────────────────────────────────────────
@@ -365,7 +366,7 @@ async fn output_from_before_the_handoff_survives_it() {
     let mgr = process_manager();
     let mut mgr = mgr.lock().expect("process manager lock");
     if let Some(session) = mgr.get_mut(&session_id) {
-        let _ = session.kill();
+        session.kill().ignore();
     }
 }
 
@@ -484,7 +485,7 @@ async fn keys_reach_a_command_after_it_moves_to_the_background() {
     let mgr = process_manager();
     let mut mgr = mgr.lock().expect("process manager lock");
     if let Some(session) = mgr.get_mut(&session_id) {
-        let _ = session.kill();
+        session.kill().ignore();
     }
 }
 
@@ -624,7 +625,7 @@ async fn a_paused_command_keeps_its_grace_when_it_backgrounds() {
     let session = mgr.get_mut(&session_id).expect("the adopted session");
     let exited = session.check_exit();
     let status = session.status.clone();
-    let _ = session.kill();
+    session.kill().ignore();
 
     assert!(
         !exited && status == SessionStatus::Running,
@@ -1266,7 +1267,7 @@ fn deleting_an_agent_takes_its_threads_with_it() {
     use crate::threads::ThreadStore;
 
     let root = std::env::temp_dir().join(format!("rustyclaw-agent-delete-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    std::fs::remove_dir_all(&root).ignore();
     std::fs::create_dir_all(&root).unwrap();
 
     let registry = AgentRegistry::new(&root, "Main");
@@ -1300,7 +1301,7 @@ fn deleting_an_agent_takes_its_threads_with_it() {
     );
     drop(after);
     crate::threads::forget_managers_under(&root);
-    let _ = std::fs::remove_dir_all(&root);
+    std::fs::remove_dir_all(&root).ignore();
 }
 
 /// An agent another window still has open cannot be deleted out from under
@@ -1316,7 +1317,7 @@ fn an_agent_open_elsewhere_cannot_be_deleted() {
     use crate::agents::AgentRegistry;
 
     let root = std::env::temp_dir().join(format!("rustyclaw-agent-busy-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    std::fs::remove_dir_all(&root).ignore();
     std::fs::create_dir_all(&root).unwrap();
 
     let registry = AgentRegistry::new(&root, "Main");
@@ -1345,5 +1346,5 @@ fn an_agent_open_elsewhere_cannot_be_deleted() {
         .expect("delete once nobody has it open");
     assert!(!registry.agent_dir("busy").exists());
 
-    let _ = std::fs::remove_dir_all(&root);
+    std::fs::remove_dir_all(&root).ignore();
 }

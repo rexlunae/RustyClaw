@@ -3,6 +3,7 @@
 //! Wraps the existing `tools/exo_ai/` logic behind the [`LocalEngine`] trait.
 
 use super::*;
+use crate::ignore::Ignore;
 use anyhow::Result;
 use serde_json::Value;
 
@@ -141,11 +142,12 @@ impl LocalEngine for ExoEngine {
             return Ok("Exo is already running.".into());
         }
         let port = cfg.port.unwrap_or(52415);
-        let _ = Self::sh(&format!(
+        Self::sh(&format!(
             "nohup exo --chatgpt-api-port {} > /dev/null 2>&1 &",
             port
         ))
-        .await;
+        .await
+        .ignore();
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         if Self::is_running(&endpoint).await {
             Ok("Exo started.".into())

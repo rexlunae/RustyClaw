@@ -19,6 +19,7 @@
 //!    source `anyhow::Error` at the point of display, not stored
 //!    as a string in the classification.
 
+use rustyclaw_core::ignore::Ignore;
 use std::fmt;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -313,9 +314,9 @@ pub async fn handle(
         // ── Non-fatal: context compaction ────────────────────────────
         GatewayError::ContextCompaction => {
             let msg = user_message(&kind, &source);
-            let _ =
-                protocol::server::send_info(writer, &format!("Context compaction failed: {msg}"))
-                    .await;
+            protocol::server::send_info(writer, &format!("Context compaction failed: {msg}"))
+                .await
+                .ignore();
             Ok(ControlFlow::Continue(()))
         }
 
@@ -501,14 +502,15 @@ async fn handle_device_flow(
             break;
         }
         if tokio::time::Instant::now() >= deadline {
-            let _ = protocol::server::send_info(
+            protocol::server::send_info(
                 writer,
                 &format!(
                     "{}: device flow timed out after {} polls",
                     display, poll_count
                 ),
             )
-            .await;
+            .await
+            .ignore();
             break;
         }
         poll_count += 1;
@@ -524,11 +526,9 @@ async fn handle_device_flow(
                 }
             }
             Err(e) => {
-                let _ = protocol::server::send_info(
-                    writer,
-                    &format!("{}: poll error — {}", display, e),
-                )
-                .await;
+                protocol::server::send_info(writer, &format!("{}: poll error — {}", display, e))
+                    .await
+                    .ignore();
                 warn!(error = %e, "Device flow poll failed");
                 break;
             }

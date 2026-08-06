@@ -6,6 +6,7 @@
 //! per-connection engine in [`crate::server`]. Invoked from the binary entry
 //! point in `main.rs`.
 
+use rustyclaw_core::ignore::Ignore;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -89,7 +90,7 @@ pub async fn run_gateway(
                     } else {
                         format!("{}/{}", ctx.provider, ctx.model)
                     };
-                    let _ = reg.set_active(&qualified);
+                    reg.set_active(&qualified).ignore();
                 }
             }
             Err(e) => {

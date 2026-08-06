@@ -9,6 +9,7 @@
 // the format call to produce VText nodes — these are false positives.
 #![allow(clippy::useless_format)]
 
+use rustyclaw_core::ignore::Ignore;
 use std::sync::OnceLock;
 
 use clap::Parser;
@@ -94,14 +95,15 @@ fn main() -> Result<()> {
 
 fn run(gateway_url: Option<String>, no_dialog: bool, pick_connection: bool) {
     let normalized_gateway_url = normalize_gateway_url(gateway_url);
-    let _ = GATEWAY_URL.set(normalized_gateway_url);
-    let _ = SKIP_DIALOG.set(no_dialog);
-    let _ = FORCE_DIALOG.set(pick_connection);
+    GATEWAY_URL.set(normalized_gateway_url).ignore();
+    SKIP_DIALOG.set(no_dialog).ignore();
+    FORCE_DIALOG.set(pick_connection).ignore();
 
-    let _ = tracing_subscriber::registry()
+    tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(tracing_subscriber::fmt::layer())
-        .try_init();
+        .try_init()
+        .ignore();
 
     tracing::info!("Starting RustyClaw Desktop");
 

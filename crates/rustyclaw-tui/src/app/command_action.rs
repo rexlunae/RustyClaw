@@ -1,5 +1,6 @@
 //! Dispatch for `CommandAction`s produced by slash-command handling in the TUI run loop.
 
+use rustyclaw_core::ignore::Ignore;
 use rustyclaw_view::anyhow::Result;
 use rustyclaw_view::tokio;
 use std::sync::mpsc as sync_mpsc;
@@ -282,21 +283,23 @@ pub(super) async fn handle_command_action(
                         let count = models.len();
                         let display =
                             rustyclaw_core::providers::display_name_for_provider(&provider_id);
-                        let _ = gw_tx2
+                        gw_tx2
                             .send(GwEvent::Info(
                                 format!("{} models from {}:", count, display,),
-                            ));
+                            ))
+                            .ignore();
                         // Show models in batches to avoid
                         // flooding the channel.
                         let lines: Vec<String> = models.iter().map(|m| m.display_line()).collect();
                         for chunk in lines.chunks(20) {
-                            let _ = gw_tx2.send(GwEvent::Info(chunk.join("\n")));
+                            gw_tx2.send(GwEvent::Info(chunk.join("\n"))).ignore();
                         }
-                        let _ =
-                            gw_tx2.send(GwEvent::Info("Tip: /model <id> to switch".to_string()));
+                        gw_tx2
+                            .send(GwEvent::Info("Tip: /model <id> to switch".to_string()))
+                            .ignore();
                     }
                     Err(e) => {
-                        let _ = gw_tx2.send(GwEvent::error_from_err(&e));
+                        gw_tx2.send(GwEvent::error_from_err(&e)).ignore();
                     }
                 }
             });
@@ -387,29 +390,35 @@ pub(super) async fn handle_command_action(
             tokio::spawn(async move {
                 match rustyclaw_core::engines::hub::search_models(&query, true, 20).await {
                     Ok(models) if models.is_empty() => {
-                        let _ = gw_tx2.send(GwEvent::Info(format!(
-                            "No GGUF models found for '{}'.",
-                            query
-                        )));
+                        gw_tx2
+                            .send(GwEvent::Info(format!(
+                                "No GGUF models found for '{}'.",
+                                query
+                            )))
+                            .ignore();
                     }
                     Ok(models) => {
-                        let _ = gw_tx2.send(GwEvent::Info(format!(
-                            "{} GGUF models for '{}' (most downloaded first):",
-                            models.len(),
-                            query
-                        )));
+                        gw_tx2
+                            .send(GwEvent::Info(format!(
+                                "{} GGUF models for '{}' (most downloaded first):",
+                                models.len(),
+                                query
+                            )))
+                            .ignore();
                         let lines: Vec<String> = models.iter().map(|m| m.display_line()).collect();
                         for chunk in lines.chunks(20) {
-                            let _ = gw_tx2.send(GwEvent::Info(chunk.join("\n")));
+                            gw_tx2.send(GwEvent::Info(chunk.join("\n"))).ignore();
                         }
-                        let _ = gw_tx2.send(GwEvent::Info(
-                            "Tip: /engines files <repo> to pick a quantization, \
+                        gw_tx2
+                            .send(GwEvent::Info(
+                                "Tip: /engines files <repo> to pick a quantization, \
                              /engines pull <engine> <repo> to download"
-                                .to_string(),
-                        ));
+                                    .to_string(),
+                            ))
+                            .ignore();
                     }
                     Err(e) => {
-                        let _ = gw_tx2.send(GwEvent::error(format!("{:#}", e)));
+                        gw_tx2.send(GwEvent::error(format!("{:#}", e))).ignore();
                     }
                 }
             });
@@ -419,28 +428,34 @@ pub(super) async fn handle_command_action(
             tokio::spawn(async move {
                 match rustyclaw_core::engines::hub::list_gguf_files(&repo).await {
                     Ok(files) if files.is_empty() => {
-                        let _ = gw_tx2.send(GwEvent::Info(format!(
-                            "No GGUF files in {} — is it a GGUF repo?",
-                            repo
-                        )));
+                        gw_tx2
+                            .send(GwEvent::Info(format!(
+                                "No GGUF files in {} — is it a GGUF repo?",
+                                repo
+                            )))
+                            .ignore();
                     }
                     Ok(files) => {
-                        let _ = gw_tx2.send(GwEvent::Info(format!(
-                            "{} GGUF files in {}:",
-                            files.len(),
-                            repo
-                        )));
+                        gw_tx2
+                            .send(GwEvent::Info(format!(
+                                "{} GGUF files in {}:",
+                                files.len(),
+                                repo
+                            )))
+                            .ignore();
                         let lines: Vec<String> = files.iter().map(|f| f.display_line()).collect();
                         for chunk in lines.chunks(20) {
-                            let _ = gw_tx2.send(GwEvent::Info(chunk.join("\n")));
+                            gw_tx2.send(GwEvent::Info(chunk.join("\n"))).ignore();
                         }
-                        let _ = gw_tx2.send(GwEvent::Info(format!(
-                            "Tip: /engines pull <engine> {} to download",
-                            repo
-                        )));
+                        gw_tx2
+                            .send(GwEvent::Info(format!(
+                                "Tip: /engines pull <engine> {} to download",
+                                repo
+                            )))
+                            .ignore();
                     }
                     Err(e) => {
-                        let _ = gw_tx2.send(GwEvent::error(format!("{:#}", e)));
+                        gw_tx2.send(GwEvent::error(format!("{:#}", e))).ignore();
                     }
                 }
             });

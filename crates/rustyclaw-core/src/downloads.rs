@@ -13,6 +13,7 @@
 //!
 //! Both read the same broadcast; the difference is which events they act on.
 
+use crate::ignore::Ignore;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -473,7 +474,7 @@ fn events() -> &'static tokio::sync::broadcast::Sender<DownloadEvent> {
 /// Announce a change. Sending with no subscribers is not a failure — a
 /// headless run has nobody watching and the registry is still the record.
 pub fn announce(download: Download) {
-    let _ = events().send(DownloadEvent::Changed(download));
+    events().send(DownloadEvent::Changed(download)).ignore();
 }
 
 /// Tell every watcher that `agent`'s transfers named by `ids` are gone.
@@ -485,10 +486,12 @@ pub fn announce_removed(agent: &str, ids: Vec<DownloadId>) {
     if ids.is_empty() {
         return;
     }
-    let _ = events().send(DownloadEvent::Removed {
-        agent: agent.to_string(),
-        ids,
-    });
+    events()
+        .send(DownloadEvent::Removed {
+            agent: agent.to_string(),
+            ids,
+        })
+        .ignore();
 }
 
 fn now_ms() -> u64 {

@@ -2,6 +2,7 @@
 
 #![allow(unused_imports, dead_code)]
 use super::*;
+use crate::ignore::Ignore;
 use std::path::Path;
 
 /// Helper: return the project root as workspace dir for tests.
@@ -597,14 +598,14 @@ fn test_audit_sensitive_params_defined() {
 #[test]
 fn test_audit_sensitive_runs() {
     let dir = std::env::temp_dir().join("rustyclaw_test_audit");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("safe.txt"), "nothing sensitive here").unwrap();
     let args = json!({ "path": ".", "max_files": 10 });
     let result = exec_audit_sensitive(&args, &dir);
     assert!(result.is_ok());
     assert!(result.unwrap().contains("scanned_files"));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── secure_delete ───────────────────────────────────────────────
@@ -639,20 +640,20 @@ fn test_secure_delete_nonexistent() {
 #[test]
 fn test_secure_delete_requires_confirm() {
     let dir = std::env::temp_dir().join("rustyclaw_test_secdelete");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("victim.txt"), "data").unwrap();
     let args = json!({ "path": dir.join("victim.txt").display().to_string() });
     let result = exec_secure_delete(&args, ws());
     assert!(result.is_ok());
     assert!(result.unwrap().contains("confirm_required"));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 #[test]
 fn test_secure_delete_with_confirm() {
     let dir = std::env::temp_dir().join("rustyclaw_test_secdelete2");
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
     std::fs::create_dir_all(&dir).unwrap();
     let victim = dir.join("victim.txt");
     std::fs::write(&victim, "secret data").unwrap();
@@ -664,7 +665,7 @@ fn test_secure_delete_with_confirm() {
     assert!(result.is_ok());
     assert!(result.unwrap().contains("deleted"));
     assert!(!victim.exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ignore();
 }
 
 // ── summarize_file ──────────────────────────────────────────────

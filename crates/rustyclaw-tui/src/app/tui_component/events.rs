@@ -1,5 +1,6 @@
 //! Gateway-event handling for the TUI root: applies each `GwEvent` to UI state.
 
+use rustyclaw_core::ignore::Ignore;
 use std::collections::HashMap;
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -460,7 +461,7 @@ pub(super) fn apply_gw_event(
             foreground_thread_id.set(None);
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::RefreshThreads);
+                    tx.send(UserInput::RefreshThreads).ignore();
                 }
             }
         }
@@ -475,7 +476,7 @@ pub(super) fn apply_gw_event(
             // Request initial thread list
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::RefreshThreads);
+                    tx.send(UserInput::RefreshThreads).ignore();
                 }
             }
             // Show hatching now that auth is complete.
@@ -679,7 +680,8 @@ pub(super) fn apply_gw_event(
             if !completed_text.is_empty() {
                 if let Ok(guard) = tx_for_history.lock() {
                     if let Some(ref tx) = *guard {
-                        let _ = tx.send(UserInput::AssistantResponse(completed_text));
+                        tx.send(UserInput::AssistantResponse(completed_text))
+                            .ignore();
                     }
                 }
             }
@@ -697,7 +699,7 @@ pub(super) fn apply_gw_event(
             messages.set(m);
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::RefreshTasks);
+                    tx.send(UserInput::RefreshTasks).ignore();
                 }
             }
         }
@@ -1090,7 +1092,7 @@ pub(super) fn apply_gw_event(
             // Gateway mutation succeeded — re-fetch list
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::RefreshSecrets);
+                    tx.send(UserInput::RefreshSecrets).ignore();
                 }
             }
         }
@@ -1173,7 +1175,7 @@ pub(super) fn apply_gw_event(
                     );
                     if let Ok(guard) = tx_for_history.lock() {
                         if let Some(ref tx) = *guard {
-                            let _ = tx.send(UserInput::RequestThreadHistory(thread_id));
+                            tx.send(UserInput::RequestThreadHistory(thread_id)).ignore();
                         }
                     }
                 }
@@ -1336,7 +1338,7 @@ pub(super) fn apply_gw_event(
             // what the gateway has persisted.
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::RequestThreadHistory(thread_id));
+                    tx.send(UserInput::RequestThreadHistory(thread_id)).ignore();
                 }
             }
             // Unfocus tab after switch
@@ -1458,10 +1460,11 @@ pub(super) fn apply_gw_event(
             // for storage + model fetching, reusing SubmitApiKey.
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::SubmitApiKey {
+                    tx.send(UserInput::SubmitApiKey {
                         provider,
                         key: token,
-                    });
+                    })
+                    .ignore();
                 }
             }
         }
@@ -1934,7 +1937,7 @@ pub(super) fn apply_gw_event(
             }
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::RefreshPanel(panel));
+                    tx.send(UserInput::RefreshPanel(panel)).ignore();
                 }
             }
         }
