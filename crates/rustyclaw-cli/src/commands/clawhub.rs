@@ -347,15 +347,19 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
         },
         Some(ClawHubSub::Browse) => {
             let url = sm.registry_url().to_string();
-            println!("Opening {} …", t::info(&url));
-            #[cfg(target_os = "macos")]
-            let _ = std::process::Command::new("open").arg(&url).spawn();
-            #[cfg(target_os = "linux")]
-            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-            #[cfg(target_os = "windows")]
-            let _ = std::process::Command::new("cmd")
-                .args(["/C", "start", &url])
-                .spawn();
+            // Report the outcome, not the intent: a headless box has no opener,
+            // and "Opening …" followed by nothing gives the user nothing to act
+            // on. Printing the URL on failure at least leaves them a link.
+            match rustyclaw_core::open_external::open_external(&url) {
+                Ok(()) => println!("Opening {} …", t::info(&url)),
+                Err(e) => {
+                    println!(
+                        "{}",
+                        t::icon_fail(&format!("Could not open a browser: {e}"))
+                    );
+                    println!("Open {} manually.", t::info(&url));
+                }
+            }
         }
         Some(ClawHubSub::Profile) => match sm.profile() {
             Ok(p) => {

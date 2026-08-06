@@ -368,9 +368,19 @@ async fn adopt_child(
                     break SessionStatus::Killed;
                 }
                 Some(bytes) = stdin_rx.recv() => {
-                    if let Some(stdin) = stdin.as_mut() {
-                        let _ = stdin.write_all(&bytes).await;
-                        let _ = stdin.flush().await;
+                    if let Some(pipe) = stdin.as_mut() {
+                        // A failed write means the child closed its stdin (or
+                        // died). The bytes are gone either way, so say so
+                        // rather than let the caller believe input landed, and
+                        // drop the pipe so later sends fail fast instead of
+                        // repeating the same warning per keystroke.
+                        if let Err(e) = pipe.write_all(&bytes).await {
+                            warn!("dropping {} bytes written to child stdin: {e}", bytes.len());
+                            stdin = None;
+                        } else if let Err(e) = pipe.flush().await {
+                            warn!("child stdin flush failed: {e}");
+                            stdin = None;
+                        }
                     }
                 }
                 // `Child::wait` is cancel-safe, so losing this branch to a

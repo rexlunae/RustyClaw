@@ -102,9 +102,21 @@ pub(crate) fn handle_skill_subcommand(
             let version = parts.get(2).copied();
             match context.skill_manager.install_from_registry(name, version) {
                 Ok(skill) => {
-                    let _ = context.skill_manager.load_skills();
+                    // The skill is on disk either way; the reload is what makes
+                    // it usable in this session. Reporting a bare success after
+                    // a failed reload sends the user looking for a skill that
+                    // will not answer until they restart.
+                    let mut messages =
+                        vec![format!("Skill '{}' installed from ClawHub.", skill.name)];
+                    if let Err(e) = context.skill_manager.load_skills() {
+                        messages.push(format!(
+                            "Warning: installed, but reloading skills failed: {}. \
+                             Restart to pick it up.",
+                            e
+                        ));
+                    }
                     CommandResponse {
-                        messages: vec![format!("Skill '{}' installed from ClawHub.", skill.name)],
+                        messages,
                         action: CommandAction::None,
                     }
                 }
@@ -620,17 +632,20 @@ pub(crate) fn handle_clawhub_subcommand(
         }
         Some("browse" | "open") => {
             let url = context.skill_manager.registry_url();
-            // Try to open in default browser
-            #[cfg(target_os = "macos")]
-            let _ = std::process::Command::new("open").arg(url).spawn();
-            #[cfg(target_os = "linux")]
-            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
-            #[cfg(target_os = "windows")]
-            let _ = std::process::Command::new("cmd")
-                .args(["/C", "start", url])
-                .spawn();
+            // Via `open_external` rather than a platform opener directly: the
+            // registry URL comes from config, so it gets the same scheme
+            // allowlist as any other externally-opened link. Announcing the
+            // open before knowing it happened is what the old code did, and it
+            // left the user watching for a window that was never coming.
+            let messages = match crate::open_external::open_external(url) {
+                Ok(()) => vec![format!("Opening {} in your browser…", url)],
+                Err(e) => vec![
+                    format!("Could not open a browser: {}", e),
+                    format!("Open {} manually.", url),
+                ],
+            };
             CommandResponse {
-                messages: vec![format!("Opening {} in your browser…", url)],
+                messages,
                 action: CommandAction::None,
             }
         }
@@ -737,9 +752,19 @@ pub(crate) fn handle_clawhub_subcommand(
             let version = parts.get(2).copied();
             match context.skill_manager.install_from_registry(name, version) {
                 Ok(skill) => {
-                    let _ = context.skill_manager.load_skills();
+                    // Same as `/skill install`: a successful download that fails
+                    // to reload is not a usable skill yet, so say so.
+                    let mut messages =
+                        vec![format!("✓ Skill '{}' installed from ClawHub.", skill.name)];
+                    if let Err(e) = context.skill_manager.load_skills() {
+                        messages.push(format!(
+                            "Warning: installed, but reloading skills failed: {}. \
+                             Restart to pick it up.",
+                            e
+                        ));
+                    }
                     CommandResponse {
-                        messages: vec![format!("✓ Skill '{}' installed from ClawHub.", skill.name)],
+                        messages,
                         action: CommandAction::None,
                     }
                 }

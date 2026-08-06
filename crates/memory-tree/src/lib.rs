@@ -136,7 +136,16 @@ impl MemoryTree {
             }
             Err(e) => {
                 let msg = format!("{}", e);
-                let _ = self.queue.fail(job.id, &msg, None);
+                // The job error is what the caller asked about, so it stays the
+                // return value. But if recording the failure also fails the job
+                // is left reserved with nothing to release it, so that has to be
+                // visible rather than folded into the error being returned.
+                if let Err(fail_err) = self.queue.fail(job.id, &msg, None) {
+                    tracing::warn!(
+                        "job {} left reserved — recording its failure failed: {fail_err}",
+                        job.id
+                    );
+                }
                 Err(e)
             }
         }
