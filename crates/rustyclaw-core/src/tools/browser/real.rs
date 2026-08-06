@@ -97,7 +97,13 @@ pub async fn stop() -> ToolResult {
     if let Some(s) = state.take() {
         // Close all pages
         for (_id, page) in s.pages {
-            let _ = page.close().await;
+            // The browser is being dropped straight after this, which closes
+            // the connection and every page with it. A page that refuses to
+            // close is worth a line for anyone chasing a leaked Chromium, but
+            // it does not stop the teardown.
+            if let Err(e) = page.close().await {
+                tracing::debug!(error = %e, "a page did not close cleanly during browser stop");
+            }
         }
         // Browser will be dropped, closing the connection
         Ok("Browser stopped.".to_string())

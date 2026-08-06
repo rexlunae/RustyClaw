@@ -134,7 +134,13 @@ pub(crate) async fn handle_chat_frame(
         let text = last_user.content.clone();
         tokio::spawn(async move {
             if let Ok(mem) = rustyclaw_core::steel_memory::SteelMemory::new(&ws) {
-                let _ = mem.add_memory(&text, "conversations", "user", None).await;
+                // Detached, so there is no caller to return this to — but a
+                // dropped write means the conversation is not remembered, and
+                // the only symptom later is recall that comes up empty for
+                // something the user knows they said.
+                if let Err(e) = mem.add_memory(&text, "conversations", "user", None).await {
+                    tracing::warn!(error = %e, "the user's message was not written to memory");
+                }
             }
         });
     }
