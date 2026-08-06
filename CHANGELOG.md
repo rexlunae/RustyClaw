@@ -200,6 +200,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The gateway installed no tracing subscriber, so every log line it
+  emitted was discarded.** `tracing` is a no-op facade until something is
+  listening, and nothing ever was: the daemon's `error!`, `warn!`, `info!`
+  and `trace!` calls — the whole crate's worth — went nowhere, `RUST_LOG`
+  was never consulted because there was no filter to consult, and the only
+  evidence a live session left behind was the client's protocol event log.
+  The gateway now installs a subscriber as its first act, before the vault
+  is opened or a port is bound. It logs to stderr, which a foreground run
+  shows on the terminal and `rustyclaw gateway start` already redirects
+  into `<settings_dir>/logs/gateway.log`; under `--ssh-stdio` it writes to
+  that file directly, since there stderr is an ssh channel the client only
+  drains when the session ends — a chatty filter would fill the pipe and
+  wedge the connection. `RUSTYCLAW_LOG_FILE` overrides the destination in
+  either mode.
+
+- **`RUSTYCLAW_LOG`/`RUST_LOG` now outrank the filter a binary configures
+  for itself**, rather than being consulted only by the callers that
+  happened to build their config with `LogConfig::from_env`. A directive
+  that does not parse falls through to the next candidate instead of
+  taking the process's logging down with it. Log output is also colourless
+  when the stream is not a terminal, so a redirected `gateway.log` no
+  longer arrives full of escape codes.
+
 - **`MessengerConfig` no longer prints credentials in `Debug` output.** The
   derived impl put live bot tokens and passwords into the log line emitted
   when a messenger fails to initialize. Secrets are now redacted while the
