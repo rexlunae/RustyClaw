@@ -385,18 +385,20 @@ pub(crate) fn handle_gateway_event(
                 })
                 .collect();
             let mut s = state.write();
-            // The status column is derived from each thread's turn markers
-            // on the gateway, so "Streaming" is authoritative: a turn is
-            // running there whether or not this client saw it start — a
-            // reconnect, another client's message, or a turn the gateway
-            // resumed after a restart. Seed the in-flight set from it
-            // before the foreground derives the indicators, so Stop and
-            // the composer gate come up right. Add-only: removal belongs
-            // to each turn's own close-out, and clearing here would race
-            // a message this client just sent.
-            for t in mapped.iter().filter(|t| t.status == "Streaming") {
-                s.in_flight.insert(t.id);
-            }
+            // Reconciled before the foreground derives the indicators, so
+            // Stop and the composer gate come up right. Both directions:
+            // see `apply_thread_statuses` for why "Ready" has to clear the
+            // entry and not only "Streaming" set it.
+            //
+            // The race the old add-only comment named — a stale list
+            // clearing a turn this client has just sent — is real but
+            // bounded, and the gateway closes it: the Chat arm calls
+            // `begin_turn` and sends a fresh thread list in the same breath,
+            // so an authoritative "Streaming" lands within a round trip of a
+            // submit. A stale "Ready" still in flight at submit time can
+            // un-gate the composer until it does. That window is one round
+            // trip and self-correcting, which a permanent lockout is not.
+            s.apply_thread_statuses(&mapped);
             s.threads = mapped;
             s.set_foreground_thread(foreground_id);
         }

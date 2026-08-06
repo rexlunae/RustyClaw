@@ -20,6 +20,25 @@ use super::protocol::{ServerFrame, WireFrame, deserialize_wire_frame, serialize_
 /// that a live gateway is on the other end.
 pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// How often ssh probes an otherwise silent connection, and how many probes
+/// may go unanswered before it gives up — together, how long a dead link can
+/// masquerade as a running turn (here, 30s × 4 = two minutes).
+///
+/// Kept well under the idle timeout of a typical NAT or stateful firewall,
+/// which is what drops these connections in the first place, and long enough
+/// that a slow link is not mistaken for a dead one.
+pub const KEEPALIVE_INTERVAL_SECS: u32 = 30;
+pub const KEEPALIVE_COUNT_MAX: u32 = 4;
+
+// A dead link must not masquerade as a running turn for long: past this, the
+// composer sits gated behind a close-out that is never coming, which is the
+// failure these probes exist to end. Checked here so raising either constant
+// has to be a deliberate choice about that ceiling.
+const _: () = assert!(
+    KEEPALIVE_INTERVAL_SECS * KEEPALIVE_COUNT_MAX <= 180,
+    "keepalive probes must detect a dead connection within three minutes"
+);
+
 /// Read half of an SSH gateway transport.
 ///
 /// Owns the child's stdout and stderr. Designed to be moved into a dedicated
@@ -195,6 +214,48 @@ pub struct SshConnection {
     child: tokio::process::Child,
 }
 
+/// The `ssh` flags every gateway connection is made with, in order.
+///
+/// Split out so the connection's security and liveness settings can be
+/// asserted without spawning a process — `connect` builds a real child, so
+/// nothing here was checkable before, and a dropped option is silent.
+fn ssh_options(client_key: &std::path::Path, known_hosts: &std::path::Path) -> Vec<String> {
+    vec![
+        // No TTY: this is a frame pipe, not a shell.
+        "-T".to_string(),
+        // The paired client key, and only it — never an agent identity or
+        // whatever else the user happens to have loaded.
+        "-o".to_string(),
+        "PreferredAuthentications=publickey".to_string(),
+        "-o".to_string(),
+        "IdentitiesOnly=yes".to_string(),
+        "-i".to_string(),
+        client_key.display().to_string(),
+        // RustyClaw's own known_hosts, so pairing a gateway does not write
+        // into the user's ssh config.
+        "-o".to_string(),
+        format!("UserKnownHostsFile={}", known_hosts.display()),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+        // Never prompt: there is no terminal to answer on.
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        // A turn can run for minutes without either side writing a frame —
+        // a long tool call says nothing on the wire — and the protocol has
+        // no heartbeat of its own. An idle NAT or firewall that drops the
+        // connection in that window leaves `recv_wire` parked on a read that
+        // will never return and never fail: no EOF, no error, so nothing
+        // reports the disconnect and the client waits forever for a
+        // close-out that cannot arrive. These make ssh itself notice, and
+        // turn a silent death into the ordinary EOF the reader already
+        // handles.
+        "-o".to_string(),
+        format!("ServerAliveInterval={KEEPALIVE_INTERVAL_SECS}"),
+        "-o".to_string(),
+        format!("ServerAliveCountMax={KEEPALIVE_COUNT_MAX}"),
+    ]
+}
+
 impl SshConnection {
     /// Parse `url` (`ssh://[user@]host[:port]`), spawn an SSH subprocess
     /// running `rustyclaw-gateway run --ssh-stdio`, and return split
@@ -220,21 +281,14 @@ impl SshConnection {
             .map(|_| crate::pairing::default_client_key_path())
             .context("Failed to load/generate client key")?;
 
-        // ── Build the SSH command ──────────────────────────────────────
-        let mut cmd = Command::new("ssh");
-        cmd.arg("-T");
-        cmd.arg("-o").arg("PreferredAuthentications=publickey");
-        cmd.arg("-o").arg("IdentitiesOnly=yes");
-        cmd.arg("-i").arg(&client_key_path);
-
         let known_hosts_path = dirs::config_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("rustyclaw")
             .join("known_hosts");
-        cmd.arg("-o")
-            .arg(format!("UserKnownHostsFile={}", known_hosts_path.display()));
-        cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
-        cmd.arg("-o").arg("BatchMode=yes");
+
+        // ── Build the SSH command ──────────────────────────────────────
+        let mut cmd = Command::new("ssh");
+        cmd.args(ssh_options(&client_key_path, &known_hosts_path));
 
         if let Some(p) = port {
             cmd.arg("-p").arg(p.to_string());
@@ -340,6 +394,55 @@ fn bare_to_wire_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A gateway turn can be silent on the wire for minutes, so ssh has to
+    /// be the thing that notices a dead link. Without these the reader parks
+    /// on a read that never returns, no `Disconnected` is ever emitted, and
+    /// the client waits for a close-out that cannot arrive — which showed up
+    /// as a desktop composer that stayed gated until the app was restarted.
+    #[test]
+    fn every_connection_asks_ssh_to_notice_a_dead_link() {
+        let opts = ssh_options(
+            std::path::Path::new("/keys/client_ed25519"),
+            std::path::Path::new("/cfg/known_hosts"),
+        );
+
+        assert!(
+            opts.contains(&format!("ServerAliveInterval={KEEPALIVE_INTERVAL_SECS}")),
+            "ssh must probe an idle connection: {opts:?}"
+        );
+        assert!(
+            opts.contains(&format!("ServerAliveCountMax={KEEPALIVE_COUNT_MAX}")),
+            "unanswered probes must eventually close the connection: {opts:?}"
+        );
+    }
+
+    /// The connection's security settings travel with it. These are easy to
+    /// drop in a refactor and nothing else asserts them.
+    #[test]
+    fn every_connection_pins_its_identity_and_host_checking() {
+        let opts = ssh_options(
+            std::path::Path::new("/keys/client_ed25519"),
+            std::path::Path::new("/cfg/known_hosts"),
+        );
+
+        for expected in [
+            "PreferredAuthentications=publickey",
+            "IdentitiesOnly=yes",
+            "StrictHostKeyChecking=accept-new",
+            "BatchMode=yes",
+            "UserKnownHostsFile=/cfg/known_hosts",
+        ] {
+            assert!(
+                opts.iter().any(|o| o == expected),
+                "missing {expected}: {opts:?}"
+            );
+        }
+        assert!(
+            opts.iter().any(|o| o == "/keys/client_ed25519"),
+            "the paired client key must be the identity: {opts:?}"
+        );
+    }
 
     /// The legacy fallback must not swallow a real wire frame.
     ///

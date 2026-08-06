@@ -1405,6 +1405,50 @@ impl AppState {
         self.derive_view_indicators();
     }
 
+    /// Reconcile the in-flight set against the gateway's thread list.
+    ///
+    /// The status column is derived from each thread's turn markers on the
+    /// gateway, which makes it authoritative in both directions — including
+    /// for turns this connection never started and will never see a
+    /// `ResponseDone` for.
+    ///
+    /// Both directions is the point. While this was add-only, `in_flight`
+    /// had exactly one other way out — the turn's own close-out — so a
+    /// thread seen as `Streaming` whose close-out never arrived stayed in
+    /// the set for the life of the process. Since [`is_processing`] is
+    /// derived from that set and gates the composer, the effect was a
+    /// conversation that could no longer be typed into, with a restart as
+    /// the only way back.
+    ///
+    /// Statuses other than the two known ones leave an entry alone rather
+    /// than reading as idle, so a gateway that grows a third state cannot
+    /// open the gate on a running turn.
+    ///
+    /// [`is_processing`]: Self::is_processing
+    pub fn apply_thread_statuses(&mut self, threads: &[ThreadInfo]) {
+        for t in threads {
+            match t.status.as_str() {
+                "Streaming" => {
+                    self.in_flight.insert(t.id);
+                }
+                "Ready" => {
+                    self.in_flight.remove(&t.id);
+                }
+                _ => {}
+            }
+        }
+        // `set_foreground_thread` short-circuits when the foreground has not
+        // moved, and it is the usual caller of `derive_view_indicators` —
+        // so without this the gate would keep whatever value it held before
+        // this reconciliation until the user switched threads and back.
+        // Only the gate is refreshed: the streaming and thinking flags
+        // belong to frames still arriving, and clearing them here would
+        // drop the spinner mid-turn.
+        if let Some(thread) = self.foreground_thread_id {
+            self.is_processing = self.in_flight.contains(&thread);
+        }
+    }
+
     /// Point the working indicators at the thread now in the foreground.
     ///
     /// `is_processing` doubles as the composer gate, and that is wanted: a
@@ -1592,6 +1636,111 @@ mod tests {
         let mut s = AppState::default();
         s.messages.clear();
         s
+    }
+
+    /// A thread list as `ThreadsUpdate` delivers it.
+    fn thread_at(id: u64, status: &str) -> ThreadInfo {
+        ThreadInfo {
+            id,
+            project_id: 0,
+            label: Some(format!("thread {id}")),
+            description: None,
+            status: status.to_string(),
+            is_foreground: true,
+            message_count: 0,
+            working_dir: None,
+        }
+    }
+
+    /// A state looking at `thread`, with a turn believed to be running in it.
+    fn watching(thread: u64) -> AppState {
+        let mut s = idle_state();
+        s.set_foreground_thread(Some(thread));
+        s.apply_thread_statuses(&[thread_at(thread, "Streaming")]);
+        assert!(s.is_processing, "the turn should gate the composer");
+        s
+    }
+
+    /// The bug this pair exists for: a turn seen as `Streaming` whose
+    /// `ResponseDone` never reaches this client — because the turn belongs to
+    /// another connection, or because the link died silently mid-turn — used
+    /// to hold `in_flight` for the life of the process. `is_processing` is
+    /// derived from that set and gates the composer, so the conversation
+    /// became permanently unable to accept a message and only a restart
+    /// cleared it. The gateway saying `Ready` has to be enough on its own.
+    #[test]
+    fn a_ready_thread_list_releases_the_composer_without_a_close_out() {
+        let mut s = watching(7);
+
+        // No `response_done` — that is the whole point.
+        s.apply_thread_statuses(&[thread_at(7, "Ready")]);
+
+        assert!(
+            !s.in_flight.contains(&7),
+            "the gateway reported the thread idle"
+        );
+        assert!(
+            !s.is_processing,
+            "the composer must accept a message again without a restart"
+        );
+    }
+
+    /// The release must not wait for a thread switch. `set_foreground_thread`
+    /// short-circuits when the foreground has not moved, so a fix that only
+    /// updated `in_flight` would leave the gate stuck until the user
+    /// navigated away and back — which reads as the same bug.
+    #[test]
+    fn the_composer_reopens_without_switching_threads() {
+        let mut s = watching(7);
+        let before = s.foreground_thread_id;
+
+        s.apply_thread_statuses(&[thread_at(7, "Ready")]);
+
+        assert_eq!(s.foreground_thread_id, before, "no navigation happened");
+        assert!(!s.is_processing, "the gate refreshed in place");
+    }
+
+    /// `Streaming` still gates: a turn this client never started — another
+    /// window's message, or one the gateway resumed after a restart — must
+    /// still put the composer behind Stop.
+    #[test]
+    fn a_streaming_thread_list_still_gates_the_composer() {
+        let mut s = idle_state();
+        s.set_foreground_thread(Some(7));
+        assert!(!s.is_processing, "nothing running yet");
+
+        s.apply_thread_statuses(&[thread_at(7, "Streaming")]);
+
+        assert!(s.in_flight.contains(&7));
+        assert!(s.is_processing, "someone else's turn still holds the gate");
+    }
+
+    /// An unrecognised status leaves the entry alone. Reading anything that
+    /// is not `Streaming` as idle would let a gateway that grows a third
+    /// state silently open the gate on a running turn.
+    #[test]
+    fn an_unknown_status_does_not_release_a_running_turn() {
+        let mut s = watching(7);
+
+        s.apply_thread_statuses(&[thread_at(7, "Compacting")]);
+
+        assert!(s.in_flight.contains(&7), "still held");
+        assert!(s.is_processing, "still gated");
+    }
+
+    /// Reconciliation is per thread: a thread going idle must not clear the
+    /// gate on a different one that is still running.
+    #[test]
+    fn one_thread_going_idle_leaves_another_running() {
+        let mut s = idle_state();
+        s.set_foreground_thread(Some(1));
+        s.apply_thread_statuses(&[thread_at(1, "Streaming"), thread_at(2, "Streaming")]);
+
+        s.apply_thread_statuses(&[thread_at(1, "Streaming"), thread_at(2, "Ready")]);
+
+        assert!(s.in_flight.contains(&1), "thread 1 is still answering");
+        assert!(!s.in_flight.contains(&2));
+        assert!(s.is_processing, "the foreground thread is still running");
     }
 
     /// Persisted history keeps its roles: a replayed conversation renders as
