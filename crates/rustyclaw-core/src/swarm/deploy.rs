@@ -82,7 +82,14 @@ pub fn create_swarm(
     let mut created: Vec<String> = Vec::new();
     let rollback = |created: &[String]| {
         for id in created {
-            let _ = registry.delete(id);
+            // Rollback is best-effort — the deploy error is what gets returned,
+            // and there is nothing better to do here than keep deleting. But a
+            // failed delete leaves an agent behind that the next deploy of this
+            // swarm will reject as already existing, so name it now rather than
+            // let that surface later as an unexplained collision.
+            if let Err(e) = registry.delete(id) {
+                tracing::warn!("rollback left agent '{}' behind: {}", id, e);
+            }
         }
     };
 

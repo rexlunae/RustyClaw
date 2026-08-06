@@ -195,13 +195,20 @@ impl App {
             secrets_manager.set_agent_access(config.agent_access);
         }
 
+        // Neither failure is fatal — the app runs with no skills and an empty
+        // soul — but both leave the user staring at a feature that looks empty
+        // for no stated reason, so the reason goes to the log.
         let skills_dirs = config.skills_dirs();
         let mut skill_manager = SkillManager::with_dirs(skills_dirs);
-        let _ = skill_manager.load_skills();
+        if let Err(e) = skill_manager.load_skills() {
+            tracing::warn!("starting with no skills loaded: {}", e);
+        }
 
         let soul_path = config.soul_path();
         let mut soul_manager = SoulManager::new(soul_path);
-        let _ = soul_manager.load();
+        if let Err(e) = soul_manager.load() {
+            tracing::warn!("starting with no SOUL.md loaded: {}", e);
+        }
 
         Ok(Self {
             config,

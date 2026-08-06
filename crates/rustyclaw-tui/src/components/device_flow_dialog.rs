@@ -16,15 +16,19 @@ pub fn osc8_hyperlink(url: &str, label: &str) -> String {
 }
 
 /// Open a URL in the user's default browser (best-effort, non-blocking).
+///
+/// The verification URL arrives in the provider's device-flow response, so it
+/// goes through `open_external` for the scheme allowlist rather than straight
+/// to a platform opener. Failure stays non-fatal — the dialog renders the same
+/// URL as an OSC 8 link and as plain text, so the user still has a way through
+/// — but it is logged rather than dropped, since "the browser never opened"
+/// and "the URL was refused" look identical on screen.
 pub fn open_url_in_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(url).spawn();
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", url])
-        .spawn();
+    if let Err(e) = rustyclaw_core::open_external::open_external(url) {
+        rustyclaw_view::tracing::debug!(
+            "device flow browser open failed, falling back to the on-screen link: {e}"
+        );
+    }
 }
 
 #[derive(Default, Props)]

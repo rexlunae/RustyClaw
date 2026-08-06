@@ -147,7 +147,15 @@ impl ProtocolEventLog {
             return;
         };
 
-        let _ = Self::write_event(file, &event);
+        // A write failure here is almost never transient — a full disk or a
+        // broken descriptor stays broken — and `log` runs once per protocol
+        // event. Report it once and drop the handle, so the log degrades to
+        // "off" rather than emitting a warning per frame for the rest of the
+        // session. Rotation re-opens the file, giving it a way back.
+        if let Err(e) = Self::write_event(file, &event) {
+            tracing::warn!("protocol event log disabled after write failure: {e}");
+            inner.file = None;
+        }
     }
 
     /// Log a frame event (convenience wrapper).

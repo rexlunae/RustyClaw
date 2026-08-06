@@ -1389,7 +1389,11 @@ pub(crate) fn load_skills_list() -> Vec<rustyclaw_view::SkillInfoData> {
         return Vec::new();
     };
     let mut mgr = rustyclaw_core::skills::SkillManager::with_dirs(config.skills_dirs());
-    let _ = mgr.load_skills();
+    // An unreadable skills dir would otherwise render as an empty dialog that
+    // looks like "you have no skills" rather than "we could not read them".
+    if let Err(e) = mgr.load_skills() {
+        tracing::warn!("skills dialog listing nothing — load failed: {}", e);
+    }
     mgr.get_skills()
         .iter()
         .map(|s| rustyclaw_view::SkillInfoData {
@@ -1404,14 +1408,20 @@ pub(crate) fn load_skills_list() -> Vec<rustyclaw_view::SkillInfoData> {
 pub(crate) fn toggle_skill(name: &str) -> Vec<rustyclaw_view::SkillInfoData> {
     if let Ok(config) = rustyclaw_core::config::Config::load(None) {
         let mut mgr = rustyclaw_core::skills::SkillManager::with_dirs(config.skills_dirs());
-        let _ = mgr.load_skills();
+        if let Err(e) = mgr.load_skills() {
+            tracing::warn!("cannot toggle '{}' — loading skills failed: {}", name, e);
+        }
         let enabled = mgr
             .get_skills()
             .iter()
             .find(|s| s.name == name)
             .map(|s| s.enabled);
         if let Some(enabled) = enabled {
-            let _ = mgr.set_skill_enabled(name, !enabled);
+            // The dialog re-reads from disk on the way out, so a dropped error
+            // here shows the switch snapping back with no explanation.
+            if let Err(e) = mgr.set_skill_enabled(name, !enabled) {
+                tracing::warn!("toggling skill '{}' failed: {}", name, e);
+            }
         }
     }
     load_skills_list()
