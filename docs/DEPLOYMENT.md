@@ -195,7 +195,25 @@ RUST_LOG=debug rustyclaw gateway run
 RUST_LOG=rustyclaw=debug,tower_http=info rustyclaw gateway run
 ```
 
+`RUSTYCLAW_LOG` is read first and `RUST_LOG` second; either outranks the
+filter the binary would otherwise use, which defaults to
+`rustyclaw=info,warn`. A directive that does not parse is ignored rather
+than silencing the process. `RUSTYCLAW_LOG_FORMAT` selects `pretty`,
+`compact` (the gateway's default) or `json`.
+
 Log levels: `error`, `warn`, `info`, `debug`, `trace`
+
+Where the gateway writes:
+
+| How it was started | Destination |
+| --- | --- |
+| Foreground (`rustyclaw gateway run`, systemd) | stderr — the terminal, or the journal |
+| `rustyclaw gateway start` | stderr, already redirected to `<settings_dir>/logs/gateway.log` |
+| `--ssh-stdio` (OpenSSH subsystem) | `<settings_dir>/logs/gateway.log` — stdio is the wire protocol |
+| `RUSTYCLAW_LOG_FILE=<path>` | that file, in every mode |
+
+Colour is used only when the stream is a terminal, so a redirected log
+stays greppable. `NO_COLOR` and `--no-color` suppress it entirely.
 
 ### Observability
 

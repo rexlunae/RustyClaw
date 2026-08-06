@@ -19,6 +19,7 @@ mod errors;
 mod helpers;
 mod kernel_handler;
 mod listen;
+mod logging;
 mod mcp_handler;
 mod messenger_config_handler;
 mod messenger_handler;
@@ -184,6 +185,16 @@ async fn main() -> Result<()> {
     };
 
     let protocol_stdio = args.ssh_stdio;
+
+    // Before anything else the daemon does: `tracing` discards every event
+    // until a subscriber exists, so a line emitted above this one is gone.
+    logging::init(&config, protocol_stdio);
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        pid = std::process::id(),
+        stdio = protocol_stdio,
+        "Gateway starting"
+    );
 
     let host = match args.bind {
         GatewayBind::Loopback => "127.0.0.1",

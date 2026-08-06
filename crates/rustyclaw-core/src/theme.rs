@@ -48,6 +48,14 @@ fn is_color() -> bool {
     !COLOR_DISABLED.load(Ordering::Relaxed)
 }
 
+/// Whether colour output is enabled — see [`init_color`].
+///
+/// For output that does not go through the helpers below and has to make
+/// the decision itself, such as the log formatter.
+pub fn color_enabled() -> bool {
+    is_color()
+}
+
 // ── Lobster palette ─────────────────────────────────────────────────────────
 
 /// Lobster palette hex values — source of truth.
