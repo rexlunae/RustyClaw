@@ -720,7 +720,7 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            tx.send(UserInput::ToggleSkill { name }).ignore();
+                            crate::app::events::submit(tx, UserInput::ToggleSkill { name });
                         }
                     }
                 }
@@ -771,7 +771,7 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            tx.send(UserInput::CycleToolPermission { name }).ignore();
+                            crate::app::events::submit(tx, UserInput::CycleToolPermission { name });
                         }
                     }
                 }
@@ -804,7 +804,10 @@ pub(super) fn handle_normal_key(
                         if !name.is_empty() && !value.is_empty() {
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    tx.send(UserInput::AddSecret { name, value }).ignore();
+                                    crate::app::events::submit(
+                                        tx,
+                                        UserInput::AddSecret { name, value },
+                                    );
                                 }
                             }
                         }
@@ -882,11 +885,13 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            tx.send(UserInput::CycleSecretPolicy {
-                                name,
-                                current_policy: policy,
-                            })
-                            .ignore();
+                            crate::app::events::submit(
+                                tx,
+                                UserInput::CycleSecretPolicy {
+                                    name,
+                                    current_policy: policy,
+                                },
+                            );
                         }
                     }
                 }
@@ -900,7 +905,7 @@ pub(super) fn handle_normal_key(
                     drop(data);
                     if let Ok(guard) = tx_for_keys.lock() {
                         if let Some(ref tx) = *guard {
-                            tx.send(UserInput::DeleteSecret { name }).ignore();
+                            crate::app::events::submit(tx, UserInput::DeleteSecret { name });
                         }
                     }
                 }
@@ -928,7 +933,7 @@ pub(super) fn handle_normal_key(
             should_quit.set(true);
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::Quit).ignore();
+                    crate::app::events::submit(tx, UserInput::Quit);
                 }
             }
         }
@@ -947,11 +952,13 @@ pub(super) fn handle_normal_key(
                 };
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        tx.send(UserInput::ProcessControl {
-                            pid: ap.pid,
-                            action,
-                        })
-                        .ignore();
+                        crate::app::events::submit(
+                            tx,
+                            UserInput::ProcessControl {
+                                pid: ap.pid,
+                                action,
+                            },
+                        );
                     }
                 }
                 // Flip optimistically so the inline hint switches between
@@ -968,11 +975,13 @@ pub(super) fn handle_normal_key(
             if let Some(ap) = active_process.read().clone() {
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        tx.send(UserInput::ProcessControl {
-                            pid: ap.pid,
-                            action: rustyclaw_core::exec_status::ProcessControlAction::Stop,
-                        })
-                        .ignore();
+                        crate::app::events::submit(
+                            tx,
+                            UserInput::ProcessControl {
+                                pid: ap.pid,
+                                action: rustyclaw_core::exec_status::ProcessControlAction::Stop,
+                            },
+                        );
                     }
                 }
             }
@@ -983,11 +992,13 @@ pub(super) fn handle_normal_key(
             if let Some(ap) = active_process.read().clone() {
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        tx.send(UserInput::ProcessControl {
-                            pid: ap.pid,
-                            action: rustyclaw_core::exec_status::ProcessControlAction::Kill,
-                        })
-                        .ignore();
+                        crate::app::events::submit(
+                            tx,
+                            UserInput::ProcessControl {
+                                pid: ap.pid,
+                                action: rustyclaw_core::exec_status::ProcessControlAction::Kill,
+                            },
+                        );
                     }
                 }
             }
@@ -1007,13 +1018,15 @@ pub(super) fn handle_normal_key(
             messages.set(m);
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::CancelCurrentRequest {
-                        // Stop what the user is looking at. With a turn
-                        // running in several threads, the one on screen is
-                        // the only one they can have meant.
-                        thread_id: foreground_thread_id.get(),
-                    })
-                    .ignore();
+                    crate::app::events::submit(
+                        tx,
+                        UserInput::CancelCurrentRequest {
+                            // Stop what the user is looking at. With a turn
+                            // running in several threads, the one on screen is
+                            // the only one they can have meant.
+                            thread_id: foreground_thread_id.get(),
+                        },
+                    );
                 }
             }
         }
@@ -1190,7 +1203,7 @@ pub(super) fn handle_normal_key(
                 // Send thread switch request
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
-                        tx.send(UserInput::ThreadSwitch(thread.id)).ignore();
+                        crate::app::events::submit(tx, UserInput::ThreadSwitch(thread.id));
                     }
                 }
             }
@@ -1214,8 +1227,10 @@ pub(super) fn handle_normal_key(
                 if let Ok(guard) = tx_for_keys.lock() {
                     if let Some(ref tx) = *guard {
                         if val.starts_with('/') {
-                            tx.send(UserInput::Command(val.trim_start_matches('/').to_string()))
-                                .ignore();
+                            crate::app::events::submit(
+                                tx,
+                                UserInput::Command(val.trim_start_matches('/').to_string()),
+                            );
                         } else {
                             let mut m = messages.read().clone();
                             m.push(DisplayMessage::user(&val));
@@ -1234,11 +1249,13 @@ pub(super) fn handle_normal_key(
                                 running.insert(thread);
                                 in_flight.set(running);
                             }
-                            tx.send(UserInput::Chat {
-                                text: val,
-                                thread_id: foreground_thread_id.get(),
-                            })
-                            .ignore();
+                            crate::app::events::submit(
+                                tx,
+                                UserInput::Chat {
+                                    text: val,
+                                    thread_id: foreground_thread_id.get(),
+                                },
+                            );
                         }
                     }
                 }
@@ -1472,10 +1489,12 @@ pub(super) fn refresh_slash_completions(
             model_completion_loading.set(Some(current_pid.clone()));
             if let Ok(guard) = tx.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::FetchModelCompletions {
-                        provider: current_pid.clone(),
-                    })
-                    .ignore();
+                    crate::app::events::submit(
+                        tx,
+                        UserInput::FetchModelCompletions {
+                            provider: current_pid.clone(),
+                        },
+                    );
                 }
             }
         }
@@ -1490,11 +1509,13 @@ pub(super) fn refresh_slash_completions(
                 hub_completion_loading.set(Some(ctx.query.clone()));
                 if let Ok(guard) = tx.lock() {
                     if let Some(ref tx) = *guard {
-                        tx.send(UserInput::FetchHubModelCompletions {
-                            query: ctx.query.clone(),
-                            gguf_only: ctx.gguf_only,
-                        })
-                        .ignore();
+                        crate::app::events::submit(
+                            tx,
+                            UserInput::FetchHubModelCompletions {
+                                query: ctx.query.clone(),
+                                gguf_only: ctx.gguf_only,
+                            },
+                        );
                     }
                 }
             }

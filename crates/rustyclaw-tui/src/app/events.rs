@@ -46,6 +46,32 @@ pub(crate) fn emit(tx: &std::sync::mpsc::Sender<GwEvent>, event: GwEvent) {
     }
 }
 
+/// Carry a user's action back to the tokio loop, logging the loss rather than
+/// discarding it.
+///
+/// The mirror of [`emit`], for the other direction. Every one of these is
+/// something the user *did* — a prompt, a keypress answering a dialog, a Stop.
+/// The send fails when the loop has ended, which at shutdown is unremarkable
+/// and at any other time means the action went nowhere: no request, no error,
+/// no sign on screen that anything happened. That is the shape of failure
+/// hardest to diagnose from a bug report, because the person reporting it has
+/// nothing to describe beyond "it did not work".
+///
+/// Named, not debug-formatted, for the reason [`emit`] gives: `UserInput::Chat`
+/// carries the prompt the user typed, and it does not belong in a log line.
+pub(crate) fn submit(
+    tx: &std::sync::mpsc::Sender<super::app::UserInput>,
+    input: super::app::UserInput,
+) {
+    let name: &'static str = (&input).into();
+    if tx.send(input).is_err() {
+        rustyclaw_view::tracing::debug!(
+            input = %name,
+            "user action dropped; the event loop is gone (expected during shutdown)"
+        );
+    }
+}
+
 /// Report a failed action to the log and to the user, without ending the loop.
 ///
 /// The event loop lives in `run() -> Result<()>`, so a bare `?` there would
@@ -496,5 +522,60 @@ impl GwEvent {
             summary: format!("{:#}", err),
             details: Some(rustyclaw_core::error_details::render_extended(err)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::app::UserInput;
+
+    /// A user action whose receiver has gone must not take the UI down with
+    /// it. The loop ending is the normal shutdown order, and a panic here
+    /// would turn every quit into a crash.
+    #[test]
+    fn submitting_to_a_closed_loop_is_survivable() {
+        let (tx, rx) = std::sync::mpsc::channel::<UserInput>();
+        drop(rx);
+
+        submit(
+            &tx,
+            UserInput::Chat {
+                text: "hello".into(),
+                thread_id: Some(1),
+            },
+        );
+    }
+
+    /// The log line names the variant and nothing else. `UserInput::Chat`
+    /// carries the prompt the user typed; `{:?}` on it would put that in the
+    /// log, which is the thing `emit` avoids for the same reason.
+    #[test]
+    fn the_name_identifies_without_quoting_the_user() {
+        let input = UserInput::Chat {
+            text: "my private prompt".into(),
+            thread_id: None,
+        };
+        let name: &'static str = (&input).into();
+
+        assert_eq!(name, "Chat");
+        assert!(
+            !name.contains("private"),
+            "the variant name must not carry the payload"
+        );
+    }
+
+    /// A live receiver still gets the action — the logging wrapper must not
+    /// have become a silent drop of its own.
+    #[test]
+    fn a_live_loop_receives_the_action() {
+        let (tx, rx) = std::sync::mpsc::channel::<UserInput>();
+
+        submit(&tx, UserInput::Quit);
+
+        assert!(
+            matches!(rx.try_recv(), Ok(UserInput::Quit)),
+            "the action should have arrived"
+        );
     }
 }

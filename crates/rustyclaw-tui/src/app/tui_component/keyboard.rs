@@ -1,7 +1,6 @@
 //! Keyboard event handling for the TUI root: dialog focus + dispatch.
 
 use iocraft::prelude::*;
-use rustyclaw_core::ignore::Ignore;
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -192,7 +191,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::Quit).ignore();
+                                crate::app::events::submit(tx, UserInput::Quit);
                             }
                         }
                     }
@@ -227,7 +226,10 @@ pub(super) fn apply_key_event(
                             auth_error.set("Verifying…".to_string());
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    tx.send(UserInput::AuthResponse(code_val)).ignore();
+                                    crate::app::events::submit(
+                                        tx,
+                                        UserInput::AuthResponse(code_val),
+                                    );
                                 }
                             }
                         }
@@ -245,7 +247,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::Quit).ignore();
+                                crate::app::events::submit(tx, UserInput::Quit);
                             }
                         }
                     }
@@ -265,8 +267,10 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::ToolApprovalResponse { id, approved: true })
-                                    .ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::ToolApprovalResponse { id, approved: true },
+                                );
                             }
                         }
                     }
@@ -282,11 +286,13 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::ToolApprovalResponse {
-                                    id,
-                                    approved: false,
-                                })
-                                .ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::ToolApprovalResponse {
+                                        id,
+                                        approved: false,
+                                    },
+                                );
                             }
                         }
                     }
@@ -309,8 +315,10 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::ToolApprovalResponse { id, approved })
-                                    .ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::ToolApprovalResponse { id, approved },
+                                );
                             }
                         }
                     }
@@ -345,7 +353,10 @@ pub(super) fn apply_key_event(
                             show_provider_selector.set(false);
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    tx.send(UserInput::SelectProvider(id.clone())).ignore();
+                                    crate::app::events::submit(
+                                        tx,
+                                        UserInput::SelectProvider(id.clone()),
+                                    );
                                 }
                             }
                         }
@@ -380,11 +391,13 @@ pub(super) fn apply_key_event(
                             api_key_input.set(String::new());
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    tx.send(UserInput::SubmitApiKey {
-                                        provider,
-                                        key: key_val,
-                                    })
-                                    .ignore();
+                                    crate::app::events::submit(
+                                        tx,
+                                        UserInput::SubmitApiKey {
+                                            provider,
+                                            key: key_val,
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -402,7 +415,7 @@ pub(super) fn apply_key_event(
                         device_flow_browser_opened.set(false);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::CancelProviderFlow).ignore();
+                                crate::app::events::submit(tx, UserInput::CancelProviderFlow);
                             }
                         }
                     }
@@ -447,11 +460,13 @@ pub(super) fn apply_key_event(
                             if let Ok(guard) = tx_for_keys.lock()
                                 && let Some(ref tx) = *guard
                             {
-                                tx.send(UserInput::SelectModel {
-                                    provider,
-                                    model: model.clone(),
-                                })
-                                .ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::SelectModel {
+                                        provider,
+                                        model: model.clone(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -490,7 +505,10 @@ pub(super) fn apply_key_event(
                                 && let Some(ref tx) = *guard
                             {
                                 // Dialog closes when AgentSwitched arrives.
-                                tx.send(UserInput::AgentSwitch(agent.id.clone())).ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::AgentSwitch(agent.id.clone()),
+                                );
                             }
                         }
                     }
@@ -506,7 +524,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::Quit).ignore();
+                                crate::app::events::submit(tx, UserInput::Quit);
                             }
                         }
                     }
@@ -535,7 +553,7 @@ pub(super) fn apply_key_event(
                             vault_error.set("Unlocking…".to_string());
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    tx.send(UserInput::VaultUnlock(pw)).ignore();
+                                    crate::app::events::submit(tx, UserInput::VaultUnlock(pw));
                                 }
                             }
                         }
@@ -554,7 +572,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::Quit).ignore();
+                                crate::app::events::submit(tx, UserInput::Quit);
                             }
                         }
                     }
@@ -598,12 +616,14 @@ pub(super) fn apply_key_event(
                                     // Send connection request to async handler
                                     if let Ok(guard) = tx_for_keys.lock() {
                                         if let Some(ref tx) = *guard {
-                                            tx.send(UserInput::PairingConnect {
-                                                host,
-                                                port,
-                                                public_key,
-                                            })
-                                            .ignore();
+                                            crate::app::events::submit(
+                                                tx,
+                                                UserInput::PairingConnect {
+                                                    host,
+                                                    port,
+                                                    public_key,
+                                                },
+                                            );
                                         }
                                     }
                                 }
@@ -691,7 +711,10 @@ pub(super) fn apply_key_event(
                             let name = result.name.clone();
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
-                                    tx.send(UserInput::HatchingComplete(payload)).ignore();
+                                    crate::app::events::submit(
+                                        tx,
+                                        UserInput::HatchingComplete(payload),
+                                    );
                                 }
                             }
                             let mut m = messages.read().clone();
@@ -724,7 +747,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::Quit).ignore();
+                                crate::app::events::submit(tx, UserInput::Quit);
                             }
                         }
                     }
@@ -738,11 +761,11 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::UserPromptResponse {
+                                crate::app::events::submit(tx, UserInput::UserPromptResponse {
                                         id,
                                         dismissed: true,
                                         value: rustyclaw_core::user_prompt_types::PromptResponseValue::Text(String::new()),
-                                    }).ignore();
+                                    });
                             }
                         }
                     }
@@ -915,12 +938,14 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::UserPromptResponse {
-                                    id,
-                                    dismissed: false,
-                                    value,
-                                })
-                                .ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::UserPromptResponse {
+                                        id,
+                                        dismissed: false,
+                                        value,
+                                    },
+                                );
                             }
                         }
                     }
@@ -936,7 +961,7 @@ pub(super) fn apply_key_event(
                         should_quit.set(true);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::Quit).ignore();
+                                crate::app::events::submit(tx, UserInput::Quit);
                             }
                         }
                     }
@@ -949,12 +974,14 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::CredentialResponse {
-                                    id,
-                                    dismissed: true,
-                                    value: None,
-                                })
-                                .ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::CredentialResponse {
+                                        id,
+                                        dismissed: true,
+                                        value: None,
+                                    },
+                                );
                             }
                         }
                     }
@@ -979,12 +1006,14 @@ pub(super) fn apply_key_event(
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
                             if let Some(ref tx) = *guard {
-                                tx.send(UserInput::CredentialResponse {
-                                    id,
-                                    dismissed: false,
-                                    value: Some(input),
-                                })
-                                .ignore();
+                                crate::app::events::submit(
+                                    tx,
+                                    UserInput::CredentialResponse {
+                                        id,
+                                        dismissed: false,
+                                        value: Some(input),
+                                    },
+                                );
                             }
                         }
                     }

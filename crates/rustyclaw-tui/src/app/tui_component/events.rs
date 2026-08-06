@@ -1,6 +1,5 @@
 //! Gateway-event handling for the TUI root: applies each `GwEvent` to UI state.
 
-use rustyclaw_core::ignore::Ignore;
 use std::collections::HashMap;
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -461,7 +460,7 @@ pub(super) fn apply_gw_event(
             foreground_thread_id.set(None);
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::RefreshThreads).ignore();
+                    crate::app::events::submit(tx, UserInput::RefreshThreads);
                 }
             }
         }
@@ -476,7 +475,7 @@ pub(super) fn apply_gw_event(
             // Request initial thread list
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::RefreshThreads).ignore();
+                    crate::app::events::submit(tx, UserInput::RefreshThreads);
                 }
             }
             // Show hatching now that auth is complete.
@@ -680,8 +679,10 @@ pub(super) fn apply_gw_event(
             if !completed_text.is_empty() {
                 if let Ok(guard) = tx_for_history.lock() {
                     if let Some(ref tx) = *guard {
-                        tx.send(UserInput::AssistantResponse(completed_text))
-                            .ignore();
+                        crate::app::events::submit(
+                            tx,
+                            UserInput::AssistantResponse(completed_text),
+                        );
                     }
                 }
             }
@@ -699,7 +700,7 @@ pub(super) fn apply_gw_event(
             messages.set(m);
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::RefreshTasks).ignore();
+                    crate::app::events::submit(tx, UserInput::RefreshTasks);
                 }
             }
         }
@@ -1092,7 +1093,7 @@ pub(super) fn apply_gw_event(
             // Gateway mutation succeeded — re-fetch list
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::RefreshSecrets).ignore();
+                    crate::app::events::submit(tx, UserInput::RefreshSecrets);
                 }
             }
         }
@@ -1175,7 +1176,10 @@ pub(super) fn apply_gw_event(
                     );
                     if let Ok(guard) = tx_for_history.lock() {
                         if let Some(ref tx) = *guard {
-                            tx.send(UserInput::RequestThreadHistory(thread_id)).ignore();
+                            crate::app::events::submit(
+                                tx,
+                                UserInput::RequestThreadHistory(thread_id),
+                            );
                         }
                     }
                 }
@@ -1338,7 +1342,7 @@ pub(super) fn apply_gw_event(
             // what the gateway has persisted.
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::RequestThreadHistory(thread_id)).ignore();
+                    crate::app::events::submit(tx, UserInput::RequestThreadHistory(thread_id));
                 }
             }
             // Unfocus tab after switch
@@ -1460,11 +1464,13 @@ pub(super) fn apply_gw_event(
             // for storage + model fetching, reusing SubmitApiKey.
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::SubmitApiKey {
-                        provider,
-                        key: token,
-                    })
-                    .ignore();
+                    crate::app::events::submit(
+                        tx,
+                        UserInput::SubmitApiKey {
+                            provider,
+                            key: token,
+                        },
+                    );
                 }
             }
         }
@@ -1937,7 +1943,7 @@ pub(super) fn apply_gw_event(
             }
             if let Ok(guard) = tx_for_history.lock() {
                 if let Some(ref tx) = *guard {
-                    tx.send(UserInput::RefreshPanel(panel)).ignore();
+                    crate::app::events::submit(tx, UserInput::RefreshPanel(panel));
                 }
             }
         }
