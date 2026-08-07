@@ -458,6 +458,7 @@ impl Handler for SshHandler {
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
         debug!(channel = ?channel.id(), "Session channel opened");
+        let channel_id = channel.id();
 
         // Unbounded, and it has to be. `data()` below runs *inside* russh's
         // session loop, and that loop is also what flushes this connection's
@@ -481,12 +482,43 @@ impl Handler for SshHandler {
         // Store session info
         let mut sessions = self.sessions.lock().await;
         sessions.insert(
-            channel.id(),
+            channel_id,
             ClientSession {
                 channel_data_tx: data_tx,
                 backlog: backlog.clone(),
             },
         );
+
+        // The unbounded queue above is not enough on its own. russh delivers
+        // a duplicate of every inbound data packet into *this* object's
+        // internal buffer too — with an awaited bounded send, before
+        // `data()` below is ever called — and each window adjustment the
+        // peer sends occupies a slot in the same buffer (those are
+        // `try_send`: they fill it silently but cannot park on it; a data
+        // packet against a full buffer is what parks). The buffer holds
+        // `channel_buffer_size` messages (100 by default), nothing here ever
+        // read from it, and nothing ever will: the frames arrive through
+        // `data()`. So once occupancy reached 100, cumulative over the
+        // connection's life, the session loop parked on a full buffer it was
+        // the only writer to — reads and writes both stopped, silently, and
+        // russh's own inactivity timer sits in the same `select!` that is
+        // parked, so nothing ever times out. A large reply topped the buffer
+        // off in seconds: the peer acknowledges consuming it with a stream
+        // of window adjustments.
+        //
+        // Keep the write half, and drain the read half for as long as the
+        // channel lives so the session loop always has room to deliver.
+        let (mut read_half, write_half) = channel.split();
+        tokio::spawn(async move {
+            let mut drained = 0usize;
+            while read_half.wait().await.is_some() {
+                drained += 1;
+            }
+            debug!(
+                channel = ?channel_id,
+                drained, "Channel message drain finished"
+            );
+        });
 
         // Create the transport
         let transport = SshTransport {
@@ -497,12 +529,17 @@ impl Handler for SshHandler {
                 transport_type: TransportType::Ssh,
             },
             data_rx: Mutex::new(data_rx),
-            channel_handle: Arc::new(Mutex::new(Some(channel))),
+            channel_handle: Arc::new(Mutex::new(Some(write_half))),
             recv_buffer: Mutex::new(Vec::new()),
             backlog,
         };
 
-        // Send to acceptor
+        // Send to acceptor. This awaited bounded send runs inside the
+        // session loop, the same position the drain above exists to protect.
+        // It is safe only while the accept loop does nothing per transport
+        // but spawn a handler task: the queue then drains in microseconds.
+        // An accept loop that awaited connection setup inline would turn
+        // this send into the next silent latch.
         if self.connection_tx.send(transport).await.is_err() {
             warn!("Failed to send transport to acceptor");
             return Ok(false);
@@ -557,10 +594,14 @@ impl Handler for SshHandler {
 }
 
 /// SSH transport wrapping a russh channel.
+///
+/// Holds only the channel's write half. The read half is drained and
+/// discarded by a task spawned at channel open — see `channel_open_session` —
+/// because a full channel buffer parks the SSH session loop.
 pub struct SshTransport {
     peer_info: PeerInfo,
     data_rx: Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
-    channel_handle: Arc<Mutex<Option<Channel<Msg>>>>,
+    channel_handle: Arc<Mutex<Option<russh::ChannelWriteHalf<Msg>>>>,
     recv_buffer: Mutex<Vec<u8>>,
     /// Chunks handed over by the SSH session but not yet decoded. Diagnostic
     /// only; see `INBOUND_BACKLOG_WARN`.
@@ -695,7 +736,156 @@ impl TransportReader for SshReader {
 }
 
 struct SshWriter {
-    channel_handle: Arc<Mutex<Option<Channel<Msg>>>>,
+    channel_handle: Arc<Mutex<Option<russh::ChannelWriteHalf<Msg>>>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustyclaw_core::gateway::protocol::{ClientFrameType, ClientPayload};
+
+    struct AcceptAnyHostKey;
+
+    impl russh::client::Handler for AcceptAnyHostKey {
+        type Error = anyhow::Error;
+
+        async fn check_server_key(
+            &mut self,
+            _server_public_key: &PublicKey,
+        ) -> std::result::Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    /// A connection must survive more inbound chunks than russh's channel
+    /// buffer holds.
+    ///
+    /// russh delivers a duplicate of every inbound data packet into the
+    /// `Channel` object handed to `channel_open_session`, with an *awaited*
+    /// bounded send that runs before `Handler::data` — and each window
+    /// adjustment the peer sends occupies a slot in the same buffer (via
+    /// `try_send`; adjusts fill, data packets park). The buffer holds
+    /// `channel_buffer_size` messages and the occupancy is cumulative:
+    /// nothing about serving traffic drains it. Before the drain task, the
+    /// session loop parked on it for good once a connection's lifetime
+    /// traffic filled it — reads and writes both stopped, with nothing
+    /// logged on either side. A large reply topped it off in seconds,
+    /// because the peer acknowledges consumption with a stream of window
+    /// adjustments.
+    ///
+    /// Three times the buffer's capacity in frames; if every one arrives,
+    /// the session loop can no longer be parked by its own delivery.
+    #[tokio::test]
+    async fn a_connection_survives_more_chunks_than_the_channel_buffer_holds() {
+        // Pinned rather than inherited from russh's default, so a future
+        // russh that ships a larger default cannot quietly turn this into a
+        // test that no longer reaches the latch point.
+        const CHANNEL_BUFFER: usize = 100;
+        const FRAMES: usize = CHANNEL_BUFFER * 3;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let (connection_tx, mut connection_rx) = mpsc::channel(16);
+        let handler = SshHandler {
+            authorized_clients: Arc::new(Mutex::new(Vec::new())),
+            authorized_clients_path: dir.path().join("authorized_clients"),
+            allow_unknown_keys_with_totp: false,
+            peer_addr: None,
+            authenticated_username: None,
+            connection_tx,
+            sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            rate_limiter: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        };
+
+        let host_key =
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .expect("host key");
+        let server_config = Arc::new(russh::server::Config {
+            keys: vec![host_key],
+            methods: russh::MethodSet::from(&[russh::MethodKind::PublicKey][..]),
+            channel_buffer_size: CHANNEL_BUFFER,
+            ..Default::default()
+        });
+
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        // Spawned, not awaited: `run_stream` reads the client's SSH id
+        // before returning, and over an in-memory duplex the client that
+        // would send it starts below — both sides handshake concurrently.
+        let _server = tokio::spawn(russh::server::run_stream(server_config, server_io, handler));
+
+        let client_key =
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .expect("client key");
+        let mut session = russh::client::connect_stream(
+            Arc::new(russh::client::Config::default()),
+            client_io,
+            AcceptAnyHostKey,
+        )
+        .await
+        .expect("client session");
+        // First key to connect bootstraps into authorized_clients, so a
+        // fresh tempdir authenticates without fixtures.
+        let auth = session
+            .authenticate_publickey(
+                "test",
+                russh::keys::PrivateKeyWithHashAlg::new(Arc::new(client_key), None),
+            )
+            .await
+            .expect("auth exchange");
+        assert!(
+            matches!(auth, russh::client::AuthResult::Success),
+            "bootstrap auth should accept the first key"
+        );
+        let channel = session
+            .channel_open_session()
+            .await
+            .expect("open session channel");
+
+        let mut transport = connection_rx.recv().await.expect("transport handed over");
+
+        let body = serialize_wire_frame(&WireFrame::new(
+            0,
+            ClientFrame {
+                frame_type: ClientFrameType::ThreadList,
+                payload: ClientPayload::ThreadList,
+            },
+        ))
+        .expect("encode frame");
+        let mut packet = Vec::with_capacity(4 + body.len());
+        packet.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        packet.extend_from_slice(&body);
+
+        // The client-side channel is deliberately kept whole and undrained
+        // here: in this test the server sends it no data, and window
+        // adjustments arrive via `try_send`, so its own buffer can fill but
+        // never park. A test that adds server-to-client traffic must drain
+        // it, or it will reproduce the client half of this same bug.
+        let sender = tokio::spawn(async move {
+            for _ in 0..FRAMES {
+                channel.data(&packet[..]).await.expect("send frame");
+            }
+            channel
+        });
+
+        let receive_all = async {
+            for n in 0..FRAMES {
+                let frame = transport
+                    .recv()
+                    .await
+                    .expect("recv frame")
+                    .unwrap_or_else(|| panic!("connection closed after {n} frames"));
+                assert_eq!(frame.frame.frame_type, ClientFrameType::ThreadList);
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), receive_all)
+            .await
+            .expect(
+                "the session loop parked before delivering every frame — \
+                 the channel buffer latched the connection again",
+            );
+
+        sender.await.expect("sender task");
+    }
 }
 
 #[async_trait]
