@@ -128,17 +128,11 @@ pub fn save_client_keypair(keypair: &ClientKeyPair, path: &Path) -> Result<()> {
         .to_openssh(LineEnding::LF)
         .context("Failed to encode private key")?;
 
-    // Write the key
-    std::fs::write(path, key_data.as_bytes())
+    // Atomic and 0o600 from the first byte: a write-then-chmod leaves the
+    // key world-readable for the umask window, and a torn write leaves a
+    // half-key that `path.exists()` used to mistake for a working one.
+    crate::persist::write_atomically_private(path, key_data.as_bytes())
         .with_context(|| format!("Failed to write key: {}", path.display()))?;
-
-    // Set restrictive permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to set permissions: {}", path.display()))?;
-    }
 
     Ok(())
 }
@@ -152,7 +146,20 @@ pub fn load_or_generate_client_keypair(
     comment: Option<String>,
 ) -> Result<ClientKeyPair> {
     if path.exists() {
-        load_client_keypair(path)
+        match load_client_keypair(path) {
+            Ok(keypair) => Ok(keypair),
+            // A key file that exists but does not parse used to fail every
+            // gateway connection until the user deleted it by hand. It is
+            // not a working identity — quarantine it and mint a fresh one.
+            // The gateway will see an unknown key, which is the pairing
+            // flow, not an outage.
+            Err(e) => {
+                crate::persist::quarantine(path, &format!("{e:#}"));
+                let keypair = generate_client_keypair(comment)?;
+                save_client_keypair(&keypair, path)?;
+                Ok(keypair)
+            }
+        }
     } else {
         let keypair = generate_client_keypair(comment)?;
         save_client_keypair(&keypair, path)?;
@@ -168,5 +175,45 @@ mod tests {
     fn test_default_client_key_path() {
         let path = default_client_key_path();
         assert!(path.to_string_lossy().contains("client_ed25519_key"));
+    }
+
+    /// A key file that exists but does not parse used to fail every
+    /// connection until the user found and deleted it by hand. It must be
+    /// quarantined and replaced instead — re-pairing is the recovery flow,
+    /// a client that cannot connect at all is not.
+    #[test]
+    fn a_corrupt_key_file_is_replaced_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("client_key");
+        std::fs::write(&path, b"-----BEGIN NONSENSE-----").unwrap();
+
+        let keypair = load_or_generate_client_keypair(&path, None).expect("a fresh key is minted");
+        // The new key on disk parses and matches what was returned.
+        let reloaded = load_client_keypair(&path).unwrap();
+        assert_eq!(
+            keypair.public_key.to_openssh().unwrap(),
+            reloaded.public_key.to_openssh().unwrap()
+        );
+
+        // The old bytes were moved aside, not destroyed.
+        let quarantined: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .collect();
+        assert_eq!(quarantined.len(), 1);
+    }
+
+    /// The private key must never exist on disk with permissions wider
+    /// than the owner — not even between write and a later chmod.
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_key_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("client_key");
+        load_or_generate_client_keypair(&path, None).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "key mode was {mode:o}");
     }
 }

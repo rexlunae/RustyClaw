@@ -199,7 +199,10 @@ impl AgentRegistry {
                 .map(|d| d.as_secs()),
             created_by: created_by.map(String::from),
         };
-        std::fs::write(self.manifest_path(&id), toml::to_string_pretty(&manifest)?)?;
+        crate::persist::write_atomically(
+            &self.manifest_path(&id),
+            toml::to_string_pretty(&manifest)?.as_bytes(),
+        )?;
 
         Ok(AgentInfo {
             id,
@@ -218,7 +221,10 @@ impl AgentRegistry {
             .manifest(id)
             .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found", id))?;
         manifest.name = new_name.trim().to_string();
-        std::fs::write(self.manifest_path(id), toml::to_string_pretty(&manifest)?)?;
+        crate::persist::write_atomically(
+            &self.manifest_path(id),
+            toml::to_string_pretty(&manifest)?.as_bytes(),
+        )?;
         Ok(())
     }
 

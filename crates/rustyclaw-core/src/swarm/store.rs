@@ -123,8 +123,10 @@ impl SwarmStore {
                 name
             );
         }
-        std::fs::create_dir_all(&self.swarms_root)?;
-        std::fs::write(self.record_path(name), toml::to_string_pretty(record)?)?;
+        crate::persist::write_atomically(
+            &self.record_path(name),
+            toml::to_string_pretty(record)?.as_bytes(),
+        )?;
         Ok(())
     }
 

@@ -518,8 +518,10 @@ impl SubagentRegistry {
             max_rounds,
             builtin: false,
         };
-        std::fs::create_dir_all(&self.profiles_root)?;
-        std::fs::write(self.profile_path(&id), toml::to_string_pretty(&profile)?)?;
+        crate::persist::write_atomically(
+            &self.profile_path(&id),
+            toml::to_string_pretty(&profile)?.as_bytes(),
+        )?;
         Ok(profile)
     }
 

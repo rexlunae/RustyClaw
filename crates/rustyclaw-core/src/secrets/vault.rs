@@ -9,6 +9,35 @@ use super::types::{
     AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind, SecretString,
 };
 
+/// A sibling of `path` with `suffix` appended to its file name, so related
+/// artifacts (staging files, backups) stay in the same directory and a
+/// rename between them can never cross filesystems.
+fn sibling_path(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+/// Save a loaded vault atomically. `securestore`'s own `save()` writes in
+/// place, and every credential lives in this one file — a torn save is not
+/// one secret lost but all of them. Export to a synced temp sibling and
+/// rename it into place instead.
+fn save_vault_atomically(
+    vault: &securestore::SecretsManager,
+    path: &std::path::Path,
+) -> Result<()> {
+    let tmp = sibling_path(path, ".tmp");
+    vault
+        .save_as(&tmp)
+        .context("Failed to save secrets vault")?;
+    let synced = std::fs::File::open(&tmp).and_then(|f| f.sync_all());
+    if let Err(e) = synced.and_then(|()| std::fs::rename(&tmp, path)) {
+        std::fs::remove_file(&tmp).ignore();
+        return Err(e).context("Failed to move saved secrets vault into place");
+    }
+    Ok(())
+}
+
 /// Restrict a file to owner read/write only (mode `0o600`) on Unix.
 ///
 /// No-op on non-Unix platforms (Windows ACLs are inherited from the
@@ -27,6 +56,13 @@ impl SecretsManager {
     /// Ensure the vault is loaded (or created if it doesn't exist yet).
     pub(super) fn ensure_vault(&mut self) -> Result<&mut securestore::SecretsManager> {
         if self.vault.is_none() {
+            // Unconditional, not just on first run: every later `save()`
+            // writes back to this directory and assumes it exists. A user
+            // (or cleanup script) removing it mid-session should cost one
+            // mkdir, not every subsequent secret write.
+            if let Some(parent) = self.vault_path.parent() {
+                std::fs::create_dir_all(parent).context("Failed to create secrets directory")?;
+            }
             let vault = if self.vault_path.exists() {
                 // Existing vault — load with password or key file.
                 if let Some(ref pw) = self.password {
@@ -46,15 +82,11 @@ impl SecretsManager {
                 }
             } else {
                 // First run: create a brand-new vault.
-                if let Some(parent) = self.vault_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .context("Failed to create secrets directory")?;
-                }
                 if let Some(ref pw) = self.password {
                     // Password-based vault — no key file needed.
                     let sman = securestore::SecretsManager::new(KeySource::Password(pw))
                         .context("Failed to create new secrets vault")?;
-                    sman.save_as(&self.vault_path)
+                    save_vault_atomically(&sman, &self.vault_path)
                         .context("Failed to save new secrets vault")?;
                     securestore::SecretsManager::load(&self.vault_path, KeySource::Password(pw))
                         .context("Failed to reload newly-created secrets vault")?
@@ -69,7 +101,7 @@ impl SecretsManager {
                     // inherits the process umask and may be group/world-readable.
                     set_owner_only_permissions(&self.key_path)
                         .context("Failed to secure secrets key permissions")?;
-                    sman.save_as(&self.vault_path)
+                    save_vault_atomically(&sman, &self.vault_path)
                         .context("Failed to save new secrets vault")?;
                     securestore::SecretsManager::load(
                         &self.vault_path,
@@ -103,33 +135,72 @@ impl SecretsManager {
             }
         }
 
-        // 3. Drop the old vault and create a new one with the new password.
+        // 3. Drop the old handle and build the fully-populated replacement
+        //    at a staging sibling. The live vault file is not touched until
+        //    the replacement is complete and synced on disk — a crash, kill,
+        //    or error anywhere in this stage costs nothing but the staging
+        //    file. The old code wrote an *empty* new vault over the live one
+        //    and repopulated it afterwards, which turned any failure in that
+        //    window into the loss of every credential.
         self.vault = None;
+
+        let staging = sibling_path(&self.vault_path, ".rekey");
+        if staging.exists() {
+            std::fs::remove_file(&staging).context("Failed to clear stale rekey staging file")?;
+        }
 
         let new_vault = securestore::SecretsManager::new(KeySource::Password(&new_password))
             .context("Failed to create vault with new password")?;
         new_vault
-            .save_as(&self.vault_path)
+            .save_as(&staging)
             .context("Failed to save re-encrypted vault")?;
+        set_owner_only_permissions(&staging).context("Failed to secure staged vault")?;
 
-        // 4. Reload so we can write to it.
-        let mut reloaded =
-            securestore::SecretsManager::load(&self.vault_path, KeySource::Password(&new_password))
+        let mut staged =
+            securestore::SecretsManager::load(&staging, KeySource::Password(&new_password))
                 .context("Failed to reload vault with new password")?;
-
-        // 5. Write all secrets back.
         for (key, value) in entries {
-            reloaded.set(&key, value);
+            staged.set(&key, value);
         }
-        reloaded.save().context("Failed to save re-keyed vault")?;
+        staged.save().context("Failed to save re-keyed vault")?;
+
+        // 4. Swap. The current vault becomes the backup; the staged vault
+        //    becomes current. If the second rename fails, the original is
+        //    put back before reporting, so there is no path out of this
+        //    function that leaves no vault in place.
+        let vault_backup = sibling_path(&self.vault_path, ".bak");
+        if self.vault_path.exists() {
+            std::fs::rename(&self.vault_path, &vault_backup).map_err(|e| {
+                std::fs::remove_file(&staging).ignore();
+                anyhow::anyhow!("Failed to set aside current vault: {e}")
+            })?;
+        }
+        if let Err(e) = std::fs::rename(&staging, &self.vault_path) {
+            if vault_backup.exists() {
+                std::fs::rename(&vault_backup, &self.vault_path).ignore();
+            }
+            std::fs::remove_file(&staging).ignore();
+            anyhow::bail!("Failed to move re-keyed vault into place: {e}");
+        }
+
+        // 5. Reload from the final path. A failure here is loud but not
+        //    destructive: the re-keyed vault on disk is complete, and the
+        //    backup pair still holds the previous state.
+        let reloaded =
+            securestore::SecretsManager::load(&self.vault_path, KeySource::Password(&new_password))
+                .context("Failed to reload vault after re-keying")?;
 
         // 6. Update in-memory state.
         self.password = Some(new_password);
         self.vault = Some(reloaded);
 
-        // 7. Remove the old key file if it exists — no longer needed.
+        // 7. The old key file no longer opens the live vault, but it is the
+        //    only thing that can ever open the backup — deleting it would
+        //    turn the backup into ciphertext with no key. Keep the pair
+        //    together, aside.
         if self.key_path.exists() {
-            std::fs::remove_file(&self.key_path).ignore();
+            let key_backup = sibling_path(&self.key_path, ".bak");
+            std::fs::rename(&self.key_path, &key_backup).ignore();
         }
 
         Ok(())
@@ -158,9 +229,10 @@ impl SecretsManager {
     /// For internal use by the typed store paths, which have already decided
     /// whether the name is legitimate for their caller.
     pub(super) fn set_raw(&mut self, key: &str, value: &str) -> Result<()> {
+        let path = self.vault_path.clone();
         let vault = self.ensure_vault()?;
         vault.set(key, value);
-        vault.save().context("Failed to save secrets vault")?;
+        save_vault_atomically(vault, &path)?;
         Ok(())
     }
 
@@ -184,9 +256,10 @@ impl SecretsManager {
 
     /// Delete a secret from the vault and persist to disk.
     pub fn delete_secret(&mut self, key: &str) -> Result<()> {
+        let path = self.vault_path.clone();
         let vault = self.ensure_vault()?;
         vault.remove(key).context("Failed to remove secret")?;
-        vault.save().context("Failed to save secrets vault")?;
+        save_vault_atomically(vault, &path)?;
         Ok(())
     }
 

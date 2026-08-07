@@ -43,6 +43,7 @@ pub mod models;
 pub mod observability;
 pub mod open_external;
 pub mod pairing;
+pub mod persist;
 pub mod plugins;
 pub mod process_manager;
 pub mod projects;

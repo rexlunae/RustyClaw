@@ -241,12 +241,26 @@ impl ThreadStore {
             {
                 Ok(meta) => meta,
                 Err(e) => {
+                    // Skipping used to be quietly fatal: a thread absent
+                    // from the loaded manager is one the next persist's
+                    // reaper deletes the files of — a transient read error
+                    // became a permanently deleted conversation. The log
+                    // is still the full transcript, so quarantine the bad
+                    // metadata and rebuild the thread around the log.
+                    let Some(id) = name
+                        .strip_suffix(".meta.json")
+                        .and_then(|stem| stem.parse::<u64>().ok())
+                        .map(ThreadId)
+                    else {
+                        continue;
+                    };
                     tracing::error!(
                         file = %entry.path().display(),
                         error = %e,
-                        "Skipping unreadable thread metadata"
+                        "Thread metadata unreadable; rebuilding the thread from its log"
                     );
-                    continue;
+                    crate::persist::quarantine(&entry.path(), &e.to_string());
+                    fallback_meta(id)
                 }
             };
             let mut thread = AgentThread::from(meta);
@@ -385,23 +399,42 @@ fn anyhow_io<E: std::error::Error + Send + Sync + 'static>(e: E) -> std::io::Err
     std::io::Error::new(std::io::ErrorKind::InvalidData, e)
 }
 
+/// The metadata a thread gets when its own metadata cannot be read: enough
+/// for the transcript in the log to load, display, and — critically —
+/// count as live, so the persist reaper does not delete it. The next
+/// persist writes a healthy replacement.
+fn fallback_meta(id: ThreadId) -> ThreadMeta {
+    let now = SystemTime::now();
+    ThreadMeta {
+        id,
+        project_id: Default::default(),
+        kind: super::ThreadKind::Chat,
+        label: format!("Recovered thread {}", id.0),
+        description: None,
+        status: ThreadStatus::Active,
+        parent_id: None,
+        created_at: now,
+        last_activity: now,
+        is_foreground: false,
+        compact_summary: None,
+        compacted_up_to: 0,
+        working_dir: None,
+        result: None,
+        share_context: true,
+        memory_flushed: false,
+    }
+}
+
 /// Append records to a log file as JSON lines, synced before returning so
 /// an acknowledged message survives a crash.
 fn append_records(path: &Path, records: &[ThreadLogRecord]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
     let mut buf = Vec::new();
     for record in records {
         serde_json::to_writer(&mut buf, record)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         buf.push(b'\n');
     }
-    file.write_all(&buf)?;
-    file.flush()?;
-    file.sync_all()
+    crate::persist::append_durably(path, &buf)
 }
 
 /// Replay a thread's log: messages in order, turn markers folding into the
@@ -433,24 +466,7 @@ fn read_log_into(path: &Path, thread: &mut AgentThread) {
     }
 }
 
-/// Write a small file atomically: temp sibling, fsync, rename.
-fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let tmp = path.with_extension("tmp");
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-    }
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            std::fs::remove_file(&tmp).ignore();
-            Err(e)
-        }
-    }
-}
+use crate::persist::write_atomically;
 
 #[cfg(test)]
 mod tests {
@@ -694,5 +710,60 @@ mod tests {
             "a write from a stale manager deleted a thread it had never seen"
         );
         assert!(root.join(format!("{}.meta.json", kept.0)).exists());
+    }
+    /// A thread whose metadata is corrupt used to be skipped on load — and
+    /// a skipped thread is one the next persist's reaper deletes the files
+    /// of, so a transient read error became a permanently deleted
+    /// conversation. The transcript must instead come back from the log,
+    /// the bad metadata must be quarantined, and a subsequent persist must
+    /// leave the log alone.
+    #[test]
+    fn corrupt_metadata_recovers_the_thread_from_its_log() {
+        let dir = temp_root("meta-recovery");
+        let legacy = dir.join("threads.json");
+        let store = ThreadStore::at_legacy_path(&legacy);
+
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat("Precious");
+        mgr.add_message(id, MessageRole::User, "irreplaceable");
+        mgr.add_message(id, MessageRole::Assistant, "history");
+        store.persist(&mut mgr).unwrap();
+
+        // Corrupt the metadata; leave the log intact.
+        let meta_path = dir.join("threads").join(format!("{}.meta.json", id.0));
+        std::fs::write(&meta_path, b"{ torn").unwrap();
+
+        let mut loaded = store.load().unwrap();
+        let thread = loaded.get(id).expect("thread must survive bad metadata");
+        assert_eq!(
+            thread
+                .messages
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["irreplaceable", "history"],
+            "the transcript comes back from the log"
+        );
+
+        // The reaper must treat the recovered thread as live.
+        store.persist(&mut loaded).unwrap();
+        let log_path = dir.join("threads").join(format!("{}.log.jsonl", id.0));
+        assert!(
+            log_path.exists(),
+            "persist must not reap the recovered thread"
+        );
+        // And the rewritten metadata is healthy again.
+        let reloaded = store.load().unwrap();
+        assert_eq!(reloaded.get(id).unwrap().messages.len(), 2);
+
+        // The torn metadata was kept for inspection.
+        let quarantined = std::fs::read_dir(dir.join("threads"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .count();
+        assert_eq!(quarantined, 1);
+
+        std::fs::remove_dir_all(&dir).ignore();
     }
 }

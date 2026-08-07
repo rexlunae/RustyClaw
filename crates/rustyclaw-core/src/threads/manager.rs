@@ -93,6 +93,13 @@ impl ThreadManager {
         self.threads.values_mut()
     }
 
+    /// Whether any thread holds activity a persist has not yet written.
+    /// What a teardown backstop checks before deciding a final write is
+    /// worth making.
+    pub fn has_unpersisted_activity(&self) -> bool {
+        self.threads.values().any(|t| !t.pending_log.is_empty())
+    }
+
     /// Record that a turn began in a thread. Until the matching
     /// [`Self::end_turn`] writes the stop indicator, the thread is open —
     /// what clients render as streaming, and what a restarted gateway
@@ -693,25 +700,7 @@ impl ThreadManager {
         };
         let json = serde_json::to_string_pretty(&state)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        let tmp = path.with_extension("json.tmp");
-        // Flush and fsync before the rename: a rename that lands ahead of the
-        // data would publish an empty file after a crash.
-        {
-            use std::io::Write;
-            let mut file = std::fs::File::create(&tmp)?;
-            file.write_all(json.as_bytes())?;
-            file.flush()?;
-            file.sync_all()?;
-        }
-        match std::fs::rename(&tmp, path) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // Don't leave the temporary behind on failure.
-                std::fs::remove_file(&tmp).ignore();
-                Err(e)
-            }
-        }
+        crate::persist::write_atomically(path, json.as_bytes())
     }
 
     /// Load threads from a file.
@@ -753,6 +742,12 @@ impl ThreadManager {
                 mgr
             }
             Err(e) => {
+                // A file that exists but cannot be parsed is quarantined
+                // before the fresh default is saved over its path — the
+                // save below used to be what destroyed the only copy.
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    crate::persist::quarantine(path, &e.to_string());
+                }
                 debug!("Creating new thread manager (load failed: {})", e);
                 let mut mgr = Self::new();
                 mgr.create_chat("Main");

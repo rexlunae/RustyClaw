@@ -167,7 +167,7 @@ impl ProjectManager {
         };
         let json = serde_json::to_string_pretty(&state)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, json)
+        crate::persist::write_atomically(path, json.as_bytes())
     }
 
     pub fn load_from_file(path: &Path) -> std::io::Result<Self> {
@@ -202,8 +202,16 @@ impl ProjectManager {
                 debug!("Loaded {} projects from {:?}", mgr.projects.len(), path);
                 mgr
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                debug!("Creating new project manager (no file at {:?})", path);
+                Self::new()
+            }
             Err(e) => {
-                debug!("Creating new project manager (load failed: {})", e);
+                // Not merely missing: the file is there and unreadable. The
+                // caller persists eagerly right after loading, which used to
+                // overwrite the evidence with an empty list at debug level —
+                // a silent wipe. Quarantine first, then start fresh.
+                crate::persist::quarantine(path, &e.to_string());
                 Self::new()
             }
         }

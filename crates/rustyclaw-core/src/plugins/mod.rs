@@ -187,19 +187,30 @@ impl PluginManager {
     fn load_state(&self, plugin: &Plugin) -> Value {
         let state_file = plugin.path.join("state.json");
         match std::fs::read_to_string(&state_file) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| plugin.initial_state.clone()),
+            Ok(raw) => match serde_json::from_str(&raw) {
+                Ok(state) => state,
+                Err(e) => {
+                    // Falling back to initial_state used to discard the
+                    // saved state silently — and the next save_state wrote
+                    // the default over it. Keep the bytes aside.
+                    crate::persist::quarantine(&state_file, &e.to_string());
+                    plugin.initial_state.clone()
+                }
+            },
             Err(_) => plugin.initial_state.clone(),
         }
     }
 
-    /// Persist a plugin's state to disk.
+    /// Persist a plugin's state to disk. Atomic, and re-creates the plugin
+    /// directory if something removed it since install.
     pub fn save_state(&self, plugin_name: &str) -> Result<(), PluginError> {
         if let Some(plugin) = self.get(plugin_name) {
             let state = self.states.get(plugin_name).cloned().unwrap_or_default();
             let state_file = plugin.path.join("state.json");
             let raw = serde_json::to_string_pretty(&state)
                 .map_err(|e| PluginError::Serialize(e, plugin_name.to_string()))?;
-            std::fs::write(&state_file, raw).map_err(|e| PluginError::Io(e, state_file))?;
+            crate::persist::write_atomically(&state_file, raw.as_bytes())
+                .map_err(|e| PluginError::Io(e, state_file))?;
         }
         Ok(())
     }

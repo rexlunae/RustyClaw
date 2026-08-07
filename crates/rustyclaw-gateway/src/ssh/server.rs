@@ -14,6 +14,34 @@ const MAX_AUTH_ATTEMPTS: u32 = 10;
 /// Duration of temporary ban after exceeding auth attempts.
 const BAN_DURATION: Duration = Duration::from_secs(60);
 
+/// Read the host key if a usable one is on disk.
+///
+/// `Ok(None)` means "generate a fresh one" — either the file is missing or
+/// it exists but does not parse. The unparseable case used to stop the
+/// gateway from booting at all, with a manual `rm` as the only cure; the
+/// broken file is quarantined instead, and clients see a changed host key
+/// — visible and recoverable — rather than a gateway that will not start.
+fn load_host_key(path: &Path) -> Result<Option<russh::keys::PrivateKey>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let key_data = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read host key: {}", path.display()))?;
+    match russh::keys::PrivateKey::from_openssh(&key_data) {
+        Ok(key) => Ok(Some(key)),
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "Host key on disk does not parse; replacing it — paired clients \
+                 will be warned of a changed host key"
+            );
+            rustyclaw_core::persist::quarantine(path, &e.to_string());
+            Ok(None)
+        }
+    }
+}
+
 /// Rate limit state keyed by peer IP address.
 struct AuthRateLimit {
     /// Count of failed auth attempts.
@@ -42,59 +70,37 @@ impl SshServer {
         use std::io::Read;
 
         // Load or generate host key
-        let host_key: russh::keys::PrivateKey = if ssh_config.host_key_path.exists() {
-            // Read the key file
-            let key_data =
-                std::fs::read_to_string(&ssh_config.host_key_path).with_context(|| {
+        let host_key: russh::keys::PrivateKey = match load_host_key(&ssh_config.host_key_path)? {
+            Some(key) => key,
+            None => {
+                info!("Generating new SSH host key");
+
+                // Generate a new Ed25519 key. Use ssh-key's re-exported OsRng so the
+                // rand_core version matches russh (its OsRng impls CryptoRng).
+                let key = russh::keys::PrivateKey::random(
+                    &mut rand::rng(),
+                    russh::keys::Algorithm::Ed25519,
+                )
+                .context("Failed to generate host key")?;
+
+                // Save in OpenSSH format — atomically, and 0o600 from the
+                // first byte rather than chmod'ed after the fact.
+                let key_data = key
+                    .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+                    .context("Failed to encode host key")?;
+                rustyclaw_core::persist::write_atomically_private(
+                    &ssh_config.host_key_path,
+                    key_data.as_bytes(),
+                )
+                .with_context(|| {
                     format!(
-                        "Failed to read host key: {}",
+                        "Failed to save host key: {}",
                         ssh_config.host_key_path.display()
                     )
                 })?;
 
-            // Parse as OpenSSH private key
-            russh::keys::PrivateKey::from_openssh(&key_data).with_context(|| {
-                format!(
-                    "Failed to parse host key: {}",
-                    ssh_config.host_key_path.display()
-                )
-            })?
-        } else {
-            info!("Generating new SSH host key");
-
-            // Generate a new Ed25519 key. Use ssh-key's re-exported OsRng so the
-            // rand_core version matches russh (its OsRng impls CryptoRng).
-            let key =
-                russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                    .context("Failed to generate host key")?;
-
-            // Ensure parent directory exists
-            if let Some(parent) = ssh_config.host_key_path.parent() {
-                std::fs::create_dir_all(parent)?;
+                key
             }
-
-            // Save the key in OpenSSH format
-            let key_data = key
-                .to_openssh(russh::keys::ssh_key::LineEnding::LF)
-                .context("Failed to encode host key")?;
-            std::fs::write(&ssh_config.host_key_path, key_data.as_bytes()).with_context(|| {
-                format!(
-                    "Failed to save host key: {}",
-                    ssh_config.host_key_path.display()
-                )
-            })?;
-
-            // Set restrictive permissions
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(
-                    &ssh_config.host_key_path,
-                    std::fs::Permissions::from_mode(0o600),
-                )?;
-            }
-
-            key
         };
 
         // Build russh server config — publickey auth only.
@@ -912,5 +918,37 @@ mod tests {
             );
 
         sender.await.expect("sender task");
+    }
+    /// A host key that exists but does not parse used to stop the gateway
+    /// booting at all, with a manual `rm` as the only cure. It must be
+    /// quarantined and regenerated: clients get a changed-host-key warning
+    /// — visible and recoverable — instead of a gateway that will not
+    /// start.
+    #[tokio::test]
+    async fn a_corrupt_host_key_is_replaced_and_the_gateway_boots() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let host_key_path = dir.path().join("ssh_host_key");
+        std::fs::write(&host_key_path, b"not an openssh key").unwrap();
+
+        let config = SshConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            host_key_path: host_key_path.clone(),
+            authorized_clients_path: dir.path().join("authorized_clients"),
+            allow_password: false,
+            require_pubkey: true,
+            allow_unknown_keys_with_totp: false,
+        };
+        SshServer::new(config).await.expect("gateway must boot");
+
+        // A fresh, parseable key is in place...
+        let key_data = std::fs::read_to_string(&host_key_path).unwrap();
+        russh::keys::PrivateKey::from_openssh(&key_data).expect("regenerated key parses");
+        // ...and the old bytes were kept aside.
+        let quarantined = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .count();
+        assert_eq!(quarantined, 1);
     }
 }

@@ -286,6 +286,14 @@ impl SshConnection {
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("rustyclaw")
             .join("known_hosts");
+        // ssh cannot create this directory itself: with it missing, every
+        // connection warned, recorded nothing, and re-accepted a fresh host
+        // key the next time — host pinning silently never engaged.
+        if let Some(parent) = known_hosts_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create known_hosts dir: {}", parent.display())
+            })?;
+        }
 
         // ── Build the SSH command ──────────────────────────────────────
         let mut cmd = Command::new("ssh");

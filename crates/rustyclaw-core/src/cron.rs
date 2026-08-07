@@ -216,10 +216,19 @@ impl CronStore {
         fs::create_dir_all(cron_dir)?;
         fs::create_dir_all(&runs_dir)?;
 
-        // Load existing jobs
+        // Load existing jobs. A corrupt jobs file used to fail `new`
+        // outright, taking the whole cron subsystem down over one bad
+        // byte; quarantine it and start empty instead — the bytes stay
+        // recoverable, and scheduling keeps working.
         let jobs = if jobs_path.exists() {
             let content = fs::read_to_string(&jobs_path)?;
-            serde_json::from_str(&content)?
+            match serde_json::from_str(&content) {
+                Ok(jobs) => jobs,
+                Err(e) => {
+                    crate::persist::quarantine(&jobs_path, &e.to_string());
+                    HashMap::new()
+                }
+            }
         } else {
             HashMap::new()
         };
@@ -231,10 +240,11 @@ impl CronStore {
         })
     }
 
-    /// Save jobs to disk.
+    /// Save jobs to disk. Atomic: every job lives in this one file, so a
+    /// torn write is not one job lost but all of them.
     fn save(&self) -> Result<(), CronError> {
         let content = serde_json::to_string_pretty(&self.jobs)?;
-        fs::write(&self.jobs_path, content)?;
+        crate::persist::write_atomically(&self.jobs_path, content.as_bytes())?;
         Ok(())
     }
 
@@ -320,19 +330,14 @@ impl CronStore {
         Ok(runs.into_iter().rev().take(limit).collect())
     }
 
-    /// Record a run.
+    /// Record a run. Durable append: the old path dropped the handle
+    /// without a flush, so a write error surfaced nowhere and the record
+    /// could vanish with the page cache.
     pub fn record_run(&self, entry: &RunEntry) -> Result<(), CronError> {
         let runs_file = self.runs_dir.join(format!("{}.jsonl", entry.job_id));
-        let line = serde_json::to_string(entry)?;
-
-        use std::io::Write;
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&runs_file)?;
-
-        writeln!(file, "{}", line)?;
-
+        let mut line = serde_json::to_string(entry)?;
+        line.push('\n');
+        crate::persist::append_durably(&runs_file, line.as_bytes())?;
         Ok(())
     }
 }
@@ -431,5 +436,23 @@ mod tests {
             assert_eq!(jobs.len(), 1);
             assert_eq!(jobs[0].name, Some("Persistent".to_string()));
         }
+    }
+    /// One bad byte in jobs.json used to refuse to initialize the whole
+    /// cron subsystem. The store must come up empty instead, with the
+    /// corrupt file set aside rather than destroyed.
+    #[test]
+    fn a_corrupt_jobs_file_is_quarantined_not_fatal() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("jobs.json"), b"{ this is not json").unwrap();
+
+        let store = CronStore::new(dir.path()).expect("store must initialize");
+        assert!(store.list(true).is_empty());
+
+        let quarantined: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .collect();
+        assert_eq!(quarantined.len(), 1, "corrupt file should be set aside");
     }
 }

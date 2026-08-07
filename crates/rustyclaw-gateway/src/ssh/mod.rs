@@ -238,6 +238,10 @@ pub fn add_authorized_client(path: &Path, key: &PublicKey, comment: Option<&str>
     };
 
     writeln!(file, "{}", key_line)?;
+    // Synced before the pairing is acknowledged — an authorization lost
+    // with the page cache strands the client that believes it paired.
+    file.flush()?;
+    file.sync_all()?;
     Ok(())
 }
 

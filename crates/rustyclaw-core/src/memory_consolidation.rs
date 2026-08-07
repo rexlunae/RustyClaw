@@ -9,8 +9,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 
 /// Errors produced by [`MemoryConsolidation`] file operations.
@@ -168,13 +167,7 @@ impl MemoryConsolidation {
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
         let formatted = format!("\n[{}] {}\n", timestamp, entry.trim());
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&history_path)
-            .map_err(ConsolidationError::OpenHistory)?;
-
-        file.write_all(formatted.as_bytes())
+        crate::persist::append_durably(&history_path, formatted.as_bytes())
             .map_err(ConsolidationError::WriteHistory)?;
 
         let metadata = fs::metadata(&history_path).map_err(ConsolidationError::HistoryMetadata)?;
@@ -192,12 +185,10 @@ impl MemoryConsolidation {
     ) -> Result<usize, ConsolidationError> {
         let memory_path = workspace.join(&self.config.memory_path);
 
-        // Create parent directories if needed
-        if let Some(parent) = memory_path.parent() {
-            fs::create_dir_all(parent).map_err(ConsolidationError::CreateDir)?;
-        }
-
-        fs::write(&memory_path, content).map_err(ConsolidationError::WriteMemory)?;
+        // Atomic: this is a truncating replacement of the agent's entire
+        // long-term memory — a torn write must not be able to halve it.
+        crate::persist::write_atomically(&memory_path, content.as_bytes())
+            .map_err(ConsolidationError::WriteMemory)?;
 
         let size = content.len();
 
