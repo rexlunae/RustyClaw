@@ -350,10 +350,7 @@ pub async fn run_gateway(
         let fire_models = model_registry.clone();
         let fire_cancel = cancel.child_token();
         tokio::spawn(async move {
-            let http = reqwest::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_default();
+            let http = rustyclaw_core::providers::http_client();
             loop {
                 tokio::select! {
                     _ = fire_cancel.cancelled() => break,

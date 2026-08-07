@@ -433,10 +433,7 @@ pub(crate) async fn handle_connection(
     }
 
     // ── Report model status to the freshly-connected client ────────
-    let http = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("Failed to build HTTP client")?;
+    let http = rustyclaw_core::providers::http_client();
 
     match model_ctx {
         Some(ref ctx) => {
