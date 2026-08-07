@@ -739,6 +739,33 @@ struct SshWriter {
     channel_handle: Arc<Mutex<Option<russh::ChannelWriteHalf<Msg>>>>,
 }
 
+#[async_trait]
+impl TransportWriter for SshWriter {
+    async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
+        let data = encode_server_wire_frame(stream_id, frame)?;
+        let len = data.len() as u32;
+
+        let mut packet = Vec::with_capacity(4 + data.len());
+        packet.extend_from_slice(&len.to_be_bytes());
+        packet.extend_from_slice(&data);
+
+        let channel = self.channel_handle.lock().await;
+        if let Some(ch) = channel.as_ref() {
+            ch.data(&packet[..]).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        let mut channel = self.channel_handle.lock().await;
+        if let Some(ch) = channel.take() {
+            ch.eof().await?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -885,32 +912,5 @@ mod tests {
             );
 
         sender.await.expect("sender task");
-    }
-}
-
-#[async_trait]
-impl TransportWriter for SshWriter {
-    async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
-        let data = encode_server_wire_frame(stream_id, frame)?;
-        let len = data.len() as u32;
-
-        let mut packet = Vec::with_capacity(4 + data.len());
-        packet.extend_from_slice(&len.to_be_bytes());
-        packet.extend_from_slice(&data);
-
-        let channel = self.channel_handle.lock().await;
-        if let Some(ch) = channel.as_ref() {
-            ch.data(&packet[..]).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn close(&mut self) -> Result<()> {
-        let mut channel = self.channel_handle.lock().await;
-        if let Some(ch) = channel.take() {
-            ch.eof().await?;
-        }
-        Ok(())
     }
 }
