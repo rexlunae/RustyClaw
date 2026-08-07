@@ -25,6 +25,10 @@ pub struct RuntimeInfo {
     pub active_agent: Option<String>,
     /// Wakes the gateway's trigger manager after tool-side trigger edits.
     pub trigger_notify: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// Wakes the gateway's cron scheduler after a schedule edit, so a new
+    /// or changed job takes effect immediately instead of after the
+    /// current sleep expires.
+    pub cron_notify: Option<std::sync::Arc<tokio::sync::Notify>>,
     /// Static host hardware profile.
     pub host: Option<SharedHostCapabilities>,
     /// Live load tracker (periodically sampled).
@@ -105,6 +109,22 @@ pub fn set_trigger_notify(notify: std::sync::Arc<tokio::sync::Notify>) {
 pub fn notify_triggers_changed() {
     if let Ok(ctx) = runtime_ctx().lock() {
         if let Some(notify) = &ctx.trigger_notify {
+            notify.notify_one();
+        }
+    }
+}
+
+/// Register the cron scheduler's wake handle.
+pub fn set_cron_notify(notify: std::sync::Arc<tokio::sync::Notify>) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.cron_notify = Some(notify);
+    }
+}
+
+/// Wake the cron scheduler (no-op when no gateway is running).
+pub fn notify_cron_changed() {
+    if let Ok(ctx) = runtime_ctx().lock() {
+        if let Some(notify) = &ctx.cron_notify {
             notify.notify_one();
         }
     }

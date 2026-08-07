@@ -114,11 +114,19 @@ pub struct CronJob {
     /// Last run timestamp (ms since epoch).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run_ms: Option<u64>,
-    /// Next scheduled run timestamp (ms since epoch).
+    /// Next scheduled run timestamp (ms since epoch). The scheduler's
+    /// single source of "when": persisted, so a fire time survives a
+    /// gateway restart, and a job whose moment passed while the gateway
+    /// was down fires on the next boot instead of never.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run_ms: Option<u64>,
     /// Created timestamp (ms since epoch).
     pub created_ms: u64,
+    /// Thread the wake lands in: its history is the turn's context and the
+    /// exchange is appended to it. `None` targets the agent's foreground
+    /// thread at fire time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<u64>,
 }
 
 fn default_true() -> bool {
@@ -154,6 +162,72 @@ impl CronJob {
             last_run_ms: None,
             next_run_ms: None,
             created_ms: now_ms,
+            thread_id: None,
+        }
+    }
+
+    /// When this job should fire next, in ms since the epoch.
+    ///
+    /// `None` means "never again": a one-shot that already ran, an
+    /// unparseable schedule, or a cron expression with no future match.
+    /// A time in the past is a valid answer — it means the moment was
+    /// missed (the gateway was down, or the one-shot was set for a time
+    /// already gone) and the job should fire as soon as possible. Firing
+    /// late beats never firing: the whole point of a wake is that it
+    /// happens.
+    pub fn next_fire_ms(&self, now_ms: u64) -> Option<u64> {
+        match &self.schedule {
+            Schedule::At { at } => {
+                // One-shot: fires once, and having run is the only thing
+                // that retires it.
+                if self.last_run_ms.is_some() {
+                    return None;
+                }
+                let t = chrono::DateTime::parse_from_rfc3339(at).ok()?;
+                Some(t.timestamp_millis().max(0) as u64)
+            }
+            Schedule::Every { every_ms, anchor_ms } => {
+                if *every_ms == 0 {
+                    return None;
+                }
+                // The grid is anchored: fires land at anchor + n·interval,
+                // not at "whenever the last one happened plus interval", so
+                // a slow run does not drift the schedule. Always the first
+                // grid point after now: catch-up for downtime comes from
+                // the *persisted* `next_run_ms` (armed before the gateway
+                // went down, fired on boot), never from recomputation —
+                // recomputing happens on resume-from-pause too, where
+                // firing the slots the user paused through would be wrong.
+                let anchor = anchor_ms.unwrap_or(self.created_ms);
+                let base = self
+                    .last_run_ms
+                    .into_iter()
+                    .chain([anchor, now_ms])
+                    .max()
+                    .unwrap_or(now_ms);
+                let n = base.saturating_sub(anchor) / every_ms + 1;
+                Some(anchor + n * every_ms)
+            }
+            Schedule::Cron { expr, tz } => {
+                let cron = croner::Cron::new(expr)
+                    .with_seconds_optional()
+                    .parse()
+                    .ok()?;
+                let after_ms = self.last_run_ms.map_or(now_ms, |l| l.max(now_ms));
+                let after = chrono::DateTime::from_timestamp_millis(after_ms as i64)?;
+                match tz.as_deref() {
+                    Some(name) => {
+                        let zone: chrono_tz::Tz = name.parse().ok()?;
+                        cron.find_next_occurrence(&after.with_timezone(&zone), false)
+                            .ok()
+                            .map(|t| t.timestamp_millis().max(0) as u64)
+                    }
+                    None => cron
+                        .find_next_occurrence(&after.with_timezone(&chrono::Local), false)
+                        .ok()
+                        .map(|t| t.timestamp_millis().max(0) as u64),
+                }
+            }
         }
     }
 }
@@ -194,6 +268,69 @@ pub enum CronError {
     /// The referenced job does not exist.
     #[error("Job not found: {0}")]
     JobNotFound(String),
+}
+
+/// Serialize open→mutate→save cycles on the jobs file. Three writers share
+/// it — the agent tool (blocking pool), the client panel handler (async),
+/// and the scheduler — and each rewrites the whole file on save, so an
+/// unserialized interleave silently drops the other writer's change.
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The one place cron jobs live: `<settings_dir>/cron/`.
+///
+/// Centralized deliberately. The agent tool used to open `.cron` under the
+/// *per-agent* workspace while the client panel opened it under the
+/// *gateway's* — two stores, each seeing half the jobs. A scheduler can
+/// only fire what it can see, so there is exactly one directory and every
+/// caller derives it from here.
+pub fn central_cron_dir(settings_dir: &Path) -> PathBuf {
+    settings_dir.join("cron")
+}
+
+/// Open the central store and run `f` on it, holding the store lock for
+/// the whole read-modify-write. Mutating methods save internally, so `f`
+/// needs no explicit save call.
+pub fn with_store<R>(
+    settings_dir: &Path,
+    f: impl FnOnce(&mut CronStore) -> Result<R, CronError>,
+) -> Result<R, CronError> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut store = CronStore::new(&central_cron_dir(settings_dir))?;
+    f(&mut store)
+}
+
+/// One-time adoption of a legacy `.cron` directory into the central store.
+///
+/// Only when the central store has no jobs file yet and the legacy one
+/// does: the legacy `jobs.json` is copied in and the original renamed
+/// aside, so it cannot be adopted twice or shadow the central store later.
+pub fn adopt_legacy_store(settings_dir: &Path, legacy_dir: &Path) {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let central_jobs = central_cron_dir(settings_dir).join("jobs.json");
+    let legacy_jobs = legacy_dir.join("jobs.json");
+    if central_jobs.exists() || !legacy_jobs.exists() {
+        return;
+    }
+    let adopted = fs::read(&legacy_jobs)
+        .and_then(|bytes| crate::persist::write_atomically(&central_jobs, &bytes));
+    match adopted {
+        Ok(()) => {
+            let retired = legacy_jobs.with_extension("json.migrated");
+            fs::rename(&legacy_jobs, &retired).ok();
+            tracing::info!(
+                from = %legacy_jobs.display(),
+                to = %central_jobs.display(),
+                "Adopted legacy cron jobs into the central store"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                from = %legacy_jobs.display(),
+                error = %e,
+                "Could not adopt legacy cron jobs"
+            );
+        }
+    }
 }
 
 /// Cron job store that persists jobs to disk.
@@ -281,15 +418,32 @@ impl CronStore {
         }
         if let Some(enabled) = patch.enabled {
             job.enabled = enabled;
+            // A pause forgets the pending fire; a resume recomputes it
+            // fresh rather than firing a moment that passed while paused.
+            job.next_run_ms = None;
         }
         if let Some(schedule) = patch.schedule {
             job.schedule = schedule;
+            // The stored fire time belonged to the old schedule.
+            job.next_run_ms = None;
         }
         if let Some(payload) = patch.payload {
             job.payload = payload;
         }
         if let Some(delivery) = patch.delivery {
             job.delivery = Some(delivery);
+        }
+        if let Some(description) = patch.description {
+            job.description = Some(description);
+        }
+        if let Some(agent_id) = patch.agent_id {
+            job.agent_id = Some(agent_id);
+        }
+        if let Some(thread_id) = patch.thread_id {
+            job.thread_id = Some(thread_id);
+        }
+        if let Some(session_target) = patch.session_target {
+            job.session_target = session_target;
         }
 
         self.save()
@@ -303,6 +457,94 @@ impl CronStore {
             .ok_or_else(|| CronError::JobNotFound(job_id.to_string()))?;
         self.save()?;
         Ok(job)
+    }
+
+    /// Bring every job's `next_run_ms` in line with its schedule and
+    /// enabled state. Returns the earliest pending fire time, which is
+    /// what the scheduler sleeps until.
+    ///
+    /// Only fills what is missing: an already-computed `next_run_ms` is
+    /// left alone, because "run now" works by writing an immediate time
+    /// there and recomputing would erase the request.
+    pub fn ensure_next_runs(&mut self, now_ms: u64) -> Result<Option<u64>, CronError> {
+        let mut changed = false;
+        for job in self.jobs.values_mut() {
+            let wanted = if job.enabled {
+                match job.next_run_ms {
+                    Some(t) => Some(t),
+                    None => job.next_fire_ms(now_ms),
+                }
+            } else {
+                None
+            };
+            if job.next_run_ms != wanted {
+                job.next_run_ms = wanted;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save()?;
+        }
+        Ok(self
+            .jobs
+            .values()
+            .filter(|j| j.enabled)
+            .filter_map(|j| j.next_run_ms)
+            .min())
+    }
+
+    /// Take every enabled job whose moment has arrived, advancing each
+    /// one's bookkeeping in the same step: `last_run_ms` becomes now, the
+    /// following fire time is computed and stored, and a one-shot with
+    /// nothing left to do is deleted if it asked to be. Returns snapshots
+    /// for the caller to execute — the store is already consistent by the
+    /// time they run, so a crash mid-execution costs one wake, not a
+    /// double-fire on restart.
+    pub fn take_due_jobs(&mut self, now_ms: u64) -> Result<Vec<CronJob>, CronError> {
+        let due_ids: Vec<JobId> = self
+            .jobs
+            .values()
+            .filter(|j| j.enabled && j.next_run_ms.is_some_and(|t| t <= now_ms))
+            .map(|j| j.job_id.clone())
+            .collect();
+
+        let mut due = Vec::new();
+        for id in due_ids {
+            let Some(job) = self.jobs.get_mut(&id) else {
+                continue;
+            };
+            job.last_run_ms = Some(now_ms);
+            job.next_run_ms = None;
+            let next = job.next_fire_ms(now_ms);
+            job.next_run_ms = next;
+            let snapshot = job.clone();
+            if next.is_none() && job.delete_after_run {
+                self.jobs.remove(&id);
+            }
+            due.push(snapshot);
+        }
+        if !due.is_empty() {
+            self.save()?;
+        }
+        Ok(due)
+    }
+
+    /// Ask for an immediate fire: the job's next run becomes "now", and
+    /// the scheduler's next pass picks it up like any other due job. The
+    /// regular schedule resumes afterwards, because `take_due_jobs`
+    /// recomputes from the schedule when it fires.
+    pub fn request_run_now(&mut self, job_id: &str) -> Result<(), CronError> {
+        let job = self
+            .jobs
+            .get_mut(job_id)
+            .ok_or_else(|| CronError::JobNotFound(job_id.to_string()))?;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        job.enabled = true;
+        job.next_run_ms = Some(now_ms);
+        self.save()
     }
 
     /// Get run history for a job.
@@ -356,6 +598,14 @@ pub struct CronJobPatch {
     pub payload: Option<Payload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_target: Option<SessionTarget>,
 }
 
 #[cfg(test)]
@@ -455,4 +705,188 @@ mod tests {
             .collect();
         assert_eq!(quarantined.len(), 1, "corrupt file should be set aside");
     }
+    // ── Schedule math ───────────────────────────────────────────────────
+
+    fn job_with(schedule: Schedule) -> CronJob {
+        CronJob::new(
+            Some("t".into()),
+            schedule,
+            SessionTarget::Main,
+            Payload::SystemEvent { text: "hi".into() },
+        )
+    }
+
+    /// Interval fires land on an anchored grid — a slow run or downtime
+    /// must not drift the schedule, and a missed slot fires once, not as
+    /// a burst of catch-ups.
+    #[test]
+    fn every_fires_on_an_anchored_grid() {
+        let mut job = job_with(Schedule::Every {
+            every_ms: 100,
+            anchor_ms: Some(1_000),
+        });
+
+        // Never run: the first fire is the first grid point after the anchor.
+        assert_eq!(job.next_fire_ms(1_000), Some(1_100));
+
+        // Ran on time: the next grid point.
+        job.last_run_ms = Some(1_100);
+        assert_eq!(job.next_fire_ms(1_105), Some(1_200));
+
+        // Recomputing after downtime aims forward — slots missed while
+        // down are NOT re-derived here (catch-up is the job of the
+        // persisted next_run_ms, armed before the gateway went down), so
+        // a resume-from-pause cannot fire the slots the user paused
+        // through.
+        assert_eq!(job.next_fire_ms(1_550), Some(1_600));
+        job.last_run_ms = Some(1_550);
+        assert_eq!(job.next_fire_ms(1_550), Some(1_600));
+    }
+
+    /// A one-shot fires even if its moment passed while the gateway was
+    /// down — and never fires twice.
+    #[test]
+    fn a_one_shot_fires_late_but_only_once() {
+        let mut job = job_with(Schedule::At {
+            at: "2026-01-01T09:00:00Z".to_string(),
+        });
+        assert!(job.delete_after_run, "one-shots ask to be deleted");
+
+        let nine_am_ms = chrono::DateTime::parse_from_rfc3339("2026-01-01T09:00:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        // Asked long after the moment: still that moment (i.e. "overdue").
+        assert_eq!(job.next_fire_ms(nine_am_ms + 3_600_000), Some(nine_am_ms));
+
+        job.last_run_ms = Some(nine_am_ms + 3_600_000);
+        assert_eq!(job.next_fire_ms(nine_am_ms + 3_600_001), None);
+    }
+
+    /// A cron expression resolves to the next matching wall-clock moment
+    /// in its timezone.
+    #[test]
+    fn a_cron_expression_finds_the_next_match() {
+        let job = job_with(Schedule::Cron {
+            expr: "0 * * * *".to_string(),
+            tz: Some("UTC".to_string()),
+        });
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:30:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        let next = job.next_fire_ms(now).expect("hourly always has a next");
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-01-01T01:00:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(next, expected);
+    }
+
+    /// An unparseable cron expression schedules nothing rather than
+    /// wedging the scheduler.
+    #[test]
+    fn a_bad_cron_expression_never_fires() {
+        let job = job_with(Schedule::Cron {
+            expr: "not a cron line".to_string(),
+            tz: None,
+        });
+        assert_eq!(job.next_fire_ms(0), None);
+    }
+
+    // ── Scheduler bookkeeping ───────────────────────────────────────────
+
+    /// take_due_jobs advances last/next in the same step it hands the job
+    /// out, and a spent one-shot that asked to be deleted is gone.
+    #[test]
+    fn due_jobs_are_taken_with_their_bookkeeping_settled() {
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+
+        let mut interval = job_with(Schedule::Every {
+            every_ms: 60_000,
+            anchor_ms: Some(0),
+        });
+        interval.next_run_ms = Some(60_000);
+        let interval_id = store.add(interval).unwrap();
+
+        let mut oneshot = job_with(Schedule::At {
+            at: "1970-01-01T00:00:30Z".to_string(),
+        });
+        oneshot.next_run_ms = Some(30_000);
+        let oneshot_id = store.add(oneshot).unwrap();
+
+        let due = store.take_due_jobs(61_000).unwrap();
+        assert_eq!(due.len(), 2, "both were due");
+
+        // The interval advanced onto its next grid point.
+        let again = store.get(&interval_id).unwrap();
+        assert_eq!(again.last_run_ms, Some(61_000));
+        assert_eq!(again.next_run_ms, Some(120_000));
+
+        // The one-shot is spent and deleted.
+        assert!(store.get(&oneshot_id).is_none());
+
+        // Nothing is due twice.
+        assert!(store.take_due_jobs(61_000).unwrap().is_empty());
+    }
+
+    /// ensure_next_runs fills only what is missing — a pending "run now"
+    /// request must survive it — and reports the earliest fire.
+    #[test]
+    fn ensure_next_runs_fills_gaps_without_erasing_requests() {
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+
+        let job = job_with(Schedule::Every {
+            every_ms: 100_000,
+            anchor_ms: Some(0),
+        });
+        let id = store.add(job).unwrap();
+
+        let earliest = store.ensure_next_runs(50_000).unwrap();
+        assert_eq!(earliest, Some(100_000));
+
+        store.request_run_now(&id).unwrap();
+        let requested = store.get(&id).unwrap().next_run_ms.unwrap();
+        let earliest = store.ensure_next_runs(50_000).unwrap();
+        assert_eq!(earliest, Some(requested), "run-now request survives");
+    }
+
+    /// Disabling a job clears its pending fire; re-enabling recomputes it
+    /// instead of firing a moment that passed while paused.
+    #[test]
+    fn pausing_forgets_the_pending_fire() {
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let job = job_with(Schedule::Every {
+            every_ms: 100,
+            anchor_ms: Some(0),
+        });
+        let id = store.add(job).unwrap();
+        store.ensure_next_runs(50).unwrap();
+        assert!(store.get(&id).unwrap().next_run_ms.is_some());
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    enabled: Some(false),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store.ensure_next_runs(150).unwrap();
+        assert_eq!(store.get(&id).unwrap().next_run_ms, None);
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let earliest = store.ensure_next_runs(150).unwrap();
+        assert_eq!(earliest, Some(200), "recomputed forward from now");
+    }
+
 }
