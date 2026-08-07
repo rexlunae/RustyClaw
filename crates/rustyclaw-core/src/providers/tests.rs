@@ -485,3 +485,54 @@ fn test_truncate_for_error_truncates_long_bodies() {
 fn test_truncate_for_error_passes_through_short_bodies() {
     assert_eq!(truncate_for_error("hello"), "hello");
 }
+
+// ── Provider HTTP client deadlines ──────────────────────────────────────────
+
+/// Guards the property the default exists for: a provider request must not be
+/// able to wait forever. The 1h56m stall that motivated this was a request
+/// with no read deadline at all, ended only by TCP giving up.
+#[test]
+fn a_provider_request_is_bounded_by_default() {
+    // SAFETY: single-threaded test with no other reader of this variable.
+    unsafe { std::env::remove_var("RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS") };
+
+    assert_eq!(
+        super::provider_read_timeout(),
+        Some(super::PROVIDER_READ_TIMEOUT),
+        "the default must bound how long a provider may go silent"
+    );
+    assert!(
+        super::PROVIDER_READ_TIMEOUT >= std::time::Duration::from_secs(60),
+        "generous enough that a slow time-to-first-token is not cut off"
+    );
+}
+
+/// The override exists for local models with long cold-start latency, and `0`
+/// is the documented way back to the old unbounded behaviour.
+#[test]
+fn the_override_is_honoured_including_the_opt_out() {
+    // SAFETY: as above.
+    unsafe { std::env::set_var("RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS", "600") };
+    assert_eq!(
+        super::provider_read_timeout(),
+        Some(std::time::Duration::from_secs(600))
+    );
+
+    unsafe { std::env::set_var("RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS", "0") };
+    assert_eq!(
+        super::provider_read_timeout(),
+        None,
+        "0 disables the read timeout"
+    );
+
+    // A typo must not silently disable the deadline — that would turn a
+    // mistake into the exact bug this bounds.
+    unsafe { std::env::set_var("RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS", "banana") };
+    assert_eq!(
+        super::provider_read_timeout(),
+        Some(super::PROVIDER_READ_TIMEOUT),
+        "an unparseable value falls back to the default, not to unbounded"
+    );
+
+    unsafe { std::env::remove_var("RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS") };
+}

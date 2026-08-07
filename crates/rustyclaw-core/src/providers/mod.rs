@@ -506,3 +506,82 @@ pub async fn call_with_tools(
 
 #[cfg(test)]
 mod tests;
+
+// ── Provider HTTP client ─────────────────────────────────────────────────────
+
+/// How long to wait for the TCP/TLS handshake with a provider.
+///
+/// Reaching a host either works quickly or is not going to.
+pub const PROVIDER_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long a provider may go **silent** mid-response before the request is
+/// abandoned.
+///
+/// Deliberately not a total-duration timeout. A completion is legitimately
+/// long — minutes of tokens is a normal answer, and a cap on the whole request
+/// would cut off the good case along with the bad. What is not normal is a
+/// connection that has stopped producing bytes, and that is what this bounds.
+///
+/// The default is generous because time-to-first-token is the widest part of
+/// the distribution: a local model on cold weights, or a hosted one under
+/// load, can take a while before the first byte. Override with
+/// `RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS` when running something slower.
+pub const PROVIDER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Read timeout for provider requests, honouring the environment override.
+///
+/// A value of `0` disables the read timeout, which restores the old
+/// behaviour for anyone who needs it — at the cost of what it was fixing.
+pub fn provider_read_timeout() -> Option<std::time::Duration> {
+    match std::env::var("RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(0) => None,
+            Ok(secs) => Some(std::time::Duration::from_secs(secs)),
+            Err(_) => {
+                tracing::warn!(
+                    value = %raw,
+                    "ignoring unparseable RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS; \
+                     using the default"
+                );
+                Some(PROVIDER_READ_TIMEOUT)
+            }
+        },
+        Err(_) => Some(PROVIDER_READ_TIMEOUT),
+    }
+}
+
+/// The configured builder behind [`http_client`], for the rare caller that
+/// needs to add to it — the IPv4-only retry binds a local address before
+/// building. Going through here is what keeps that retry bounded by the same
+/// deadlines as the request it is retrying.
+pub fn http_client_builder() -> reqwest::ClientBuilder {
+    let mut builder = reqwest::Client::builder().connect_timeout(PROVIDER_CONNECT_TIMEOUT);
+    if let Some(read) = provider_read_timeout() {
+        builder = builder.read_timeout(read);
+    }
+    builder
+}
+
+/// A `reqwest::Client` for talking to model providers.
+///
+/// Every provider request should come from here. The alternative — building a
+/// client at each call site — is how the gateway ended up with the requests
+/// that matter least (model listing, device flow) bounded at 10s while the one
+/// carrying a user's turn had no deadline at all. One of those hung for
+/// 1h56m before TCP gave up on it, and for that whole time the turn was live:
+/// no completion, no error, and a client sitting on "processing" with nothing
+/// to show and nothing to report.
+pub fn http_client() -> reqwest::Client {
+    let builder = http_client_builder();
+    // A client that fails to build would leave the caller with no way to talk
+    // to a provider at all; the default one at least works, minus the
+    // deadlines this function exists to set.
+    builder.build().unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %e,
+            "falling back to an untimed HTTP client — provider requests will not \
+             be bounded"
+        );
+        reqwest::Client::new()
+    })
+}

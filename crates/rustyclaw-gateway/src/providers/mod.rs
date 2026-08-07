@@ -31,7 +31,7 @@ pub async fn send_with_retry(builder: reqwest::RequestBuilder) -> Result<reqwest
                 Err(e) if e.is_connect() => {
                     debug!(error = %e, "Connection failed, retrying with IPv4-only");
                     // Build an IPv4-only client for the retry
-                    let ipv4_client = reqwest::Client::builder()
+                    let ipv4_client = rustyclaw_core::providers::http_client_builder()
                         .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
                         .build()
                         .context("Failed to build IPv4 client")?;
