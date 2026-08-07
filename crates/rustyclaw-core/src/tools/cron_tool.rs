@@ -18,7 +18,15 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
     tracing::Span::current().record("action", action);
     debug!("Executing cron tool");
 
-    let cron_dir = workspace_dir.join(".cron");
+    // One central store for the whole gateway. This tool used to open
+    // `.cron` under the per-agent workspace while the client panel opened
+    // the gateway's — two stores, each seeing half the jobs. Jobs an agent
+    // created in the old location are adopted on first touch.
+    let Some(settings_dir) = crate::runtime_ctx::get_settings_dir() else {
+        return Err("Cron is unavailable: no gateway settings directory in this context".into());
+    };
+    adopt_legacy_store(&settings_dir, &workspace_dir.join(".cron"));
+    let cron_dir = central_cron_dir(&settings_dir);
     let mut store = CronStore::new(&cron_dir)?;
 
     match action {
@@ -75,6 +83,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .map_err(|e| ToolError::context("Invalid job definition", e))?;
 
             let id = store.add(job)?;
+            crate::runtime_ctx::notify_cron_changed();
             debug!(job_id = %id, "Created cron job");
             Ok(format!("Created job: {}", id))
         }
@@ -91,6 +100,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .map_err(|e| ToolError::context("Invalid patch", e))?;
 
             store.update(job_id, patch)?;
+            crate::runtime_ctx::notify_cron_changed();
             debug!(job_id, "Updated cron job");
             Ok(format!("Updated job: {}", job_id))
         }
@@ -102,6 +112,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .ok_or("Missing jobId for remove")?;
 
             store.remove(job_id)?;
+            crate::runtime_ctx::notify_cron_changed();
             debug!(job_id, "Removed cron job");
             Ok(format!("Removed job: {}", job_id))
         }
@@ -112,14 +123,17 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing jobId for run")?;
 
-            let job = store
+            let name = store
                 .get(job_id)
-                .ok_or_else(|| format!("Job not found: {}", job_id))?;
-
+                .ok_or_else(|| format!("Job not found: {}", job_id))?
+                .name
+                .clone();
+            store.request_run_now(job_id)?;
+            crate::runtime_ctx::notify_cron_changed();
             debug!(job_id, "Manual run requested");
             Ok(format!(
-                "Would run job '{}' ({}). Note: actual execution requires gateway integration.",
-                job.name.as_deref().unwrap_or("unnamed"),
+                "Requested an immediate run of job '{}' ({}). The scheduler fires it momentarily.",
+                name.as_deref().unwrap_or("unnamed"),
                 job_id
             ))
         }

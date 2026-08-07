@@ -175,9 +175,15 @@ pub static ADD_MEMORY: ToolDef = ToolDef {
 
 pub static CRON: ToolDef = ToolDef {
     name: "cron",
-    description: "Manage scheduled jobs. Actions: status (scheduler status), list (show jobs), \
-                  add (create job), update (modify job), remove (delete job), run (trigger immediately), \
-                  runs (get run history). Use for reminders and recurring tasks.",
+    description: "Schedule wakes: the gateway runs a prompt as an agent turn on a schedule, in a \
+                  chosen thread, optionally with a chosen model. Actions: status, list, add, \
+                  update, remove, run (fire immediately), runs (history). A job for 'add' looks \
+                  like {\"schedule\": {\"kind\": \"at\", \"at\": \"2026-01-01T09:00:00Z\"} | \
+                  {\"kind\": \"every\", \"everyMs\": 3600000} | {\"kind\": \"cron\", \"expr\": \"0 9 * * 1-5\", \"tz\": \"America/Chicago\"}, \
+                  \"sessionTarget\": \"main\", \"payload\": {\"kind\": \"agentTurn\", \"message\": \"<prompt to wake with>\", \"model\": \"<optional model override>\"}, \
+                  \"threadId\": <optional thread number for context and the response>, \
+                  \"name\": \"<short name>\"}. Use this to wake yourself later, set reminders, or \
+                  run recurring check-ins.",
     parameters: vec![],
     execute: exec_cron,
 };
