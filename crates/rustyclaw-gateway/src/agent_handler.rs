@@ -95,7 +95,15 @@ impl AgentSession {
     /// directory skeleton on first use.
     pub fn load(config: &Config, agent_id: &str) -> Self {
         let sessions_dir = config.sessions_dir_for(agent_id);
-        std::fs::create_dir_all(&sessions_dir).ignore();
+        // Failure here means every persist below fails one by one; say so
+        // once, loudly, instead of discarding the first and clearest error.
+        if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
+            tracing::error!(
+                dir = %sessions_dir.display(),
+                error = %e,
+                "Could not create the sessions directory; nothing this agent does will persist"
+            );
+        }
         let threads_path = sessions_dir.join("threads.json");
         let projects_path = sessions_dir.join("projects.json");
         let thread_mgr = rustyclaw_core::threads::manager_for(&threads_path);
@@ -253,6 +261,37 @@ impl AgentSession {
     pub async fn save(&self) {
         self.persist_threads().await;
         crate::helpers::persist_projects(&self.project_mgr, &self.projects_path);
+    }
+}
+
+/// Backstop, not the plan: every ordinary teardown — agent switch,
+/// disconnect, the [`crate::TurnCloseout`] guard — calls `save()` before
+/// the session drops, and this finds nothing to do. It exists for the
+/// teardown path nobody wrote: an early `?`, a panic unwinding the
+/// connection task, a future edit that forgets. Messages a user was shown
+/// as "sent" should not depend on every exit path remembering to say so.
+///
+/// Synchronous by necessity (`Drop` cannot await) and best-effort by
+/// design: every store write beneath is plain `std::fs`, so no runtime is
+/// needed — but the manager is shared, so if another task holds the lock
+/// right now, that task is alive and its own persist path is responsible.
+/// `try_lock` rather than blocking: deadlocking a teardown to guarantee a
+/// write nobody may need is a worse trade than logging what was skipped.
+impl Drop for AgentSession {
+    fn drop(&mut self) {
+        let Ok(mut tm) = self.thread_mgr.try_lock() else {
+            return;
+        };
+        if !tm.has_unpersisted_activity() {
+            return;
+        }
+        tracing::warn!(
+            agent = %self.agent_id,
+            "Session dropped with unpersisted messages; writing them now — \
+             some teardown path skipped save()"
+        );
+        tm.set_foreground_quietly(crate::foreground_of(&self.foreground));
+        crate::helpers::persist_threads(&mut tm, &self.threads_path);
     }
 }
 

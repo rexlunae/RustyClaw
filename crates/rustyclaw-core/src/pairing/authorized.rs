@@ -236,6 +236,11 @@ pub fn add_authorized_client(
     }
 
     writeln!(file, "{}", key_line)?;
+    // Synced before the pairing is acknowledged: an authorization that
+    // evaporates with the page cache strands a client that believes it
+    // paired.
+    file.flush()?;
+    file.sync_all()?;
 
     info!(
         path = %path.display(),
@@ -264,7 +269,9 @@ pub fn remove_authorized_client(path: &Path, fingerprint: &str) -> Result<bool> 
         content.push('\n');
     }
 
-    std::fs::write(path, content)
+    // Atomic: a torn write here used to blank the whole authorization
+    // list, locking every paired client out at once.
+    crate::persist::write_atomically(path, content.as_bytes())
         .with_context(|| format!("Failed to write authorized_clients: {}", path.display()))?;
 
     info!(

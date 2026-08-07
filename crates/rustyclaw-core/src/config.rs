@@ -590,8 +590,29 @@ impl Config {
             let config: Config = match toml::from_str(&content) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("ERROR: Failed to parse config: {}", e);
-                    return Err(e.into());
+                    // A torn config used to be a hard startup failure — the
+                    // one file that decides where everything lives, and one
+                    // bad byte meant nothing started until the user found
+                    // and fixed it by hand. Move it aside and start from
+                    // defaults instead: RustyClaw comes up, and the user's
+                    // settings are in the quarantine file, not gone.
+                    eprintln!(
+                        "ERROR: Failed to parse config at {}: {e}",
+                        config_path.display()
+                    );
+                    match crate::persist::quarantine(&config_path, &e.to_string()) {
+                        Some(kept) => {
+                            eprintln!(
+                                "The unreadable config was moved to {} — starting with defaults. \
+                                 Restore settings from that file, then delete it.",
+                                kept.display()
+                            );
+                            return Ok(Config::default());
+                        }
+                        // Could not even rename it: better to stop than to
+                        // silently shadow a file the next save would clobber.
+                        None => return Err(e.into()),
+                    }
                 }
             };
             let mut config = config;
@@ -613,12 +634,10 @@ impl Config {
             self.settings_dir.join("config.toml")
         };
 
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
+        // Atomic: this file is rewritten on essentially every settings
+        // change, and a torn write here used to be a failed startup.
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(&config_path, content)?;
+        crate::persist::write_atomically(&config_path, content.as_bytes())?;
 
         // Keep the runtime provider catalogue in sync with edits made
         // through the UI (add/remove custom provider then save).
@@ -696,5 +715,46 @@ impl Config {
 
         eprintln!("Migration complete.");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A torn config.toml used to be a hard startup failure — the single
+    /// file that decides where everything lives, dead on one bad byte,
+    /// with no backup and no fallback. Load must quarantine it and come
+    /// up with defaults so RustyClaw starts and the user keeps the bytes.
+    #[test]
+    fn a_corrupt_config_is_quarantined_and_defaults_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, b"[provider\nthis is torn toml").unwrap();
+
+        let config = Config::load(Some(path.clone())).expect("defaults must load");
+        assert_eq!(config.agent_name, Config::default().agent_name);
+
+        assert!(!path.exists(), "corrupt file should have been moved aside");
+        let quarantined: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .collect();
+        assert_eq!(quarantined.len(), 1, "corrupt config kept for recovery");
+    }
+
+    /// Save must work into a directory that does not exist yet, and a
+    /// saved config must round-trip.
+    #[test]
+    fn save_creates_directories_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deep/nested/config.toml");
+
+        let config = Config::default();
+        config.save(Some(path.clone())).expect("save must succeed");
+
+        let loaded = Config::load(Some(path)).expect("load what was saved");
+        assert_eq!(loaded.agent_name, config.agent_name);
     }
 }

@@ -430,7 +430,10 @@ impl ThreadManager {
         };
         let json = serde_json::to_string_pretty(&state)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, json)
+        // Atomic, like the threads/manager.rs sibling this mirrors: every
+        // thread lives in this one document, so a direct write that fails
+        // partway turns one failed write into the loss of every thread.
+        crate::persist::write_atomically(path, json.as_bytes())
     }
 
     /// Load thread state from a file.
@@ -454,7 +457,17 @@ impl ThreadManager {
     pub fn load_or_default(path: &std::path::Path) -> Self {
         match Self::load_from_file(path) {
             Ok(mgr) if !mgr.threads.is_empty() => mgr,
-            _ => {
+            Ok(_) => {
+                let mut mgr = Self::new();
+                mgr.create_thread("Main");
+                mgr
+            }
+            Err(e) => {
+                // Quarantine an unreadable file before any later save
+                // writes the fresh default over the only copy of it.
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    crate::persist::quarantine(path, &e.to_string());
+                }
                 let mut mgr = Self::new();
                 mgr.create_thread("Main");
                 mgr

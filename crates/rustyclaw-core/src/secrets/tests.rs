@@ -998,3 +998,38 @@ fn test_set_policy_legacy_key_promotes_to_typed() {
     let entry = all.iter().find(|(n, _)| n == "LEGACY_KEY").unwrap();
     assert_eq!(entry.1.policy, AccessPolicy::Always);
 }
+
+/// A password change must never have a moment where the only copy of the
+/// secrets is a file mid-write. After it succeeds, the previous state
+/// survives as a pair — the old vault and the key that opens it — because a
+/// backup whose key was deleted is ciphertext, not a backup.
+#[test]
+fn change_password_leaves_a_recoverable_backup() {
+    let dir = temp_dir();
+    {
+        let mut m = SecretsManager::new(&dir);
+        m.store_secret("api_key", "sk-123").unwrap();
+        m.change_password("pw1".to_string()).unwrap();
+    }
+
+    // The re-keyed vault opens with the new password and holds the secret.
+    let mut m = SecretsManager::with_password(&dir, "pw1".to_string());
+    assert_eq!(
+        m.get_secret("api_key", true).unwrap().as_deref(),
+        Some("sk-123")
+    );
+
+    // The previous state is set aside, not destroyed — and the backup key
+    // still opens the backup vault.
+    let vault_bak = dir.join("secrets.json.bak");
+    let key_bak = dir.join("secrets.key.bak");
+    assert!(vault_bak.exists(), "old vault should be kept as .bak");
+    assert!(key_bak.exists(), "old key must survive with the old vault");
+    let backup =
+        securestore::SecretsManager::load(&vault_bak, securestore::KeySource::from_file(&key_bak))
+            .unwrap();
+    assert_eq!(backup.get("api_key").unwrap(), "sk-123");
+
+    // No staging leftovers.
+    assert!(!dir.join("secrets.json.rekey").exists());
+}

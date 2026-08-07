@@ -34,10 +34,7 @@ pub fn log_path(settings_dir: &Path) -> PathBuf {
 /// Write a PID to the PID file.
 pub fn write_pid(settings_dir: &Path, pid: u32) -> Result<()> {
     let path = pid_path(settings_dir);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, pid.to_string())
+    crate::persist::write_atomically(&path, pid.to_string().as_bytes())
         .with_context(|| format!("Failed to write PID file {}", path.display()))
 }
 

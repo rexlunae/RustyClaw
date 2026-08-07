@@ -20,6 +20,7 @@
 //! runtime by POSTing `{"token", "name"}` to the gateway's `/secret`
 //! callback. See [`crate::secrets::SecretsManager::get_secret_for_trigger`].
 
+use crate::ignore::Ignore;
 use securestore::KeySource;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -187,6 +188,27 @@ impl TriggerStore {
         self.dir.join("store.vault")
     }
 
+    /// Save the vault atomically. securestore writes in place, and every
+    /// trigger — code bodies included, which exist nowhere else — lives in
+    /// this one file: a torn save is not one trigger lost but all of them.
+    /// Route it through a synced temp sibling and a rename instead.
+    fn save_vault(&self, vault: &securestore::SecretsManager) -> TriggerResult<()> {
+        let path = self.vault_path();
+        let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(".tmp");
+        let tmp = path.with_file_name(tmp_name);
+        vault
+            .save_as(&tmp)
+            .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
+        let synced = std::fs::File::open(&tmp).and_then(|f| f.sync_all());
+        let renamed = synced.and_then(|()| std::fs::rename(&tmp, &path));
+        if let Err(e) = renamed {
+            std::fs::remove_file(&tmp).ignore();
+            return Err(TriggerStoreError::Vault(format!("save failed: {e}")));
+        }
+        Ok(())
+    }
+
     fn key_path(&self) -> PathBuf {
         self.dir.join("store.key")
     }
@@ -289,9 +311,7 @@ impl TriggerStore {
         let mut vault = self.load_vault()?;
         let json = serde_json::to_string(def)?;
         vault.set(&format!("{}{}", KEY_PREFIX, def.id), json);
-        vault
-            .save()
-            .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
+        self.save_vault(&vault)?;
         Ok(())
     }
 
@@ -305,9 +325,7 @@ impl TriggerStore {
         vault
             .remove(&format!("{}{}", KEY_PREFIX, id))
             .map_err(|_| TriggerStoreError::NotFound(id.to_string()))?;
-        vault
-            .save()
-            .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
+        self.save_vault(&vault)?;
         Ok(())
     }
 
@@ -333,26 +351,18 @@ impl TriggerStore {
         let mut def: TriggerDef = serde_json::from_str(&json)?;
         def.enabled = enabled;
         vault.set(&key, serde_json::to_string(&def)?);
-        vault
-            .save()
-            .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
+        self.save_vault(&vault)?;
         Ok(())
     }
 
-    /// Append one fire record to the trigger's run history.
+    /// Append one fire record to the trigger's run history. Durable: the
+    /// old path dropped the handle unflushed, discarding any I/O error
+    /// with it.
     pub fn record_run(&self, id: &str, record: &TriggerRunRecord) -> TriggerResult<()> {
         let path = self.runs_path(id);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let mut line = serde_json::to_string(record)?;
         line.push('\n');
-        use std::io::Write;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?
-            .write_all(line.as_bytes())?;
+        crate::persist::append_durably(&path, line.as_bytes())?;
         Ok(())
     }
 }

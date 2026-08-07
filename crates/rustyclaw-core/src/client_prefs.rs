@@ -6,7 +6,6 @@
 //! at `~/.rustyclaw/client.json` and is intentionally simple JSON so
 //! that any client can read/write it.
 
-use crate::ignore::Ignore;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -111,7 +110,16 @@ fn parse_preferences(value: &serde_json::Value) -> ClientPreferences {
 fn read_raw_prefs() -> Option<serde_json::Value> {
     let path = prefs_path()?;
     let bytes = std::fs::read(&path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            // The save path starts from `{}` when this returns None, which
+            // used to silently drop whatever the corrupt file held —
+            // including keys written by other tools. Preserve the bytes.
+            crate::persist::quarantine(&path, &e.to_string());
+            None
+        }
+    }
 }
 
 /// Load all persisted client preferences.
@@ -127,10 +135,6 @@ pub fn save_client_preferences(prefs: &ClientPreferences) {
     let Some(path) = prefs_path() else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ignore();
-    }
-
     let mut value = read_raw_prefs().unwrap_or_else(|| serde_json::json!({}));
     if !value.is_object() {
         value = serde_json::json!({});
@@ -173,7 +177,7 @@ pub fn save_client_preferences(prefs: &ClientPreferences) {
     }
 
     if let Ok(bytes) = serde_json::to_vec_pretty(&value)
-        && let Err(e) = std::fs::write(&path, bytes)
+        && let Err(e) = crate::persist::write_atomically(&path, &bytes)
     {
         tracing::warn!("failed to write client prefs to {}: {e}", path.display());
     }

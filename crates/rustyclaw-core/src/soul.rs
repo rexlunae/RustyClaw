@@ -97,24 +97,19 @@ impl SoulManager {
         self.save()
     }
 
-    /// Save the SOUL content to file
+    /// Save the SOUL content to file. Atomic: this is user-authored prose
+    /// with no other copy anywhere.
     fn save(&self) -> Result<()> {
         if let Some(content) = &self.content {
-            if let Some(parent) = self.soul_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&self.soul_path, content).context("Failed to write SOUL.md")?;
+            crate::persist::write_atomically(&self.soul_path, content.as_bytes())
+                .context("Failed to write SOUL.md")?;
         }
         Ok(())
     }
 
     /// Create a default SOUL.md file
     fn create_default_soul(&self) -> Result<()> {
-        if let Some(parent) = self.soul_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        std::fs::write(&self.soul_path, DEFAULT_SOUL_CONTENT)
+        crate::persist::write_atomically(&self.soul_path, DEFAULT_SOUL_CONTENT.as_bytes())
             .context("Failed to create default SOUL.md")?;
 
         Ok(())

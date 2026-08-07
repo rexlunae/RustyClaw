@@ -322,10 +322,15 @@ pub(crate) async fn handle_write_file(
 
     let error = match result {
         Err(message) => Some(message),
-        Ok(resolved) => match std::fs::write(&resolved, content.as_bytes()) {
-            Ok(()) => None,
-            Err(e) => Some(format!("Could not write '{}': {e}", path.display())),
-        },
+        // Atomic, and the parent directory is created on the way: a client
+        // saving into a folder it just made (or one the user deleted) gets
+        // a written file, not a raw ENOENT.
+        Ok(resolved) => {
+            match rustyclaw_core::persist::write_atomically(&resolved, content.as_bytes()) {
+                Ok(()) => None,
+                Err(e) => Some(format!("Could not write '{}': {e}", path.display())),
+            }
+        }
     };
 
     let frame = ServerFrame {
