@@ -169,34 +169,76 @@ pub enum Outbound {
 #[derive(Clone)]
 pub struct QueuedWriter {
     tx: tokio::sync::mpsc::Sender<Outbound>,
+    /// How long an enqueue may wait before the queue counts as wedged rather
+    /// than busy. `None` waits indefinitely.
+    patience: Option<std::time::Duration>,
 }
 
 impl QueuedWriter {
     /// Build a writer that enqueues onto the connection's writer task.
+    ///
+    /// Waits indefinitely for room. Correct for a task that does nothing but
+    /// produce frames; wrong for one that is also somebody's only reader —
+    /// see [`with_patience`](Self::with_patience).
     pub fn new(tx: tokio::sync::mpsc::Sender<Outbound>) -> Self {
-        Self { tx }
+        Self { tx, patience: None }
+    }
+
+    /// Build a writer that gives up if the queue does not move within `limit`.
+    ///
+    /// Every queue between the two processes is bounded and they form a ring:
+    /// the gateway's outbound queue, the transport, the gateway's inbound
+    /// queue, the connection loop. A task that both drains one of those queues
+    /// and waits on another closes the ring — it stops draining while it
+    /// waits, and what it is not draining is what keeps the queue it waits on
+    /// full. Nothing errors and nothing times out; the connection goes silent
+    /// with both processes healthy and a restart as the only way out.
+    ///
+    /// A queue that has not moved in `limit` is not a busy client, it is a
+    /// connection that is already lost. Failing the write says so, which ends
+    /// the connection and lets the client reconnect — the outcome the user got
+    /// by restarting, arrived at without them.
+    pub fn with_patience(
+        tx: tokio::sync::mpsc::Sender<Outbound>,
+        limit: std::time::Duration,
+    ) -> Self {
+        Self {
+            tx,
+            patience: Some(limit),
+        }
+    }
+
+    /// Enqueue, honouring `patience`.
+    async fn enqueue(&self, outbound: Outbound) -> Result<()> {
+        let gone = || anyhow::anyhow!("connection writer has gone away");
+        match self.patience {
+            None => self.tx.send(outbound).await.map_err(|_| gone()),
+            Some(limit) => match tokio::time::timeout(limit, self.tx.send(outbound)).await {
+                Ok(sent) => sent.map_err(|_| gone()),
+                Err(_) => Err(anyhow::anyhow!(
+                    "the outbound queue has not moved in {}s; the client is not \
+                     reading this connection",
+                    limit.as_secs()
+                )),
+            },
+        }
     }
 }
 
 #[async_trait]
 impl TransportWriter for QueuedWriter {
     async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
-        self.tx
-            .send(Outbound::Frame {
-                stream_id,
-                frame: Box::new(frame.clone()),
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("connection writer has gone away"))
+        self.enqueue(Outbound::Frame {
+            stream_id,
+            frame: Box::new(frame.clone()),
+        })
+        .await
     }
 
     async fn close(&mut self) -> Result<()> {
         // Through the queue rather than straight to the transport, so frames
         // already enqueued still go out ahead of the close.
-        self.tx
-            .send(Outbound::Close)
-            .await
-            .map_err(|_| anyhow::anyhow!("connection writer has gone away"))
+        self.enqueue(Outbound::Close).await
     }
 }
 
@@ -388,5 +430,62 @@ mod tests {
 
         let seen = seen.lock().expect("recorder poisoned").clone();
         assert_eq!(seen, vec!["frame:7", "close"]);
+    }
+
+    /// A wedged queue fails the write instead of parking on it forever.
+    ///
+    /// The connection loop is the only reader of the gateway's inbound frame
+    /// channel, so a loop parked here stops reading — and what it is not
+    /// reading is what keeps this queue full. Erroring is what breaks that
+    /// ring: the connection ends and the client reconnects, instead of the
+    /// connection staying open and answering nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_queue_that_never_moves_fails_the_write() {
+        // Never drained: `rx` is held, so the queue fills and stays full.
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Outbound>(1);
+        let mut writer = QueuedWriter::with_patience(tx, std::time::Duration::from_secs(60));
+
+        writer
+            .send_on_stream(1, &empty_frame())
+            .await
+            .expect("the first write takes the queue's one slot");
+
+        let err = writer
+            .send_on_stream(2, &empty_frame())
+            .await
+            .expect_err("a queue that never moves must fail the write, not park on it");
+        assert!(
+            err.to_string().contains("not reading"),
+            "the error must name the cause; got: {err}"
+        );
+    }
+
+    /// Patience is a ceiling, not a delay: a queue that moves is not punished.
+    #[tokio::test(start_paused = true)]
+    async fn a_queue_that_moves_is_not_punished_for_being_slow() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx, rx) = tokio::sync::mpsc::channel::<Outbound>(1);
+        let driver = tokio::spawn(drive_writer(
+            Box::new(RecordingWriter { seen: seen.clone() }),
+            rx,
+        ));
+
+        let mut writer =
+            QueuedWriter::with_patience(tx.clone(), std::time::Duration::from_secs(60));
+        for stream_id in 0..8u64 {
+            writer
+                .send_on_stream(stream_id, &empty_frame())
+                .await
+                .unwrap_or_else(|e| panic!("write {stream_id} should succeed: {e}"));
+        }
+
+        drop(writer);
+        drop(tx);
+        driver.await.expect("writer task should finish");
+        assert_eq!(
+            seen.lock().expect("recorder poisoned").len(),
+            8,
+            "every frame must still reach the transport"
+        );
     }
 }
