@@ -8,7 +8,6 @@
 //! selected agent.
 
 use anyhow::Result;
-use rustyclaw_core::ignore::Ignore;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::debug;
