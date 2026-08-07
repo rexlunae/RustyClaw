@@ -330,7 +330,21 @@ fn format_file_content(content: &str, args: &Value, path: &Path) -> ToolResult {
         .into());
     }
 
-    let slice = &lines[start..end.min(total)];
+    // A backwards range panicked here — killing the tool task and leaving
+    // the model a bare "Task join error" it cannot act on. Models do send
+    // end_line < start_line; answer with the mistake spelled out so the
+    // next call can be right.
+    let end = end.min(total);
+    if end <= start {
+        return Err(format!(
+            "end_line {} is before start_line {} — the range must run forward",
+            end,
+            start + 1,
+        )
+        .into());
+    }
+
+    let slice = &lines[start..end];
     let numbered: Vec<String> = slice
         .iter()
         .enumerate()
@@ -790,5 +804,55 @@ fn format_find_results(results: Vec<String>, max_results: usize) -> ToolResult {
             output.push_str(&format!("\n\n(Results truncated at {} files)", max_results));
         }
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+
+    fn read_range(content: &str, start: Option<u64>, end: Option<u64>) -> ToolResult {
+        let mut args = serde_json::Map::new();
+        if let Some(s) = start {
+            args.insert("start_line".into(), s.into());
+        }
+        if let Some(e) = end {
+            args.insert("end_line".into(), e.into());
+        }
+        format_file_content(content, &Value::Object(args), Path::new("test.txt"))
+    }
+
+    /// A backwards range must be a correctable error, not a panic. The
+    /// panic killed the tool task, and the model — whose mistake it was —
+    /// got a bare "Task join error" with nothing to act on.
+    #[test]
+    fn a_backwards_range_is_an_error_not_a_panic() {
+        let content = (1..=1000)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The ranges from the field: start far past end.
+        let err = read_range(&content, Some(818), Some(100)).unwrap_err();
+        assert!(
+            err.to_string().contains("before start_line"),
+            "error should name the mistake: {err}"
+        );
+        // Zero-width backwards by one.
+        assert!(read_range(&content, Some(5), Some(4)).is_err());
+    }
+
+    /// The boundary cases around the fix stay readable.
+    #[test]
+    fn forward_ranges_still_read() {
+        let content = "a\nb\nc\nd";
+        // A single line: start_line == end_line.
+        let one = read_range(content, Some(2), Some(2)).unwrap();
+        assert!(one.contains("b") && !one.contains("c"));
+        // end_line past the file clamps.
+        let tail = read_range(content, Some(3), Some(999)).unwrap();
+        assert!(tail.contains("c") && tail.contains("d"));
+        // No range reads everything.
+        let all = read_range(content, None, None).unwrap();
+        assert!(all.contains("a") && all.contains("d"));
     }
 }
