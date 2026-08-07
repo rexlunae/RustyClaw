@@ -528,6 +528,17 @@ pub const PROVIDER_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::f
 /// `RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS` when running something slower.
 pub const PROVIDER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
+/// How long an unused pooled connection is kept before being retired.
+///
+/// Short enough that a connection idle across a network change is dropped
+/// rather than handed to the next request, long enough that back-to-back
+/// turns still reuse one and skip a TLS handshake.
+pub const PROVIDER_POOL_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// TCP keepalive interval on provider connections, so a peer that has gone
+/// away is noticed rather than discovered by a request that hangs on it.
+pub const PROVIDER_TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Read timeout for provider requests, honouring the environment override.
 ///
 /// A value of `0` disables the read timeout, which restores the old
@@ -555,7 +566,19 @@ pub fn provider_read_timeout() -> Option<std::time::Duration> {
 /// building. Going through here is what keeps that retry bounded by the same
 /// deadlines as the request it is retrying.
 pub fn http_client_builder() -> reqwest::ClientBuilder {
-    let mut builder = reqwest::Client::builder().connect_timeout(PROVIDER_CONNECT_TIMEOUT);
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
+        // Pool hygiene, which matters as much as the deadlines. A pooled
+        // keep-alive connection whose peer went away silently — a network
+        // change, a NAT rebind, a suspend — is not detectably dead until
+        // something writes to it. Without these, every later request is handed
+        // one of those corpses and hangs on it in turn, so a single network
+        // blip reads as "the model is down" for the life of the process while
+        // the gateway keeps answering connections and completing auth. Both of
+        // these end that: idle connections are retired rather than reused, and
+        // keepalive probes surface a dead one before a request picks it up.
+        .pool_idle_timeout(PROVIDER_POOL_IDLE_TIMEOUT)
+        .tcp_keepalive(PROVIDER_TCP_KEEPALIVE);
     if let Some(read) = provider_read_timeout() {
         builder = builder.read_timeout(read);
     }
