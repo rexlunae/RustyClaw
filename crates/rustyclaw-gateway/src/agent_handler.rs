@@ -23,6 +23,28 @@ use crate::project_handler;
 use crate::thread_updates::{send_projects_update, send_threads_update_shared};
 use crate::{SharedTaskManager, SharedThreadMgr};
 
+/// Where a connection's thread state currently lives.
+///
+/// The parts of [`AgentSession`] that tasks outliving any one agent need to
+/// reach: the reader answering history, and the close-out that ends the
+/// connection's turns. Both run past an agent switch, which replaces the
+/// session wholesale — and ids restart low in every agent's store, so a stale
+/// handle does not fail, it lands on an unrelated conversation.
+///
+/// Kept as one value behind one cell on purpose. Repointing is a single write
+/// at a single site, so there is nothing to update in step with something
+/// else, and a switch that forgot it would break history lookups loudly
+/// rather than leave the close-out quietly aiming at the previous agent.
+#[derive(Clone)]
+pub(crate) struct ConnectionStore {
+    pub thread_mgr: SharedThreadMgr,
+    pub threads_path: PathBuf,
+    pub foreground: crate::ForegroundCell,
+}
+
+/// A [`ConnectionStore`] that tasks can read as it moves.
+pub(crate) type StoreCell = Arc<std::sync::RwLock<ConnectionStore>>;
+
 /// Everything about the connection that is scoped to one agent. Swapped
 /// wholesale on agent switch.
 pub(crate) struct AgentSession {
@@ -59,6 +81,16 @@ pub(crate) struct AgentSession {
 }
 
 impl AgentSession {
+    /// This session's share of the connection-wide state — see
+    /// [`ConnectionStore`].
+    pub fn store(&self) -> ConnectionStore {
+        ConnectionStore {
+            thread_mgr: self.thread_mgr.clone(),
+            threads_path: self.threads_path.clone(),
+            foreground: self.foreground.clone(),
+        }
+    }
+
     /// Load an agent's persisted thread/project state, creating the
     /// directory skeleton on first use.
     pub fn load(config: &Config, agent_id: &str) -> Self {
@@ -285,7 +317,7 @@ pub(crate) async fn handle_agent_switch(
     config: &mut Config,
     base_system_prompt: &Option<String>,
     session: &mut AgentSession,
-    thread_mgr_cell: &Arc<std::sync::RwLock<SharedThreadMgr>>,
+    store_cell: &StoreCell,
     task_mgr: &SharedTaskManager,
     agent_id: String,
 ) -> Result<bool> {
@@ -306,9 +338,7 @@ pub(crate) async fn handle_agent_switch(
     // Before a single frame about the new agent goes out — see the note on
     // this function. The reader answers history without passing through here,
     // so this is the moment the two must agree.
-    *thread_mgr_cell
-        .write()
-        .expect("thread manager cell poisoned") = session.thread_mgr.clone();
+    *store_cell.write().expect("connection store cell poisoned") = session.store();
 
     // Non-main agents may carry their own base system prompt; main gets
     // the connection's original prompt back.

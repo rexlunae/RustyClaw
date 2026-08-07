@@ -216,6 +216,124 @@ fn requeue_deferred_wakes(
     Ok(())
 }
 
+/// Writes the stop indicators for a connection's turns, however it ends.
+///
+/// A turn's start marker is written to the thread's log the moment the turn
+/// begins, and its stop indicator when the turn ends. A connection that goes
+/// away with turns still running has to write those stop indicators itself:
+/// the turns are aborted with it and no completion will ever drain for them.
+/// Left open, the thread reports as "Streaming" with nothing remaining that
+/// could ever close it — the composer gated on a reply that is not coming.
+/// The start-up sweep is no help either, because it only touches markers
+/// older than the running process, so a live daemon carries the stuck thread
+/// for as long as it runs.
+///
+/// The handler writes to its client on nearly every line and any of those
+/// writes can fail, so "however it ends" is the hard part. Cleanup at the
+/// bottom of the function runs only when control reaches the bottom, and a
+/// `?` anywhere above it — or a panic — skipped it. Holding the close-out in
+/// a guard hands that to the scope instead of to whoever edits the function
+/// next: it cannot be skipped by an early return, and it cannot be forgotten
+/// by an edit that adds one.
+///
+/// The work is async and `Drop` is not, which is why the guard has two
+/// halves. [`close_out`](Self::close_out) is the ordinary path — awaited
+/// where the connection ends, it finishes before the handler returns, so
+/// what is on disk afterwards is settled. `Drop` is the backstop for the
+/// paths that never reach it and can only spawn the work, which is the whole
+/// reason the ordinary path is still called explicitly.
+struct TurnCloseout {
+    /// The turns to close. Holding this also keeps the registry alive to be
+    /// read here, since dropping it is what aborts the turns.
+    active: Arc<Mutex<concurrent::ActiveTasks>>,
+    /// Read at close-out rather than captured, because a connection can
+    /// switch agents and the turns to close belong to the one it ended on.
+    store: crate::agent_handler::StoreCell,
+    done: bool,
+}
+
+impl TurnCloseout {
+    fn new(
+        active: Arc<Mutex<concurrent::ActiveTasks>>,
+        store: crate::agent_handler::StoreCell,
+    ) -> Self {
+        Self {
+            active,
+            store,
+            done: false,
+        }
+    }
+
+    /// Close out the connection's turns and persist. Idempotent.
+    async fn close_out(&mut self) {
+        if std::mem::replace(&mut self.done, true) {
+            return;
+        }
+        Self::run(self.active.clone(), self.store.clone()).await;
+    }
+
+    /// The close-out proper, owning its handles so `Drop` can spawn it.
+    async fn run(
+        active: Arc<Mutex<concurrent::ActiveTasks>>,
+        store: crate::agent_handler::StoreCell,
+    ) {
+        let store = store
+            .read()
+            .expect("connection store cell poisoned")
+            .clone();
+        let running = active.lock().await.running_threads();
+        if !running.is_empty() {
+            let mut tm = store.thread_mgr.lock().await;
+            for thread in running {
+                // Cancelled, which is what happened: the connection went
+                // away mid-turn. The log keeps that visible rather than
+                // claiming an answer that was never given.
+                tm.end_turn(thread, false);
+            }
+        }
+        // The last write of the session, carrying everything said during it.
+        // Through the focused variant: the thread this client was looking at
+        // lives in a per-connection cell, and the store's own pointer is how
+        // the next window finds its way back to it.
+        crate::helpers::persist_threads_focused(
+            &store.thread_mgr,
+            &store.threads_path,
+            crate::foreground_of(&store.foreground),
+        )
+        .await;
+    }
+}
+
+impl Drop for TurnCloseout {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        // Spawned, because `Drop` cannot await. This is the path an early
+        // return or a panic takes, so it is worth saying out loud: reaching
+        // it means the connection ended somewhere that did not expect to be
+        // the end.
+        warn!("Connection ended without closing out its turns; doing it now");
+        // Asked for rather than assumed: `tokio::spawn` panics with no
+        // runtime, and a panic in `Drop` during a panicking unwind aborts the
+        // process. Losing the close-out costs a thread stuck at "Streaming"
+        // until the next start sweeps it; taking the daemon down costs every
+        // other connection.
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            error!("No runtime left to close out this connection's turns");
+            return;
+        };
+        let (active, store) = (self.active.clone(), self.store.clone());
+        handle.spawn(async move { Self::run(active, store).await });
+    }
+}
+
+/// How long the connection loop waits for room in the outbound queue before
+/// treating the client as gone. Generous — a client that is reading at all
+/// drains 256 queued frames in milliseconds — so only a transport that has
+/// genuinely stopped reaches it.
+const OUTBOUND_PATIENCE: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub(crate) async fn handle_connection(
     conn: Box<dyn transport::Transport>,
     shared_config: SharedConfig,
@@ -253,6 +371,10 @@ pub(crate) async fn handle_connection(
     // Open where this agent was last left. From here the pointer is this
     // connection's alone — see `AgentSession::foreground_id`.
     agent_session.restore_foreground().await;
+    // Where the connection's thread state currently lives, for the tasks that
+    // outlive any one agent — see `ConnectionStore`.
+    let store_cell: crate::agent_handler::StoreCell =
+        Arc::new(std::sync::RwLock::new(agent_session.store()));
 
     // Point the workspace at the restored foreground thread's effective
     // directory — its own override, else its project's — so tools run in the
@@ -599,6 +721,10 @@ pub(crate) async fn handle_connection(
     // if the reader outlives the connection handler.
     let active_tasks = Arc::new(Mutex::new(concurrent::ActiveTasks::new()));
     let reader_tasks = Arc::downgrade(&active_tasks);
+    // Built here, before the resume below can open the connection's first
+    // turn marker: from this line on, every way out of this function closes
+    // the connection's turns. See `TurnCloseout`.
+    let mut closeout = TurnCloseout::new(active_tasks.clone(), store_cell.clone());
     // The reader delivers answers; the turns claim the ids. Both sides hold
     // the same registries.
     let reader_approvals = approvals.clone();
@@ -628,7 +754,7 @@ pub(crate) async fn handle_connection(
     // Which agent this connection is currently showing. A connection can
     // switch agents wholesale, and the watcher below outlives any one of them,
     // so it cannot capture an agent id — it has to read the current one per
-    // event. Mirrors `thread_mgr_cell`, which exists for the same reason.
+    // event. Mirrors `store_cell`, which exists for the same reason.
     let current_agent = Arc::new(std::sync::RwLock::new(agent_session.agent_id.clone()));
     let watcher_agent = current_agent.clone();
     let watcher_wake_tx = wake_tx.clone();
@@ -904,8 +1030,16 @@ pub(crate) async fn handle_connection(
     // fixes their order.
     let (out_tx, out_rx) = tokio::sync::mpsc::channel::<rustyclaw_core::gateway::Outbound>(256);
     let writer_handle = tokio::spawn(rustyclaw_core::gateway::drive_writer(writer, out_rx));
-    let mut writer: Box<dyn transport::TransportWriter> =
-        Box::new(rustyclaw_core::gateway::QueuedWriter::new(out_tx.clone()));
+    // Bounded wait, because this handle belongs to the loop below — and that
+    // loop is the only reader of the inbound frame channel. Waiting here
+    // indefinitely stops it reading, which stops the reader task forwarding,
+    // which is what would keep this queue full: the ring described on
+    // `with_patience`. A queue that has not moved in this long is a client
+    // that has stopped reading, and the connection is better ended loudly
+    // than left open and mute.
+    let mut writer: Box<dyn transport::TransportWriter> = Box::new(
+        rustyclaw_core::gateway::QueuedWriter::with_patience(out_tx.clone(), OUTBOUND_PATIENCE),
+    );
 
     let reader_cancel = cancel.clone();
     // Deliberately a cell rather than a handle: switching agents replaces the
@@ -914,8 +1048,7 @@ pub(crate) async fn handle_connection(
     // would answer from the previous agent after a switch — and ids restart
     // low in each store, so the likely result is not an empty transcript but
     // another agent's conversation under a plausible-looking id.
-    let thread_mgr_cell = Arc::new(std::sync::RwLock::new(agent_session.thread_mgr.clone()));
-    let reader_thread_mgr = thread_mgr_cell.clone();
+    let reader_store = store_cell.clone();
     let reader_out_tx = out_tx.clone();
     let reader_handle = tokio::spawn(async move {
         loop {
@@ -1022,9 +1155,10 @@ pub(crate) async fn handle_connection(
                                     let mut history_writer = rustyclaw_core::gateway::QueuedWriter::new(reader_out_tx.clone());
                                     // Read per request, so a switch that
                                     // happened since the last one is honoured.
-                                    let thread_mgr_now = reader_thread_mgr
+                                    let thread_mgr_now = reader_store
                                         .read()
-                                        .expect("thread manager cell poisoned")
+                                        .expect("connection store cell poisoned")
+                                        .thread_mgr
                                         .clone();
                                     // Bounded, because the thread manager lock
                                     // is held across turn work and this task
@@ -1114,163 +1248,231 @@ pub(crate) async fn handle_connection(
     // before this point, now that it runs in its own task.
     let mut drain_deadline: Option<tokio::time::Instant> = None;
 
-    // Main message handling loop — receives from channel
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                // Dropping a JoinHandle detaches the task; a turn left
-                // running would keep model calls going and then block
-                // forever on a frame channel nobody drains.
-                active_tasks.lock().await.abort_all();
-                writer.close().await.ignore();
-                break;
-            }
-            _ = async {
-                match drain_deadline {
-                    Some(at) => tokio::time::sleep_until(at).await,
-                    // Unreachable: the arm is disabled without a deadline.
-                    None => std::future::pending().await,
+    // Main message handling loop — receives from channel.
+    //
+    // Captured rather than propagated. Every `?` below is a write to the
+    // client, and a client that has stopped reading makes those fail — the
+    // ordinary way this connection ends, not an exceptional one. Closing the
+    // turn markers no longer depends on reaching the bottom of this function
+    // (`TurnCloseout` is what guarantees that), but two things still want the
+    // tidy path: the frames already queued get drained on the way out rather
+    // than dropped, and the close-out is *awaited* here instead of being left
+    // to the guard's spawn, so a caller that looks at the store afterwards
+    // sees a settled one. The connection still ends on the error.
+    let loop_result: Result<()> = async {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    // Dropping a JoinHandle detaches the task; a turn left
+                    // running would keep model calls going and then block
+                    // forever on a frame channel nobody drains.
+                    active_tasks.lock().await.abort_all();
+                    writer.close().await.ignore();
+                    break;
                 }
-            }, if drain_deadline.is_some() => {
-                warn!("A turn was still running when the client went away; stopping it");
-                active_tasks.lock().await.abort_all();
-                break;
-            }
-            msg = frame_rx.recv(), if drain_deadline.is_none() => {
-                let envelope = match msg {
-                    Some(f) => f,
-                    None => {
-                        // Reader exited. Ask the running turn to stop and
-                        // give it a moment to flush; nothing here waits on a
-                        // model call for a client that has left.
-                        // Bound first: a guard taken in an `if` scrutinee
-                        // outlives the body, and this mutex is not reentrant.
-                        let idle = active_tasks.lock().await.running_threads().is_empty();
-                        if idle {
-                            break;
-                        }
-                        active_tasks.lock().await.request_cancel_all();
-                        drain_deadline = Some(tokio::time::Instant::now() + TURN_DRAIN_GRACE);
-                        continue;
+                _ = async {
+                    match drain_deadline {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        // Unreachable: the arm is disabled without a deadline.
+                        None => std::future::pending().await,
                     }
-                };
-                let stream_id = envelope.stream_id;
-                let frame = envelope.frame;
-
-                trace!(stream_id, frame_type = ?frame.frame_type, "Handling client frame");
-
-                        // Handle the frame based on type
-                        match frame.payload {
-                            payload @ (ClientPayload::UnlockVault { .. }
-                            | ClientPayload::SecretsList
-                            | ClientPayload::SecretsStore { .. }
-                            | ClientPayload::SecretsGet { .. }
-                            | ClientPayload::SecretsDelete { .. }
-                            | ClientPayload::SecretsPeek { .. }
-                            | ClientPayload::SecretsSetPolicy { .. }
-                            | ClientPayload::SecretsSetDisabled { .. }
-                            | ClientPayload::SecretsDeleteCredential { .. }
-                            | ClientPayload::SecretsHasTotp
-                            | ClientPayload::SecretsSetupTotp
-                            | ClientPayload::SecretsVerifyTotp { .. }
-                            | ClientPayload::SecretsRemoveTotp) => {
-                                crate::secrets_handler::handle_secrets_frame(
-                                    &mut *writer,
-                                    &vault,
-                                    payload,
-                                )
-                                .await?;
+                }, if drain_deadline.is_some() => {
+                    warn!("A turn was still running when the client went away; stopping it");
+                    active_tasks.lock().await.abort_all();
+                    break;
+                }
+                msg = frame_rx.recv(), if drain_deadline.is_none() => {
+                    let envelope = match msg {
+                        Some(f) => f,
+                        None => {
+                            // Reader exited. Ask the running turn to stop and
+                            // give it a moment to flush; nothing here waits on a
+                            // model call for a client that has left.
+                            // Bound first: a guard taken in an `if` scrutinee
+                            // outlives the body, and this mutex is not reentrant.
+                            let idle = active_tasks.lock().await.running_threads().is_empty();
+                            if idle {
+                                break;
                             }
-                            // Answered in the reader task, which is the whole
-                            // point of it: a Stop queued behind whatever the
-                            // loop is awaiting is a Stop that does nothing.
-                            // It never reaches here.
-                            ClientPayload::Cancel { .. } => {}
-                            ClientPayload::Reload => {
-                                admin::handle_reload(
-                                    &mut *writer,
-                                    &config,
-                                    &vault,
-                                    &shared_config,
-                                    &shared_model_ctx,
-                                    &shared_copilot_session,
-                                    &model_registry,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::Chat { messages, thread_id } => {
-                                // A turn runs in its own task. The loop goes
-                                // straight back to serving frames, so thread
-                                // switches, history requests and project
-                                // changes all still answer while the model
-                                // works — or while it sits on an `ask_user`
-                                // question, which used to hold the whole
-                                // connection until the user answered it.
-                                //
-                                // Which thread the message belongs to is
-                                // settled *here*, before the turn is handed
-                                // off, including the auto-switch to a better
-                                // matching thread. Deciding it inside the
-                                // task would race the ThreadSwitch frames
-                                // this loop is now free to serve: a switch
-                                // landing between the spawn and the task's
-                                // first poll would file the message, and the
-                                // reply, in whichever thread the user had
-                                // just opened.
-                                active_tasks.lock().await.reap_finished();
-                                // The client names the thread it typed into,
-                                // and that name wins. The gateway's own
-                                // foreground is only a cache of what a client
-                                // last asked for, and it moves on its own
-                                // now: a `ThreadSwitch` served while the user
-                                // was still typing, an auto-switch from the
-                                // previous turn, another connection on the
-                                // same agent. Reading it at processing time
-                                // is exactly how a message lands in a
-                                // transcript the user was not looking at.
-                                //
-                                // `None` means the client has no opinion —
-                                // older clients, and the CLI — so the old
-                                // behaviour (elect, and auto-switch on a
-                                // label match) still applies there.
-                                let requested =
-                                    thread_id.map(rustyclaw_core::threads::ThreadId);
-                                if let Some(want) = requested {
-                                    // Adopt it as the foreground too: the
-                                    // rest of the turn's setup — workspace
-                                    // dir, model context, history — reads
-                                    // from there, and leaving the two
-                                    // disagreeing is the confusion this is
-                                    // meant to end.
-                                    let adopted = agent_session.switch_foreground(want).await;
-                                    if !adopted {
-                                        // The thread went away between the
-                                        // client composing and this frame
-                                        // arriving. Say so and drop the
-                                        // message: filing it under some other
-                                        // thread would put the user's words
-                                        // somewhere they never chose.
-                                        let mut scoped =
-                                            rustyclaw_core::gateway::ScopedTransportWriter::new(
+                            active_tasks.lock().await.request_cancel_all();
+                            drain_deadline = Some(tokio::time::Instant::now() + TURN_DRAIN_GRACE);
+                            continue;
+                        }
+                    };
+                    let stream_id = envelope.stream_id;
+                    let frame = envelope.frame;
+
+                    trace!(stream_id, frame_type = ?frame.frame_type, "Handling client frame");
+
+                            // Handle the frame based on type
+                            match frame.payload {
+                                payload @ (ClientPayload::UnlockVault { .. }
+                                | ClientPayload::SecretsList
+                                | ClientPayload::SecretsStore { .. }
+                                | ClientPayload::SecretsGet { .. }
+                                | ClientPayload::SecretsDelete { .. }
+                                | ClientPayload::SecretsPeek { .. }
+                                | ClientPayload::SecretsSetPolicy { .. }
+                                | ClientPayload::SecretsSetDisabled { .. }
+                                | ClientPayload::SecretsDeleteCredential { .. }
+                                | ClientPayload::SecretsHasTotp
+                                | ClientPayload::SecretsSetupTotp
+                                | ClientPayload::SecretsVerifyTotp { .. }
+                                | ClientPayload::SecretsRemoveTotp) => {
+                                    crate::secrets_handler::handle_secrets_frame(
+                                        &mut *writer,
+                                        &vault,
+                                        payload,
+                                    )
+                                    .await?;
+                                }
+                                // Answered in the reader task, which is the whole
+                                // point of it: a Stop queued behind whatever the
+                                // loop is awaiting is a Stop that does nothing.
+                                // It never reaches here.
+                                ClientPayload::Cancel { .. } => {}
+                                ClientPayload::Reload => {
+                                    admin::handle_reload(
+                                        &mut *writer,
+                                        &config,
+                                        &vault,
+                                        &shared_config,
+                                        &shared_model_ctx,
+                                        &shared_copilot_session,
+                                        &model_registry,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::Chat { messages, thread_id } => {
+                                    // A turn runs in its own task. The loop goes
+                                    // straight back to serving frames, so thread
+                                    // switches, history requests and project
+                                    // changes all still answer while the model
+                                    // works — or while it sits on an `ask_user`
+                                    // question, which used to hold the whole
+                                    // connection until the user answered it.
+                                    //
+                                    // Which thread the message belongs to is
+                                    // settled *here*, before the turn is handed
+                                    // off, including the auto-switch to a better
+                                    // matching thread. Deciding it inside the
+                                    // task would race the ThreadSwitch frames
+                                    // this loop is now free to serve: a switch
+                                    // landing between the spawn and the task's
+                                    // first poll would file the message, and the
+                                    // reply, in whichever thread the user had
+                                    // just opened.
+                                    active_tasks.lock().await.reap_finished();
+                                    // The client names the thread it typed into,
+                                    // and that name wins. The gateway's own
+                                    // foreground is only a cache of what a client
+                                    // last asked for, and it moves on its own
+                                    // now: a `ThreadSwitch` served while the user
+                                    // was still typing, an auto-switch from the
+                                    // previous turn, another connection on the
+                                    // same agent. Reading it at processing time
+                                    // is exactly how a message lands in a
+                                    // transcript the user was not looking at.
+                                    //
+                                    // `None` means the client has no opinion —
+                                    // older clients, and the CLI — so the old
+                                    // behaviour (elect, and auto-switch on a
+                                    // label match) still applies there.
+                                    let requested =
+                                        thread_id.map(rustyclaw_core::threads::ThreadId);
+                                    if let Some(want) = requested {
+                                        // Adopt it as the foreground too: the
+                                        // rest of the turn's setup — workspace
+                                        // dir, model context, history — reads
+                                        // from there, and leaving the two
+                                        // disagreeing is the confusion this is
+                                        // meant to end.
+                                        let adopted = agent_session.switch_foreground(want).await;
+                                        if !adopted {
+                                            // The thread went away between the
+                                            // client composing and this frame
+                                            // arriving. Say so and drop the
+                                            // message: filing it under some other
+                                            // thread would put the user's words
+                                            // somewhere they never chose.
+                                            let mut scoped =
+                                                rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                                    &mut *writer,
+                                                    stream_id,
+                                                );
+                                            protocol::server::send_error(
+                                                &mut scoped,
+                                                &format!(
+                                                    "Thread {} no longer exists — \
+                                                     the message was not sent.",
+                                                    want.0
+                                                ),
+                                            )
+                                            .await?;
+                                            // Correlated by thread id, so a
+                                            // client tracking several threads
+                                            // retires the right one.
+                                            protocol::server::send_response_done(
+                                                &mut scoped,
+                                                false,
+                                                Some(want.0),
+                                            )
+                                            .await?;
+                                            send_threads_update_shared(
                                                 &mut *writer,
-                                                stream_id,
-                                            );
-                                        protocol::server::send_error(
-                                            &mut scoped,
-                                            &format!(
-                                                "Thread {} no longer exists — \
-                                                 the message was not sent.",
-                                                want.0
-                                            ),
-                                        )
-                                        .await?;
-                                        // Correlated by thread id, so a
-                                        // client tracking several threads
-                                        // retires the right one.
-                                        protocol::server::send_response_done(
-                                            &mut scoped,
-                                            false,
-                                            Some(want.0),
+                                                &agent_session.thread_mgr,
+                                                &task_mgr,
+                                                None,
+                                                agent_session.foreground_id(),
+                                            )
+                                            .await?;
+                                            continue;
+                                        }
+                                    }
+                                    let auto_switch = if requested.is_some() {
+                                        // Never second-guess an explicit thread.
+                                        // `find_best_match` moves the foreground
+                                        // whenever another thread's *label* shows
+                                        // up anywhere in the message text, which
+                                        // is a guess, and a guess must not
+                                        // override a statement.
+                                        None
+                                    } else {
+                                        let tm = agent_session.thread_mgr.lock().await;
+                                        messages
+                                            .iter()
+                                            .rev()
+                                            .find(|m| m.role == "user")
+                                            .and_then(|last| {
+                                                // Exempt where the message was
+                                                // typed, which is this client's
+                                                // thread — not whatever the
+                                                // shared manager last pointed at.
+                                                tm.find_best_match(
+                                                    &last.content,
+                                                    agent_session.foreground_id(),
+                                                )
+                                            })
+                                            .and_then(|better| {
+                                                tm.get(better).map(|t| {
+                                                    (better, t.compact_summary.clone())
+                                                })
+                                            })
+                                    };
+                                    if let Some((better, context_summary)) = auto_switch {
+                                        // This connection follows its own guess;
+                                        // the other windows on this agent keep
+                                        // looking at whatever they were.
+                                        agent_session.switch_foreground(better).await;
+                                        send_frame(
+                                            &mut *writer,
+                                            &ServerFrame {
+                                                frame_type: ServerFrameType::ThreadSwitched,
+                                                payload: ServerPayload::ThreadSwitched {
+                                                    thread_id: better.0,
+                                                    context_summary,
+                                                },
+                                            },
                                         )
                                         .await?;
                                         send_threads_update_shared(
@@ -1281,55 +1483,145 @@ pub(crate) async fn handle_connection(
                                             agent_session.foreground_id(),
                                         )
                                         .await?;
-                                        continue;
+                                        send_thread_messages_update_shared(&mut *writer, better, &agent_session.thread_mgr)
+                                        .await?;
                                     }
-                                }
-                                let auto_switch = if requested.is_some() {
-                                    // Never second-guess an explicit thread.
-                                    // `find_best_match` moves the foreground
-                                    // whenever another thread's *label* shows
-                                    // up anywhere in the message text, which
-                                    // is a guess, and a guess must not
-                                    // override a statement.
-                                    None
-                                } else {
-                                    let tm = agent_session.thread_mgr.lock().await;
-                                    messages
-                                        .iter()
-                                        .rev()
-                                        .find(|m| m.role == "user")
-                                        .and_then(|last| {
-                                            // Exempt where the message was
-                                            // typed, which is this client's
-                                            // thread — not whatever the
-                                            // shared manager last pointed at.
-                                            tm.find_best_match(
-                                                &last.content,
-                                                agent_session.foreground_id(),
+                                    // A message needs a thread to live in. If
+                                    // none is focused — the client backgrounded
+                                    // it — elect one rather than filing the turn
+                                    // under `ThreadId(0)`: zero is the wire
+                                    // sentinel for "nothing is focused", and a
+                                    // frame carrying it tells the desktop to
+                                    // clear the transcript.
+                                    let turn_thread = match requested {
+                                        Some(want) => Some(want),
+                                        None => agent_session.ensure_foreground().await,
+                                    };
+                                    // Settling the thread is only half of it. The
+                                    // turn's file and command tools run in the
+                                    // workspace directory, and that is global
+                                    // config state — `switch_foreground` flips a
+                                    // flag and nothing else. `ThreadSwitch`
+                                    // repoints explicitly right after switching;
+                                    // a turn that settles its own thread has to
+                                    // do the same, whether the client named it or
+                                    // the label match picked it.
+                                    //
+                                    // Otherwise this is the same race one layer
+                                    // down, and worse: a `ThreadSwitch` to B
+                                    // served while the user was typing into A
+                                    // leaves the turn correctly filed under A but
+                                    // writing files into B's directory. Right
+                                    // conversation, wrong project on disk.
+                                    //
+                                    // Read from `turn_thread`, the thread just
+                                    // settled on, rather than from a foreground
+                                    // looked up again: they are the same here,
+                                    // and asking twice is how they come to
+                                    // disagree.
+                                    if let Some(pid) = {
+                                        let tm = agent_session.thread_mgr.lock().await;
+                                        turn_thread
+                                            .and_then(|id| tm.get(id))
+                                            .map(|t| t.project_id)
+                                    } {
+                                        if pid != agent_session.project_mgr.active_id() {
+                                            project_handler::activate_project(
+                                                &mut *writer,
+                                                &mut config,
+                                                &mut agent_session.project_mgr,
+                                                &agent_session.thread_mgr,
+                                                &agent_session.projects_path,
+                                                pid,
+                                                turn_thread,
                                             )
-                                        })
-                                        .and_then(|better| {
-                                            tm.get(better).map(|t| {
-                                                (better, t.compact_summary.clone())
-                                            })
-                                        })
-                                };
-                                if let Some((better, context_summary)) = auto_switch {
-                                    // This connection follows its own guess;
-                                    // the other windows on this agent keep
-                                    // looking at whatever they were.
-                                    agent_session.switch_foreground(better).await;
-                                    send_frame(
-                                        &mut *writer,
-                                        &ServerFrame {
-                                            frame_type: ServerFrameType::ThreadSwitched,
-                                            payload: ServerPayload::ThreadSwitched {
-                                                thread_id: better.0,
-                                                context_summary,
-                                            },
-                                        },
-                                    )
-                                    .await?;
+                                            .await?;
+                                        } else {
+                                            // Synchronous, so the guard in the
+                                            // argument list never spans an await.
+                                            project_handler::repoint_workspace(
+                                                &mut config,
+                                                &agent_session.project_mgr,
+                                                &*agent_session.thread_mgr.lock().await,
+                                                turn_thread,
+                                            );
+                                        }
+                                    }
+                                    // A key for tracking the turn even when
+                                    // there is no thread at all to elect. It
+                                    // never reaches the client.
+                                    let turn_key = turn_thread
+                                        .unwrap_or(rustyclaw_core::threads::ThreadId(0));
+                                    // Retire old ephemeral threads — after the
+                                    // turn's thread is settled, never before:
+                                    // the sweep could remove the very
+                                    // conversation this message was typed into
+                                    // (a completed task thread the user was
+                                    // still looking at), and resolution would
+                                    // then refuse the message as addressed to
+                                    // a thread that "no longer exists",
+                                    // dropping the user's words. The settled
+                                    // thread is exempt; its own activity
+                                    // refreshes its retention window.
+                                    agent_session
+                                        .thread_mgr
+                                        .lock()
+                                        .await
+                                        .cleanup_ephemeral_except(turn_thread);
+                                    // A second message in this conversation
+                                    // displaces the turn still running there —
+                                    // and a displaced turn is aborted at its
+                                    // next await, often the very wait for a
+                                    // tool approval or `ask_user` answer. It
+                                    // will never send the `ToolResult` that
+                                    // retires the box it left on the user's
+                                    // screen, nor its own close-out; unsent,
+                                    // the dead box hides every later request
+                                    // behind it. Close the old turn out here,
+                                    // before the new turn exists, so the
+                                    // retirement can never race the new
+                                    // turn's own requests — and on the old
+                                    // turn's stream, where clients track it.
+                                    // The registry lock is taken and released
+                                    // in this statement: an `if let` scrutinee's
+                                    // guard would live across the close-out
+                                    // write below, and the reader task takes
+                                    // the same lock to serve Stop — holding it
+                                    // across a network write would stall every
+                                    // inbound frame behind that write.
+                                    let displaced_stream =
+                                        active_tasks.lock().await.displace(&turn_key);
+                                    if let Some(old_stream) = displaced_stream {
+                                        let mut scoped =
+                                            rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                                &mut *writer,
+                                                old_stream,
+                                            );
+                                        protocol::server::send_response_done(
+                                            &mut scoped,
+                                            false,
+                                            Some(turn_key.0).filter(|id| *id != 0),
+                                        )
+                                        .await?;
+                                    }
+                                    // Mark the turn open in the thread's log —
+                                    // the start half of the stop-indicator pair.
+                                    // A displaced predecessor gets its stop
+                                    // marker first: aborted, it will never
+                                    // write its own. The broadcast right after
+                                    // is what flips the thread to "Streaming"
+                                    // in every client's sidebar.
+                                    if let Some(thread) = turn_thread {
+                                        let mut tm = agent_session.thread_mgr.lock().await;
+                                        if displaced_stream.is_some() {
+                                            tm.end_turn(thread, false);
+                                        }
+                                        tm.begin_turn(thread);
+                                        crate::helpers::persist_threads(
+                                            &mut tm,
+                                            &agent_session.threads_path,
+                                        );
+                                    }
                                     send_threads_update_shared(
                                         &mut *writer,
                                         &agent_session.thread_mgr,
@@ -1338,48 +1630,81 @@ pub(crate) async fn handle_connection(
                                         agent_session.foreground_id(),
                                     )
                                     .await?;
-                                    send_thread_messages_update_shared(&mut *writer, better, &agent_session.thread_mgr)
-                                    .await?;
+                                    {
+                                        next_turn_id += 1;
+                                        let turn_id = next_turn_id;
+                                        let (handle, tool_cancel) = spawn_turn(
+                                            TurnDeps {
+                                                http: http.clone(),
+                                                config: config.clone(),
+                                                vault: vault.clone(),
+                                                skill_mgr: skill_mgr.clone(),
+                                                task_mgr: task_mgr.clone(),
+                                                observer: observer.clone(),
+                                                shared_config: shared_config.clone(),
+                                                shared_model_ctx: shared_model_ctx.clone(),
+                                                shared_copilot_session: shared_copilot_session.clone(),
+                                                approvals: approvals.clone(),
+                                                user_prompts: user_prompts.clone(),
+                                                credentials: credentials.clone(),
+                                                dom_queries: dom_queries.clone(),
+                                                thread_mgr: agent_session.thread_mgr.clone(),
+                                                threads_path: agent_session.threads_path.clone(),
+                                                foreground: agent_session.foreground.clone(),
+                                                connection_id,
+                                                agent_id: agent_session.agent_id.clone(),
+                                            },
+                                            messages,
+                                            stream_id,
+                                            turn_id,
+                                            turn_thread,
+                                            model_task_tx.clone(),
+                                            false,
+                                        );
+                                        // One turn per thread, any number of
+                                        // threads. The predecessor for this
+                                        // thread was displaced and closed out
+                                        // above, before this turn existed;
+                                        // turns elsewhere keep running.
+                                        //
+                                        // This used to `abort_all()` first: with
+                                        // one shared response channel per kind,
+                                        // two turns would take each other's tool
+                                        // approvals and `ask_user` answers, and a
+                                        // stolen approval read as a denial. Those
+                                        // are routed by call id now, so the
+                                        // reason is gone.
+                                        active_tasks.lock().await.register(
+                                            turn_key,
+                                            turn_id,
+                                            stream_id,
+                                            handle,
+                                            tool_cancel,
+                                        );
+                                    }
                                 }
-                                // A message needs a thread to live in. If
-                                // none is focused — the client backgrounded
-                                // it — elect one rather than filing the turn
-                                // under `ThreadId(0)`: zero is the wire
-                                // sentinel for "nothing is focused", and a
-                                // frame carrying it tells the desktop to
-                                // clear the transcript.
-                                let turn_thread = match requested {
-                                    Some(want) => Some(want),
-                                    None => agent_session.ensure_foreground().await,
-                                };
-                                // Settling the thread is only half of it. The
-                                // turn's file and command tools run in the
-                                // workspace directory, and that is global
-                                // config state — `switch_foreground` flips a
-                                // flag and nothing else. `ThreadSwitch`
-                                // repoints explicitly right after switching;
-                                // a turn that settles its own thread has to
-                                // do the same, whether the client named it or
-                                // the label match picked it.
-                                //
-                                // Otherwise this is the same race one layer
-                                // down, and worse: a `ThreadSwitch` to B
-                                // served while the user was typing into A
-                                // leaves the turn correctly filed under A but
-                                // writing files into B's directory. Right
-                                // conversation, wrong project on disk.
-                                //
-                                // Read from `turn_thread`, the thread just
-                                // settled on, rather than from a foreground
-                                // looked up again: they are the same here,
-                                // and asking twice is how they come to
-                                // disagree.
-                                if let Some(pid) = {
-                                    let tm = agent_session.thread_mgr.lock().await;
-                                    turn_thread
-                                        .and_then(|id| tm.get(id))
-                                        .map(|t| t.project_id)
-                                } {
+                                ClientPayload::DownloadsRequest => {
+                                    download_handler::send_downloads_update(&mut *writer, &agent_session.agent_id).await?;
+                                }
+                                ClientPayload::DownloadCancel { id } => {
+                                    download_handler::handle_download_cancel(&mut *writer, &agent_session.agent_id, &id).await?;
+                                }
+                                ClientPayload::DownloadsClearFinished => {
+                                    download_handler::handle_downloads_clear_finished(&mut *writer, &agent_session.agent_id).await?;
+                                }
+                                ClientPayload::TasksRequest { session } => {
+                                    thread_handler::handle_tasks_request(&mut *writer, &task_mgr, session).await?;
+                                }
+                                ClientPayload::ThreadCreate { label, project_id } => {
+                                    // 0 means "the active project".
+                                    let pid = if project_id == 0 {
+                                        agent_session.project_mgr.active_id()
+                                    } else {
+                                        rustyclaw_core::projects::ProjectId(project_id)
+                                    };
+                                    // Creating into a different project also makes it
+                                    // active and repoints the workspace dir.
+                                    let foreground = agent_session.foreground_id();
                                     if pid != agent_session.project_mgr.active_id() {
                                         project_handler::activate_project(
                                             &mut *writer,
@@ -1388,956 +1713,779 @@ pub(crate) async fn handle_connection(
                                             &agent_session.thread_mgr,
                                             &agent_session.projects_path,
                                             pid,
-                                            turn_thread,
+                                            foreground,
                                         )
                                         .await?;
-                                    } else {
-                                        // Synchronous, so the guard in the
-                                        // argument list never spans an await.
-                                        project_handler::repoint_workspace(
-                                            &mut config,
-                                            &agent_session.project_mgr,
-                                            &*agent_session.thread_mgr.lock().await,
-                                            turn_thread,
-                                        );
                                     }
-                                }
-                                // A key for tracking the turn even when
-                                // there is no thread at all to elect. It
-                                // never reaches the client.
-                                let turn_key = turn_thread
-                                    .unwrap_or(rustyclaw_core::threads::ThreadId(0));
-                                // Retire old ephemeral threads — after the
-                                // turn's thread is settled, never before:
-                                // the sweep could remove the very
-                                // conversation this message was typed into
-                                // (a completed task thread the user was
-                                // still looking at), and resolution would
-                                // then refuse the message as addressed to
-                                // a thread that "no longer exists",
-                                // dropping the user's words. The settled
-                                // thread is exempt; its own activity
-                                // refreshes its retention window.
-                                agent_session
-                                    .thread_mgr
-                                    .lock()
-                                    .await
-                                    .cleanup_ephemeral_except(turn_thread);
-                                // A second message in this conversation
-                                // displaces the turn still running there —
-                                // and a displaced turn is aborted at its
-                                // next await, often the very wait for a
-                                // tool approval or `ask_user` answer. It
-                                // will never send the `ToolResult` that
-                                // retires the box it left on the user's
-                                // screen, nor its own close-out; unsent,
-                                // the dead box hides every later request
-                                // behind it. Close the old turn out here,
-                                // before the new turn exists, so the
-                                // retirement can never race the new
-                                // turn's own requests — and on the old
-                                // turn's stream, where clients track it.
-                                // The registry lock is taken and released
-                                // in this statement: an `if let` scrutinee's
-                                // guard would live across the close-out
-                                // write below, and the reader task takes
-                                // the same lock to serve Stop — holding it
-                                // across a network write would stall every
-                                // inbound frame behind that write.
-                                let displaced_stream =
-                                    active_tasks.lock().await.displace(&turn_key);
-                                if let Some(old_stream) = displaced_stream {
-                                    let mut scoped =
-                                        rustyclaw_core::gateway::ScopedTransportWriter::new(
-                                            &mut *writer,
-                                            old_stream,
-                                        );
-                                    protocol::server::send_response_done(
-                                        &mut scoped,
-                                        false,
-                                        Some(turn_key.0).filter(|id| *id != 0),
+                                    thread_handler::handle_thread_create(
+                                        &mut *writer,
+                                        &agent_session.thread_mgr,
+                                        &task_mgr,
+                                        &agent_session.threads_path,
+                                        pid,
+                                        label,
+                                        &agent_session.foreground,
                                     )
                                     .await?;
                                 }
-                                // Mark the turn open in the thread's log —
-                                // the start half of the stop-indicator pair.
-                                // A displaced predecessor gets its stop
-                                // marker first: aborted, it will never
-                                // write its own. The broadcast right after
-                                // is what flips the thread to "Streaming"
-                                // in every client's sidebar.
-                                if let Some(thread) = turn_thread {
-                                    let mut tm = agent_session.thread_mgr.lock().await;
-                                    if displaced_stream.is_some() {
-                                        tm.end_turn(thread, false);
-                                    }
-                                    tm.begin_turn(thread);
-                                    crate::helpers::persist_threads(
-                                        &mut tm,
+                                ClientPayload::ThreadSwitch { thread_id } => {
+                                    // Read before the call, never inside its
+                                    // argument list: a temporary guard lives to
+                                    // the end of the statement, which here spans
+                                    // an awaited handler that talks to the model.
+                                    // The reader task takes this same lock to act
+                                    // on Stop, so holding it across that call
+                                    // would stall every inbound frame — Stop,
+                                    // tool approvals, `ask_user` answers — for as
+                                    // long as the provider took.
+                                    let busy_threads =
+                                        active_tasks.lock().await.running_threads();
+                                    thread_handler::handle_thread_switch(
+                                        &mut *writer,
+                                        &agent_session.thread_mgr,
+                                        &task_mgr,
                                         &agent_session.threads_path,
-                                    );
+                                        &shared_model_ctx,
+                                        &http,
+                                        thread_id,
+                                        &agent_session.foreground,
+                                        &busy_threads,
+                                    )
+                                    .await?;
+                                    // Repoint the workspace at the new foreground
+                                    // thread's effective directory: its own override
+                                    // when it has one, else its project's directory.
+                                    // Threads in the active project still need this —
+                                    // an override differs from the project dir.
+                                    // Bound to a local first: a guard produced in
+                                    // the scrutinee of an `if let` lives for the
+                                    // whole success block, and both arms below
+                                    // take this lock again. `tokio::sync::Mutex`
+                                    // is not reentrant, so that is a hang, not a
+                                    // slow path.
+                                    let foreground = agent_session.foreground_id();
+                                    let foreground_project = {
+                                        let tm = agent_session.thread_mgr.lock().await;
+                                        foreground.and_then(|id| tm.get(id)).map(|t| t.project_id)
+                                    };
+                                    if let Some(pid) = foreground_project {
+                                        if pid != agent_session.project_mgr.active_id() {
+                                            project_handler::activate_project(
+                                                &mut *writer,
+                                                &mut config,
+                                                &mut agent_session.project_mgr,
+                                                &agent_session.thread_mgr,
+                                                &agent_session.projects_path,
+                                                pid,
+                                                foreground,
+                                            )
+                                            .await?;
+                                        } else {
+                                            project_handler::repoint_workspace(
+                                                &mut config,
+                                                &agent_session.project_mgr,
+                                                &*agent_session.thread_mgr.lock().await,
+                                                foreground,
+                                            );
+                                        }
+                                    }
                                 }
-                                send_threads_update_shared(
-                                    &mut *writer,
-                                    &agent_session.thread_mgr,
-                                    &task_mgr,
-                                    None,
-                                    agent_session.foreground_id(),
-                                )
-                                .await?;
-                                {
-                                    next_turn_id += 1;
-                                    let turn_id = next_turn_id;
-                                    let (handle, tool_cancel) = spawn_turn(
-                                        TurnDeps {
-                                            http: http.clone(),
-                                            config: config.clone(),
-                                            vault: vault.clone(),
-                                            skill_mgr: skill_mgr.clone(),
-                                            task_mgr: task_mgr.clone(),
-                                            observer: observer.clone(),
-                                            shared_config: shared_config.clone(),
-                                            shared_model_ctx: shared_model_ctx.clone(),
-                                            shared_copilot_session: shared_copilot_session.clone(),
-                                            approvals: approvals.clone(),
-                                            user_prompts: user_prompts.clone(),
-                                            credentials: credentials.clone(),
-                                            dom_queries: dom_queries.clone(),
-                                            thread_mgr: agent_session.thread_mgr.clone(),
-                                            threads_path: agent_session.threads_path.clone(),
-                                            foreground: agent_session.foreground.clone(),
-                                            connection_id,
-                                            agent_id: agent_session.agent_id.clone(),
-                                        },
-                                        messages,
-                                        stream_id,
-                                        turn_id,
-                                        turn_thread,
-                                        model_task_tx.clone(),
-                                        false,
-                                    );
-                                    // One turn per thread, any number of
-                                    // threads. The predecessor for this
-                                    // thread was displaced and closed out
-                                    // above, before this turn existed;
-                                    // turns elsewhere keep running.
-                                    //
-                                    // This used to `abort_all()` first: with
-                                    // one shared response channel per kind,
-                                    // two turns would take each other's tool
-                                    // approvals and `ask_user` answers, and a
-                                    // stolen approval read as a denial. Those
-                                    // are routed by call id now, so the
-                                    // reason is gone.
-                                    active_tasks.lock().await.register(
-                                        turn_key,
-                                        turn_id,
-                                        stream_id,
-                                        handle,
-                                        tool_cancel,
-                                    );
+                                ClientPayload::ThreadList => {
+                                    thread_handler::handle_thread_list(&mut *writer, &agent_session.thread_mgr, &task_mgr, agent_session.foreground_id()).await?;
                                 }
-                            }
-                            ClientPayload::DownloadsRequest => {
-                                download_handler::send_downloads_update(&mut *writer, &agent_session.agent_id).await?;
-                            }
-                            ClientPayload::DownloadCancel { id } => {
-                                download_handler::handle_download_cancel(&mut *writer, &agent_session.agent_id, &id).await?;
-                            }
-                            ClientPayload::DownloadsClearFinished => {
-                                download_handler::handle_downloads_clear_finished(&mut *writer, &agent_session.agent_id).await?;
-                            }
-                            ClientPayload::TasksRequest { session } => {
-                                thread_handler::handle_tasks_request(&mut *writer, &task_mgr, session).await?;
-                            }
-                            ClientPayload::ThreadCreate { label, project_id } => {
-                                // 0 means "the active project".
-                                let pid = if project_id == 0 {
-                                    agent_session.project_mgr.active_id()
-                                } else {
-                                    rustyclaw_core::projects::ProjectId(project_id)
-                                };
-                                // Creating into a different project also makes it
-                                // active and repoints the workspace dir.
-                                let foreground = agent_session.foreground_id();
-                                if pid != agent_session.project_mgr.active_id() {
-                                    project_handler::activate_project(
+                                ClientPayload::ThreadHistoryRequest { thread_id } => {
+                                    thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
+                                }
+                                ClientPayload::ThreadClose { thread_id } => {
+                                    // The turn writing to this thread has nowhere
+                                    // to put its answer once the thread is gone:
+                                    // every persistence point resolves the thread
+                                    // by id, so it would keep calling the model
+                                    // and dropping the results, while staying
+                                    // registered and holding the connection busy.
+                                    let stopped = active_tasks
+                                        .lock()
+                                        .await
+                                        .request_cancel(&rustyclaw_core::threads::ThreadId(thread_id));
+                                    if stopped {
+                                        trace!(thread_id, "Stopping the turn for a closed thread");
+                                    }
+                                    thread_handler::handle_thread_close(
+                                        &mut *writer,
+                                        &agent_session.thread_mgr,
+                                        &task_mgr,
+                                        &agent_session.threads_path,
+                                        thread_id,
+                                        &agent_session.foreground,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ThreadRename { thread_id, new_label } => {
+                                    thread_handler::handle_thread_rename(
+                                        &mut *writer,
+                                        &agent_session.thread_mgr,
+                                        &task_mgr,
+                                        &agent_session.threads_path,
+                                        thread_id,
+                                        new_label,
+                                        agent_session.foreground_id(),
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ThreadUpdate { thread_id, label, working_dir } => {
+                                    thread_handler::handle_thread_update(
+                                        &mut *writer,
+                                        &mut config,
+                                        &agent_session.thread_mgr,
+                                        &agent_session.project_mgr,
+                                        &task_mgr,
+                                        &agent_session.threads_path,
+                                        thread_id,
+                                        label,
+                                        working_dir,
+                                        agent_session.foreground_id(),
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ModelSwitch { provider, model } => {
+                                    admin::handle_model_switch(
+                                        &mut *writer,
+                                        &vault,
+                                        &shared_config,
+                                        &shared_model_ctx,
+                                        &shared_copilot_session,
+                                        provider,
+                                        model,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::SetAgentName { name } => {
+                                    admin::handle_set_agent_name(&mut config, &shared_config, name).await;
+                                }
+                                ClientPayload::SetWorkingDirectory { path } => {
+                                    admin::handle_set_working_directory(&mut config, path);
+                                }
+                                ClientPayload::PluginList => {
+                                    plugin_handler::handle_plugin_list(&mut *writer).await?;
+                                }
+                                ClientPayload::PluginRefresh { plugin_name } => {
+                                    plugin_handler::handle_plugin_refresh(&mut *writer, plugin_name).await?;
+                                }
+                                ClientPayload::WorkspaceListDir { path } => {
+                                    let root = config.workspace_dir();
+                                    crate::workspace_files::handle_list_dir(&mut *writer, &root, path).await?;
+                                }
+                                ClientPayload::WorkspaceReadFile { path } => {
+                                    let root = config.workspace_dir();
+                                    crate::workspace_files::handle_read_file(&mut *writer, &root, path).await?;
+                                }
+                                ClientPayload::WorkspaceWriteFile { path, content, expected_root } => {
+                                    let root = config.workspace_dir();
+                                    crate::workspace_files::handle_write_file(&mut *writer, &root, path, content, expected_root).await?;
+                                }
+                                ClientPayload::ProjectList => {
+                                    project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;
+                                }
+                                ClientPayload::ProjectCreate { name, path } => {
+                                    let foreground = agent_session.foreground_id();
+                                    project_handler::handle_project_create(
                                         &mut *writer,
                                         &mut config,
                                         &mut agent_session.project_mgr,
                                         &agent_session.thread_mgr,
                                         &agent_session.projects_path,
-                                        pid,
+                                        name,
+                                        path,
                                         foreground,
                                     )
                                     .await?;
                                 }
-                                thread_handler::handle_thread_create(
-                                    &mut *writer,
-                                    &agent_session.thread_mgr,
-                                    &task_mgr,
-                                    &agent_session.threads_path,
-                                    pid,
-                                    label,
-                                    &agent_session.foreground,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::ThreadSwitch { thread_id } => {
-                                // Read before the call, never inside its
-                                // argument list: a temporary guard lives to
-                                // the end of the statement, which here spans
-                                // an awaited handler that talks to the model.
-                                // The reader task takes this same lock to act
-                                // on Stop, so holding it across that call
-                                // would stall every inbound frame — Stop,
-                                // tool approvals, `ask_user` answers — for as
-                                // long as the provider took.
-                                let busy_threads =
-                                    active_tasks.lock().await.running_threads();
-                                thread_handler::handle_thread_switch(
-                                    &mut *writer,
-                                    &agent_session.thread_mgr,
-                                    &task_mgr,
-                                    &agent_session.threads_path,
-                                    &shared_model_ctx,
-                                    &http,
-                                    thread_id,
-                                    &agent_session.foreground,
-                                    &busy_threads,
-                                )
-                                .await?;
-                                // Repoint the workspace at the new foreground
-                                // thread's effective directory: its own override
-                                // when it has one, else its project's directory.
-                                // Threads in the active project still need this —
-                                // an override differs from the project dir.
-                                // Bound to a local first: a guard produced in
-                                // the scrutinee of an `if let` lives for the
-                                // whole success block, and both arms below
-                                // take this lock again. `tokio::sync::Mutex`
-                                // is not reentrant, so that is a hang, not a
-                                // slow path.
-                                let foreground = agent_session.foreground_id();
-                                let foreground_project = {
-                                    let tm = agent_session.thread_mgr.lock().await;
-                                    foreground.and_then(|id| tm.get(id)).map(|t| t.project_id)
-                                };
-                                if let Some(pid) = foreground_project {
-                                    if pid != agent_session.project_mgr.active_id() {
-                                        project_handler::activate_project(
-                                            &mut *writer,
-                                            &mut config,
-                                            &mut agent_session.project_mgr,
-                                            &agent_session.thread_mgr,
-                                            &agent_session.projects_path,
-                                            pid,
-                                            foreground,
-                                        )
-                                        .await?;
-                                    } else {
-                                        project_handler::repoint_workspace(
-                                            &mut config,
-                                            &agent_session.project_mgr,
-                                            &*agent_session.thread_mgr.lock().await,
-                                            foreground,
+                                ClientPayload::ProjectRename { project_id, new_name } => {
+                                    project_handler::handle_project_rename(
+                                        &mut *writer,
+                                        &mut agent_session.project_mgr,
+                                        &agent_session.projects_path,
+                                        project_id,
+                                        new_name,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ProjectUpdate { project_id, name, path } => {
+                                    let foreground = agent_session.foreground_id();
+                                    project_handler::handle_project_update(
+                                        &mut *writer,
+                                        &mut config,
+                                        &mut agent_session.project_mgr,
+                                        &agent_session.thread_mgr,
+                                        &agent_session.projects_path,
+                                        project_id,
+                                        name,
+                                        path,
+                                        foreground,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ProjectDelete { project_id } => {
+                                    let foreground = agent_session.foreground_id();
+                                    // Reassign the doomed project's threads to Default
+                                    // so they aren't orphaned, then delete + repoint.
+                                    let pid = rustyclaw_core::projects::ProjectId(project_id);
+                                    let orphans: Vec<_> =
+                                        agent_session.thread_mgr.lock().await.threads_for(pid).iter().map(|t| t.id).collect();
+                                    for tid in orphans {
+                                        agent_session.thread_mgr.lock().await.set_project(
+                                            tid,
+                                            rustyclaw_core::projects::DEFAULT_PROJECT_ID,
                                         );
                                     }
-                                }
-                            }
-                            ClientPayload::ThreadList => {
-                                thread_handler::handle_thread_list(&mut *writer, &agent_session.thread_mgr, &task_mgr, agent_session.foreground_id()).await?;
-                            }
-                            ClientPayload::ThreadHistoryRequest { thread_id } => {
-                                thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
-                            }
-                            ClientPayload::ThreadClose { thread_id } => {
-                                // The turn writing to this thread has nowhere
-                                // to put its answer once the thread is gone:
-                                // every persistence point resolves the thread
-                                // by id, so it would keep calling the model
-                                // and dropping the results, while staying
-                                // registered and holding the connection busy.
-                                let stopped = active_tasks
-                                    .lock()
-                                    .await
-                                    .request_cancel(&rustyclaw_core::threads::ThreadId(thread_id));
-                                if stopped {
-                                    trace!(thread_id, "Stopping the turn for a closed thread");
-                                }
-                                thread_handler::handle_thread_close(
-                                    &mut *writer,
-                                    &agent_session.thread_mgr,
-                                    &task_mgr,
-                                    &agent_session.threads_path,
-                                    thread_id,
-                                    &agent_session.foreground,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::ThreadRename { thread_id, new_label } => {
-                                thread_handler::handle_thread_rename(
-                                    &mut *writer,
-                                    &agent_session.thread_mgr,
-                                    &task_mgr,
-                                    &agent_session.threads_path,
-                                    thread_id,
-                                    new_label,
-                                    agent_session.foreground_id(),
-                                )
-                                .await?;
-                            }
-                            ClientPayload::ThreadUpdate { thread_id, label, working_dir } => {
-                                thread_handler::handle_thread_update(
-                                    &mut *writer,
-                                    &mut config,
-                                    &agent_session.thread_mgr,
-                                    &agent_session.project_mgr,
-                                    &task_mgr,
-                                    &agent_session.threads_path,
-                                    thread_id,
-                                    label,
-                                    working_dir,
-                                    agent_session.foreground_id(),
-                                )
-                                .await?;
-                            }
-                            ClientPayload::ModelSwitch { provider, model } => {
-                                admin::handle_model_switch(
-                                    &mut *writer,
-                                    &vault,
-                                    &shared_config,
-                                    &shared_model_ctx,
-                                    &shared_copilot_session,
-                                    provider,
-                                    model,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::SetAgentName { name } => {
-                                admin::handle_set_agent_name(&mut config, &shared_config, name).await;
-                            }
-                            ClientPayload::SetWorkingDirectory { path } => {
-                                admin::handle_set_working_directory(&mut config, path);
-                            }
-                            ClientPayload::PluginList => {
-                                plugin_handler::handle_plugin_list(&mut *writer).await?;
-                            }
-                            ClientPayload::PluginRefresh { plugin_name } => {
-                                plugin_handler::handle_plugin_refresh(&mut *writer, plugin_name).await?;
-                            }
-                            ClientPayload::WorkspaceListDir { path } => {
-                                let root = config.workspace_dir();
-                                crate::workspace_files::handle_list_dir(&mut *writer, &root, path).await?;
-                            }
-                            ClientPayload::WorkspaceReadFile { path } => {
-                                let root = config.workspace_dir();
-                                crate::workspace_files::handle_read_file(&mut *writer, &root, path).await?;
-                            }
-                            ClientPayload::WorkspaceWriteFile { path, content, expected_root } => {
-                                let root = config.workspace_dir();
-                                crate::workspace_files::handle_write_file(&mut *writer, &root, path, content, expected_root).await?;
-                            }
-                            ClientPayload::ProjectList => {
-                                project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;
-                            }
-                            ClientPayload::ProjectCreate { name, path } => {
-                                let foreground = agent_session.foreground_id();
-                                project_handler::handle_project_create(
-                                    &mut *writer,
-                                    &mut config,
-                                    &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
-                                    &agent_session.projects_path,
-                                    name,
-                                    path,
-                                    foreground,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::ProjectRename { project_id, new_name } => {
-                                project_handler::handle_project_rename(
-                                    &mut *writer,
-                                    &mut agent_session.project_mgr,
-                                    &agent_session.projects_path,
-                                    project_id,
-                                    new_name,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::ProjectUpdate { project_id, name, path } => {
-                                let foreground = agent_session.foreground_id();
-                                project_handler::handle_project_update(
-                                    &mut *writer,
-                                    &mut config,
-                                    &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
-                                    &agent_session.projects_path,
-                                    project_id,
-                                    name,
-                                    path,
-                                    foreground,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::ProjectDelete { project_id } => {
-                                let foreground = agent_session.foreground_id();
-                                // Reassign the doomed project's threads to Default
-                                // so they aren't orphaned, then delete + repoint.
-                                let pid = rustyclaw_core::projects::ProjectId(project_id);
-                                let orphans: Vec<_> =
-                                    agent_session.thread_mgr.lock().await.threads_for(pid).iter().map(|t| t.id).collect();
-                                for tid in orphans {
-                                    agent_session.thread_mgr.lock().await.set_project(
-                                        tid,
-                                        rustyclaw_core::projects::DEFAULT_PROJECT_ID,
-                                    );
-                                }
-                                project_handler::handle_project_delete(
-                                    &mut *writer,
-                                    &mut config,
-                                    &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
-                                    &agent_session.projects_path,
-                                    project_id,
-                                    foreground,
-                                )
-                                .await?;
-                                crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
-                                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
-                            }
-                            ClientPayload::ProjectSwitch { project_id } => {
-                                let foreground = agent_session.foreground_id();
-                                project_handler::handle_project_switch(
-                                    &mut *writer,
-                                    &mut config,
-                                    &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
-                                    &agent_session.projects_path,
-                                    project_id,
-                                    foreground,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::AgentListRequest => {
-                                crate::agent_handler::handle_agent_list(
-                                    &mut *writer,
-                                    &config,
-                                    &agent_session.agent_id,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::AgentSwitch { agent_id } => {
-                                let switched = crate::agent_handler::handle_agent_switch(
-                                    &mut *writer,
-                                    &mut config,
-                                    &base_system_prompt,
-                                    &mut agent_session,
-                                    &thread_mgr_cell,
-                                    &task_mgr,
-                                    agent_id,
-                                )
-                                .await?;
-                                if switched {
-                                    // The thread manager was replaced — follow
-                                    // the new one's sidebar events. The reader's
-                                    // cell was repointed inside the switch, before
-                                    // the client heard about it; doing it here
-                                    // would be after the new agent's thread list
-                                    // had already gone out, and the client asks
-                                    // for a transcript as soon as it sees one.
-                                    thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
-                                    // The downloads watcher reads this per
-                                    // event; until it moves, the panel would go
-                                    // on showing the previous agent's URLs and
-                                    // destination paths.
-                                    *current_agent
-                                        .write()
-                                        .expect("current agent cell poisoned") =
-                                        agent_session.agent_id.clone();
-                                    // The panel is stale the moment the agent
-                                    // changes, so correct it rather than
-                                    // waiting for the next transfer event.
-                                    download_handler::send_downloads_update(
+                                    project_handler::handle_project_delete(
                                         &mut *writer,
+                                        &mut config,
+                                        &mut agent_session.project_mgr,
+                                        &agent_session.thread_mgr,
+                                        &agent_session.projects_path,
+                                        project_id,
+                                        foreground,
+                                    )
+                                    .await?;
+                                    crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+                                    send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
+                                }
+                                ClientPayload::ProjectSwitch { project_id } => {
+                                    let foreground = agent_session.foreground_id();
+                                    project_handler::handle_project_switch(
+                                        &mut *writer,
+                                        &mut config,
+                                        &mut agent_session.project_mgr,
+                                        &agent_session.thread_mgr,
+                                        &agent_session.projects_path,
+                                        project_id,
+                                        foreground,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::AgentListRequest => {
+                                    crate::agent_handler::handle_agent_list(
+                                        &mut *writer,
+                                        &config,
                                         &agent_session.agent_id,
                                     )
                                     .await?;
                                 }
-                            }
-                            ClientPayload::AgentCreate { name, agent_id, description } => {
-                                crate::agent_handler::handle_agent_create(
-                                    &mut *writer,
-                                    &config,
-                                    &agent_session.agent_id,
-                                    name,
-                                    agent_id,
-                                    description,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::AgentDelete { agent_id } => {
-                                crate::agent_handler::handle_agent_delete(
-                                    &mut *writer,
-                                    &config,
-                                    &agent_session.agent_id,
-                                    agent_id,
-                                )
-                                .await?;
-                            }
-                            ClientPayload::HostInfoRequest => {
-                                crate::kernel_handler::handle_host_info_request(&mut *writer).await?;
-                            }
-                            ClientPayload::LoadStatusRequest => {
-                                crate::kernel_handler::handle_load_status_request(&mut *writer).await?;
-                            }
-                            ClientPayload::ServiceListRequest => {
-                                crate::service_handler::handle_service_list(&mut *writer).await?;
-                            }
-                            ClientPayload::ServiceStartRequest { name } => {
-                                crate::service_handler::handle_service_start(&mut *writer, &name).await?;
-                            }
-                            ClientPayload::ServiceStopRequest { name } => {
-                                crate::service_handler::handle_service_stop(&mut *writer, &name).await?;
-                            }
-                            ClientPayload::ServiceRestartRequest { name } => {
-                                crate::service_handler::handle_service_restart(&mut *writer, &name).await?;
-                            }
-                            ClientPayload::ServiceLogsRequest { name, tail } => {
-                                crate::service_handler::handle_service_logs(&mut *writer, &name, tail).await?;
-                            }
-                            // ── New UI panel requests (stub handlers) ──
-                            payload @ (ClientPayload::CronListRequest
-                            | ClientPayload::CronUpsertRequest { .. }
-                            | ClientPayload::CronActionRequest { .. }
-                            | ClientPayload::MemoryListRequest { .. }
-                            | ClientPayload::MemoryUpsertRequest { .. }
-                            | ClientPayload::MemoryDeleteRequest { .. }
-                            | ClientPayload::HistorySearchRequest { .. }
-                            | ClientPayload::UsageStatsRequest { .. }
-                            | ClientPayload::LogsRequest { .. }
-                            | ClientPayload::McpListRequest
-                            | ClientPayload::McpConnectRequest { .. }
-                            | ClientPayload::McpDisconnectRequest { .. }
-                            | ClientPayload::ToolConfigRequest
-                            | ClientPayload::ToolToggleRequest { .. }
-                            | ClientPayload::ChannelStatusRequest
-                            | ClientPayload::ChannelPairRequest { .. }
-                            | ClientPayload::PendingApprovalsRequest
-                            | ClientPayload::ApprovalsBatchAction { .. }
-                            | ClientPayload::VoiceStart { .. }
-                            | ClientPayload::VoiceStop
-                            | ClientPayload::VoiceAudioChunk { .. }
-                            | ClientPayload::PreviewRequest { .. }
-                            | ClientPayload::PreviewFollowToggle { .. }) => {
-                                crate::panel_handler::handle_panel_request(&mut *writer, payload, &mut config, &shared_config).await?;
-                            }
-                            // ── Messenger setup ──
-                            payload @ (ClientPayload::MessengerConfigRequest
-                            | ClientPayload::MessengerAccountSave { .. }
-                            | ClientPayload::MessengerAccountDelete { .. }
-                            | ClientPayload::MessengerSecretsMigrate { .. }
-                            | ClientPayload::MessengerRouteSave { .. }
-                            | ClientPayload::MessengerRouteDelete { .. }) => {
-                                crate::messenger_config_handler::handle_messenger_config(
-                                    &mut *writer,
-                                    payload,
-                                    &mut config,
-                                    &shared_config,
-                                    &vault,
-                                ).await?;
-                            }
-                            payload @ (ClientPayload::EngineList
-                            | ClientPayload::EngineAction { .. }
-                            | ClientPayload::EngineModelList { .. }
-                            | ClientPayload::EngineModelPull { .. }
-                            | ClientPayload::EngineModelAction { .. }) => {
-                                crate::engine_handler::handle_engine_request(
-                                    &mut *writer,
-                                    payload,
-                                    &engine_registry,
-                                    &config.engines,
-                                ).await?;
-                            }
-                            ClientPayload::EngineConfigSet { engine, config: new_cfg } => {
-                                // Persist through the shared config — writing
-                                // this connection's snapshot would erase
-                                // settings other connections saved since it
-                                // was taken (messenger accounts included).
-                                config.engines.insert(engine.clone(), new_cfg.clone());
-                                {
-                                    let mut shared = shared_config.write().await;
-                                    shared.engines.insert(engine.clone(), new_cfg.clone());
-                                    crate::helpers::persist_config(&shared);
-                                }
-                                crate::engine_handler::handle_engine_request(
-                                    &mut *writer,
-                                    ClientPayload::EngineConfigSet { engine, config: new_cfg },
-                                    &engine_registry,
-                                    &config.engines,
-                                ).await?;
-                            }
-                            ClientPayload::ProviderModelList { provider } => {
-                                handle_provider_model_list(&mut *writer, &provider, &config, &vault).await?;
-                            }
-                            ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } | ClientPayload::ProcessControl { .. } => {
-                                // AuthChallenge/AuthResponse handled in auth phase.
-                                // ToolApprovalResponse handled by the reader task.
-                                // UserPromptResponse handled by the reader task.
-                                // CredentialResponse handled by the reader task.
-                                // DomQueryResponse handled by the reader task.
-                                // ProcessControl handled by the reader task.
-                            }
-                        }
-            }
-            // Handle messages from spawned model tasks
-            // Both of these carry the same `drain_deadline` guard as the
-            // frame arm above, and for a sharper reason than "the client has
-            // left". A wake taken while draining consumes the process-wide
-            // announcement claim, which is never released, and then has its
-            // freshly spawned turn aborted by the drain arm moments later —
-            // so every other window on this agent is told the transfer is
-            // already someone else's to announce, and it is announced
-            // nowhere. Leaving it unclaimed lets a connection that can still
-            // serve it do so. The panel arm is the milder case: frames
-            // written to a client that has gone away.
-            tick = panel_rx.recv(), if panel_open && drain_deadline.is_none() => {
-                match tick {
-                    Some(()) => {
-                        download_handler::send_downloads_update(&mut *writer, &agent_session.agent_id).await?;
-                    }
-                    None => {
-                        // Unreachable for the same reason as the wake channel
-                        // below, and disabled for the same reason: `recv` on a
-                        // closed channel returns instantly, so an arm that
-                        // ignored this would spin a core.
-                        error!("Download event channel closed; the downloads panel will not update");
-                        panel_open = false;
-                    }
-                }
-            }
-            finished = wake_rx.recv(), if wakes_open && drain_deadline.is_none() => {
-                let Some(download) = finished else {
-                    // Unreachable: this scope holds a sender for the life of
-                    // the loop. Disabling the arm rather than looping is the
-                    // difference between a lost feature and a spun core,
-                    // because `recv` on a closed channel returns instantly.
-                    error!("Download completion channel closed; completions will no longer wake the agent");
-                    wakes_open = false;
-                    continue;
-                };
-                // The thread id is only meaningful inside the store it was
-                // minted in, and this connection may have switched agents
-                // while the bytes were arriving. Ids restart low in every
-                // agent's store, so resolving it against the wrong one does
-                // not fail — it lands on an unrelated conversation, files a
-                // notice there and spawns a turn on it. Checked before the
-                // thread id is read, not after.
-                if !download.belongs_to(&agent_session.agent_id) {
-                    debug!(
-                        download = %download.id,
-                        "Download finished for an agent this connection is no longer showing; not announcing it"
-                    );
-                    continue;
-                }
-                // A transfer started outside any conversation — the CLI's
-                // one-shot paths — has no transcript to be announced in.
-                let Some(thread) = download
-                    .origin
-                    .as_ref()
-                    .and_then(|o| o.thread)
-                    .map(rustyclaw_core::threads::ThreadId)
-                else {
-                    debug!(download = %download.id, "Download finished outside a conversation; nothing to notify");
-                    continue;
-                };
-                // Waking a thread that is mid-turn would *displace* that turn
-                // — the Chat arm's rule is one turn per thread, and the loser
-                // is aborted at its next await. Announcing a file by killing
-                // the request the user is waiting on is not a trade worth
-                // making, so it waits: the Done and Error arms re-offer
-                // whatever is parked here once the thread goes idle.
-                if active_tasks.lock().await.running_threads().contains(&thread) {
-                    debug!(
-                        download = %download.id,
-                        thread = thread.0,
-                        "Download finished while the thread was busy; deferring the wake"
-                    );
-                    deferred_wakes.entry(thread).or_default().push(download);
-                    continue;
-                }
-                // Exactly one connection may announce a given transfer.
-                //
-                // Ownership is by agent, and an agent can be open in more than
-                // one window — a second desktop window, or a TUI alongside the
-                // app, both defaulting to `main`. Every such connection has its
-                // own watcher over the same process-global broadcast and its
-                // own `active_tasks`, so all of them pass the filter above and
-                // none of them can see that another has already started a turn.
-                // Without this the notice is appended once per window and the
-                // second turn displaces the first — aborting the reply the
-                // first had just begun.
-                //
-                // Claimed here rather than at deferral: a connection that parks
-                // a wake may go away while holding it, and the transfer should
-                // still be announced by whoever is idle. Keyed by transfer id
-                // alone, which is already unique for the life of the process.
-                if !claim_download_announcement(&download.id) {
-                    debug!(
-                        download = %download.id,
-                        "Another connection is announcing this transfer; skipping"
-                    );
-                    continue;
-                }
-                let notice = download.summary();
-                // The conversation can have been deleted while the bytes were
-                // arriving. Filing the notice anywhere else would put it in a
-                // transcript that never asked for the file.
-                let history = {
-                    let mut tm = agent_session.thread_mgr.lock().await;
-                    match tm.get_mut(thread) {
-                        Some(t) => {
-                            // Recorded as the user's turn rather than a
-                            // system message: a system message part-way
-                            // through a conversation is rejected outright by
-                            // some providers, and this has to reach every one
-                            // of them. The wording is what marks it as the
-                            // environment speaking, not the person.
-                            t.add_message(rustyclaw_core::threads::MessageRole::User, &notice);
-                            tm.begin_turn(thread);
-                            crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
-                            tm.get(thread).map(crate::thread_updates::thread_history_messages)
-                        }
-                        None => None,
-                    }
-                };
-                let Some(messages) = history else {
-                    info!(
-                        download = %download.id,
-                        thread = thread.0,
-                        "Download finished but its conversation is gone; not announcing it"
-                    );
-                    continue;
-                };
-                send_thread_messages_update_shared(&mut *writer, thread, &agent_session.thread_mgr).await?;
-                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
-
-                next_turn_id += 1;
-                let turn_id = next_turn_id;
-                // Even ids: server-initiated, like a resumed turn. A client
-                // allocates odd ones, so the two can never collide.
-                next_server_stream_id += 2;
-                let stream_id = next_server_stream_id;
-                let (handle, tool_cancel) = spawn_turn(
-                    TurnDeps {
-                        http: http.clone(),
-                        config: config.clone(),
-                        vault: vault.clone(),
-                        skill_mgr: skill_mgr.clone(),
-                        task_mgr: task_mgr.clone(),
-                        observer: observer.clone(),
-                        shared_config: shared_config.clone(),
-                        shared_model_ctx: shared_model_ctx.clone(),
-                        shared_copilot_session: shared_copilot_session.clone(),
-                        approvals: approvals.clone(),
-                        user_prompts: user_prompts.clone(),
-                        credentials: credentials.clone(),
-                        dom_queries: dom_queries.clone(),
-                        thread_mgr: agent_session.thread_mgr.clone(),
-                        threads_path: agent_session.threads_path.clone(),
-                        foreground: agent_session.foreground.clone(),
-                        connection_id,
-                        agent_id: agent_session.agent_id.clone(),
-                    },
-                    messages,
-                    stream_id,
-                    turn_id,
-                    Some(thread),
-                    model_task_tx.clone(),
-                    // The notice is already in the thread's log — recorded a
-                    // few lines up, before the history was read back. This is
-                    // the resume shape, not the chat one: the turn replays a
-                    // transcript that already ends with its own last user
-                    // message, so it must not append it a second time.
-                    true,
-                );
-                active_tasks
-                    .lock()
-                    .await
-                    .register(thread, turn_id, stream_id, handle, tool_cancel);
-            }
-            model_msg = model_task_rx.recv() => {
-                if let Some(task_msg) = model_msg {
-                    match task_msg {
-                        concurrent::ModelTaskMessage::Frame {
-                            stream_id,
-                            turn_id: _,
-                            data,
-                        } => {
-                            // Deserialize and forward frame to client, on the
-                            // stream its request came in on.
-                            if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
-                                writer.send_on_stream(stream_id, &frame).await?;
-                            }
-                        }
-                        concurrent::ModelTaskMessage::Done { thread_id, stream_id, turn_id, response, closed_out } => {
-                            // Backstop: every turn ends with exactly one
-                            // close-out, whatever path ended it. A turn that
-                            // reported an error frame and returned Ok — or a
-                            // future early return nobody audited — must not
-                            // leave the thread marked in-flight in every
-                            // client forever.
-                            if !closed_out {
-                                // On the turn's own stream, like every frame
-                                // that preceded it — a close-out on the
-                                // control stream never releases the clients'
-                                // per-stream bookkeeping for the turn.
-                                let mut scoped =
-                                    rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                ClientPayload::AgentSwitch { agent_id } => {
+                                    let switched = crate::agent_handler::handle_agent_switch(
                                         &mut *writer,
-                                        stream_id,
-                                    );
-                                protocol::server::send_response_done(
-                                    &mut scoped,
-                                    false,
-                                    Some(thread_id.0).filter(|id| *id != 0),
-                                )
-                                .await?;
-                            }
-                            // Retire this turn — unless the client's next
-                            // message already started another one on this
-                            // thread, which `reap_finished` allows.
-                            let still_this_turn =
-                                active_tasks.lock().await.remove_if(&thread_id, turn_id);
-                            let last_turn_drained =
-                                drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
-
-                            // Record assistant response in thread history if provided
-                            if let Some(text) = response {
-                                {
-                                    let mut tm = agent_session.thread_mgr.lock().await;
-                                    if let Some(thread) = tm.get_mut(thread_id) {
-                                        thread.add_message(rustyclaw_core::threads::MessageRole::Assistant, &text);
+                                        &mut config,
+                                        &base_system_prompt,
+                                        &mut agent_session,
+                                        &store_cell,
+                                        &task_mgr,
+                                        agent_id,
+                                    )
+                                    .await?;
+                                    if switched {
+                                        // The thread manager was replaced — follow
+                                        // the new one's sidebar events. The reader's
+                                        // cell was repointed inside the switch, before
+                                        // the client heard about it; doing it here
+                                        // would be after the new agent's thread list
+                                        // had already gone out, and the client asks
+                                        // for a transcript as soon as it sees one.
+                                        thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
+                                        // The downloads watcher reads this per
+                                        // event; until it moves, the panel would go
+                                        // on showing the previous agent's URLs and
+                                        // destination paths.
+                                        *current_agent
+                                            .write()
+                                            .expect("current agent cell poisoned") =
+                                            agent_session.agent_id.clone();
+                                        // The panel is stale the moment the agent
+                                        // changes, so correct it rather than
+                                        // waiting for the next transfer event.
+                                        download_handler::send_downloads_update(
+                                            &mut *writer,
+                                            &agent_session.agent_id,
+                                        )
+                                        .await?;
                                     }
                                 }
-                                send_thread_messages_update_shared(&mut *writer, thread_id, &agent_session.thread_mgr).await?;
-                            }
-
-                            // The turn's stop indicator: recorded before
-                            // the broadcast below, so the thread list the
-                            // clients get says "Ready" — and before the
-                            // persist, so a crash after this point still
-                            // leaves a closed turn on disk. Only with the
-                            // licence: a Done drained after the thread's
-                            // next turn began belongs to a displaced
-                            // predecessor, whose marker the displacement
-                            // already closed — writing one here would
-                            // close the *new* turn's marker while it
-                            // streams. A completion whose entry was merely
-                            // reaped keeps the licence: it is still the
-                            // thread's last word, and nothing else will
-                            // ever close the marker.
-                            if still_this_turn {
-                                agent_session.thread_mgr.lock().await.end_turn(thread_id, true);
-                            }
-                            requeue_deferred_wakes(&mut deferred_wakes, thread_id, &wake_tx)?;
-
-                            // Send updated thread list (status may have changed)
-                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
-
-                            // Persist thread state
-                            crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
-
-                            if last_turn_drained {
-                                break;
-                            }
-                        }
-                        concurrent::ModelTaskMessage::Error { thread_id, stream_id, turn_id, message, closed_out } => {
-                            // Same identity check as Done above — and the
-                            // same licence: only the turn still registered
-                            // may write its stop indicator.
-                            let still_this_turn =
-                                active_tasks.lock().await.remove_if(&thread_id, turn_id);
-                            if still_this_turn {
-                                // A failed turn still ends — with a stop
-                                // indicator that says so.
-                                agent_session.thread_mgr.lock().await.end_turn(thread_id, false);
-                                crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
-                            }
-                            // A turn that failed still frees the thread, and
-                            // a download that finished behind it is still
-                            // worth saying. Nothing about the failure makes
-                            // the file less arrived.
-                            requeue_deferred_wakes(&mut deferred_wakes, thread_id, &wake_tx)?;
-                            let last_turn_drained =
-                                drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
-
-                            // Send error frame
-                            let error_frame = ServerFrame {
-                                frame_type: ServerFrameType::Error,
-                                payload: ServerPayload::Error {
-                                    ok: false,
-                                    message,
-                                },
-                            };
-                            send_frame(&mut *writer, &error_frame).await?;
-
-                            // A turn that fails still ends, and its ending
-                            // must say which turn. The success path closes
-                            // out through the turn's own sink, which stamps
-                            // the thread; this path bypasses the sink, so it
-                            // stamps by hand — unless the turn already sent
-                            // its own close-out before the error surfaced.
-                            // Without one the clients keep the errored
-                            // thread marked in-flight forever — a stuck
-                            // spinner if it is on screen, a phantom one when
-                            // the user comes back to it. Zero is the
-                            // "no thread" registry key and never goes to the
-                            // client.
-                            if !closed_out {
-                                // On the turn's own stream, like every frame
-                                // that preceded it — a close-out on the
-                                // control stream never releases the clients'
-                                // per-stream bookkeeping for the turn.
-                                let mut scoped =
-                                    rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                ClientPayload::AgentCreate { name, agent_id, description } => {
+                                    crate::agent_handler::handle_agent_create(
                                         &mut *writer,
-                                        stream_id,
-                                    );
-                                protocol::server::send_response_done(
-                                    &mut scoped,
-                                    false,
-                                    Some(thread_id.0).filter(|id| *id != 0),
-                                )
-                                .await?;
+                                        &config,
+                                        &agent_session.agent_id,
+                                        name,
+                                        agent_id,
+                                        description,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::AgentDelete { agent_id } => {
+                                    crate::agent_handler::handle_agent_delete(
+                                        &mut *writer,
+                                        &config,
+                                        &agent_session.agent_id,
+                                        agent_id,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::HostInfoRequest => {
+                                    crate::kernel_handler::handle_host_info_request(&mut *writer).await?;
+                                }
+                                ClientPayload::LoadStatusRequest => {
+                                    crate::kernel_handler::handle_load_status_request(&mut *writer).await?;
+                                }
+                                ClientPayload::ServiceListRequest => {
+                                    crate::service_handler::handle_service_list(&mut *writer).await?;
+                                }
+                                ClientPayload::ServiceStartRequest { name } => {
+                                    crate::service_handler::handle_service_start(&mut *writer, &name).await?;
+                                }
+                                ClientPayload::ServiceStopRequest { name } => {
+                                    crate::service_handler::handle_service_stop(&mut *writer, &name).await?;
+                                }
+                                ClientPayload::ServiceRestartRequest { name } => {
+                                    crate::service_handler::handle_service_restart(&mut *writer, &name).await?;
+                                }
+                                ClientPayload::ServiceLogsRequest { name, tail } => {
+                                    crate::service_handler::handle_service_logs(&mut *writer, &name, tail).await?;
+                                }
+                                // ── New UI panel requests (stub handlers) ──
+                                payload @ (ClientPayload::CronListRequest
+                                | ClientPayload::CronUpsertRequest { .. }
+                                | ClientPayload::CronActionRequest { .. }
+                                | ClientPayload::MemoryListRequest { .. }
+                                | ClientPayload::MemoryUpsertRequest { .. }
+                                | ClientPayload::MemoryDeleteRequest { .. }
+                                | ClientPayload::HistorySearchRequest { .. }
+                                | ClientPayload::UsageStatsRequest { .. }
+                                | ClientPayload::LogsRequest { .. }
+                                | ClientPayload::McpListRequest
+                                | ClientPayload::McpConnectRequest { .. }
+                                | ClientPayload::McpDisconnectRequest { .. }
+                                | ClientPayload::ToolConfigRequest
+                                | ClientPayload::ToolToggleRequest { .. }
+                                | ClientPayload::ChannelStatusRequest
+                                | ClientPayload::ChannelPairRequest { .. }
+                                | ClientPayload::PendingApprovalsRequest
+                                | ClientPayload::ApprovalsBatchAction { .. }
+                                | ClientPayload::VoiceStart { .. }
+                                | ClientPayload::VoiceStop
+                                | ClientPayload::VoiceAudioChunk { .. }
+                                | ClientPayload::PreviewRequest { .. }
+                                | ClientPayload::PreviewFollowToggle { .. }) => {
+                                    crate::panel_handler::handle_panel_request(&mut *writer, payload, &mut config, &shared_config).await?;
+                                }
+                                // ── Messenger setup ──
+                                payload @ (ClientPayload::MessengerConfigRequest
+                                | ClientPayload::MessengerAccountSave { .. }
+                                | ClientPayload::MessengerAccountDelete { .. }
+                                | ClientPayload::MessengerSecretsMigrate { .. }
+                                | ClientPayload::MessengerRouteSave { .. }
+                                | ClientPayload::MessengerRouteDelete { .. }) => {
+                                    crate::messenger_config_handler::handle_messenger_config(
+                                        &mut *writer,
+                                        payload,
+                                        &mut config,
+                                        &shared_config,
+                                        &vault,
+                                    ).await?;
+                                }
+                                payload @ (ClientPayload::EngineList
+                                | ClientPayload::EngineAction { .. }
+                                | ClientPayload::EngineModelList { .. }
+                                | ClientPayload::EngineModelPull { .. }
+                                | ClientPayload::EngineModelAction { .. }) => {
+                                    crate::engine_handler::handle_engine_request(
+                                        &mut *writer,
+                                        payload,
+                                        &engine_registry,
+                                        &config.engines,
+                                    ).await?;
+                                }
+                                ClientPayload::EngineConfigSet { engine, config: new_cfg } => {
+                                    // Persist through the shared config — writing
+                                    // this connection's snapshot would erase
+                                    // settings other connections saved since it
+                                    // was taken (messenger accounts included).
+                                    config.engines.insert(engine.clone(), new_cfg.clone());
+                                    {
+                                        let mut shared = shared_config.write().await;
+                                        shared.engines.insert(engine.clone(), new_cfg.clone());
+                                        crate::helpers::persist_config(&shared);
+                                    }
+                                    crate::engine_handler::handle_engine_request(
+                                        &mut *writer,
+                                        ClientPayload::EngineConfigSet { engine, config: new_cfg },
+                                        &engine_registry,
+                                        &config.engines,
+                                    ).await?;
+                                }
+                                ClientPayload::ProviderModelList { provider } => {
+                                    handle_provider_model_list(&mut *writer, &provider, &config, &vault).await?;
+                                }
+                                ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } | ClientPayload::ProcessControl { .. } => {
+                                    // AuthChallenge/AuthResponse handled in auth phase.
+                                    // ToolApprovalResponse handled by the reader task.
+                                    // UserPromptResponse handled by the reader task.
+                                    // CredentialResponse handled by the reader task.
+                                    // DomQueryResponse handled by the reader task.
+                                    // ProcessControl handled by the reader task.
+                                }
                             }
+                }
+                // Handle messages from spawned model tasks
+                // Both of these carry the same `drain_deadline` guard as the
+                // frame arm above, and for a sharper reason than "the client has
+                // left". A wake taken while draining consumes the process-wide
+                // announcement claim, which is never released, and then has its
+                // freshly spawned turn aborted by the drain arm moments later —
+                // so every other window on this agent is told the transfer is
+                // already someone else's to announce, and it is announced
+                // nowhere. Leaving it unclaimed lets a connection that can still
+                // serve it do so. The panel arm is the milder case: frames
+                // written to a client that has gone away.
+                tick = panel_rx.recv(), if panel_open && drain_deadline.is_none() => {
+                    match tick {
+                        Some(()) => {
+                            download_handler::send_downloads_update(&mut *writer, &agent_session.agent_id).await?;
+                        }
+                        None => {
+                            // Unreachable for the same reason as the wake channel
+                            // below, and disabled for the same reason: `recv` on a
+                            // closed channel returns instantly, so an arm that
+                            // ignored this would spin a core.
+                            error!("Download event channel closed; the downloads panel will not update");
+                            panel_open = false;
+                        }
+                    }
+                }
+                finished = wake_rx.recv(), if wakes_open && drain_deadline.is_none() => {
+                    let Some(download) = finished else {
+                        // Unreachable: this scope holds a sender for the life of
+                        // the loop. Disabling the arm rather than looping is the
+                        // difference between a lost feature and a spun core,
+                        // because `recv` on a closed channel returns instantly.
+                        error!("Download completion channel closed; completions will no longer wake the agent");
+                        wakes_open = false;
+                        continue;
+                    };
+                    // The thread id is only meaningful inside the store it was
+                    // minted in, and this connection may have switched agents
+                    // while the bytes were arriving. Ids restart low in every
+                    // agent's store, so resolving it against the wrong one does
+                    // not fail — it lands on an unrelated conversation, files a
+                    // notice there and spawns a turn on it. Checked before the
+                    // thread id is read, not after.
+                    if !download.belongs_to(&agent_session.agent_id) {
+                        debug!(
+                            download = %download.id,
+                            "Download finished for an agent this connection is no longer showing; not announcing it"
+                        );
+                        continue;
+                    }
+                    // A transfer started outside any conversation — the CLI's
+                    // one-shot paths — has no transcript to be announced in.
+                    let Some(thread) = download
+                        .origin
+                        .as_ref()
+                        .and_then(|o| o.thread)
+                        .map(rustyclaw_core::threads::ThreadId)
+                    else {
+                        debug!(download = %download.id, "Download finished outside a conversation; nothing to notify");
+                        continue;
+                    };
+                    // Waking a thread that is mid-turn would *displace* that turn
+                    // — the Chat arm's rule is one turn per thread, and the loser
+                    // is aborted at its next await. Announcing a file by killing
+                    // the request the user is waiting on is not a trade worth
+                    // making, so it waits: the Done and Error arms re-offer
+                    // whatever is parked here once the thread goes idle.
+                    if active_tasks.lock().await.running_threads().contains(&thread) {
+                        debug!(
+                            download = %download.id,
+                            thread = thread.0,
+                            "Download finished while the thread was busy; deferring the wake"
+                        );
+                        deferred_wakes.entry(thread).or_default().push(download);
+                        continue;
+                    }
+                    // Exactly one connection may announce a given transfer.
+                    //
+                    // Ownership is by agent, and an agent can be open in more than
+                    // one window — a second desktop window, or a TUI alongside the
+                    // app, both defaulting to `main`. Every such connection has its
+                    // own watcher over the same process-global broadcast and its
+                    // own `active_tasks`, so all of them pass the filter above and
+                    // none of them can see that another has already started a turn.
+                    // Without this the notice is appended once per window and the
+                    // second turn displaces the first — aborting the reply the
+                    // first had just begun.
+                    //
+                    // Claimed here rather than at deferral: a connection that parks
+                    // a wake may go away while holding it, and the transfer should
+                    // still be announced by whoever is idle. Keyed by transfer id
+                    // alone, which is already unique for the life of the process.
+                    if !claim_download_announcement(&download.id) {
+                        debug!(
+                            download = %download.id,
+                            "Another connection is announcing this transfer; skipping"
+                        );
+                        continue;
+                    }
+                    let notice = download.summary();
+                    // The conversation can have been deleted while the bytes were
+                    // arriving. Filing the notice anywhere else would put it in a
+                    // transcript that never asked for the file.
+                    let history = {
+                        let mut tm = agent_session.thread_mgr.lock().await;
+                        match tm.get_mut(thread) {
+                            Some(t) => {
+                                // Recorded as the user's turn rather than a
+                                // system message: a system message part-way
+                                // through a conversation is rejected outright by
+                                // some providers, and this has to reach every one
+                                // of them. The wording is what marks it as the
+                                // environment speaking, not the person.
+                                t.add_message(rustyclaw_core::threads::MessageRole::User, &notice);
+                                tm.begin_turn(thread);
+                                crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
+                                tm.get(thread).map(crate::thread_updates::thread_history_messages)
+                            }
+                            None => None,
+                        }
+                    };
+                    let Some(messages) = history else {
+                        info!(
+                            download = %download.id,
+                            thread = thread.0,
+                            "Download finished but its conversation is gone; not announcing it"
+                        );
+                        continue;
+                    };
+                    send_thread_messages_update_shared(&mut *writer, thread, &agent_session.thread_mgr).await?;
+                    send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
 
-                            // Send updated thread list
-                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
+                    next_turn_id += 1;
+                    let turn_id = next_turn_id;
+                    // Even ids: server-initiated, like a resumed turn. A client
+                    // allocates odd ones, so the two can never collide.
+                    next_server_stream_id += 2;
+                    let stream_id = next_server_stream_id;
+                    let (handle, tool_cancel) = spawn_turn(
+                        TurnDeps {
+                            http: http.clone(),
+                            config: config.clone(),
+                            vault: vault.clone(),
+                            skill_mgr: skill_mgr.clone(),
+                            task_mgr: task_mgr.clone(),
+                            observer: observer.clone(),
+                            shared_config: shared_config.clone(),
+                            shared_model_ctx: shared_model_ctx.clone(),
+                            shared_copilot_session: shared_copilot_session.clone(),
+                            approvals: approvals.clone(),
+                            user_prompts: user_prompts.clone(),
+                            credentials: credentials.clone(),
+                            dom_queries: dom_queries.clone(),
+                            thread_mgr: agent_session.thread_mgr.clone(),
+                            threads_path: agent_session.threads_path.clone(),
+                            foreground: agent_session.foreground.clone(),
+                            connection_id,
+                            agent_id: agent_session.agent_id.clone(),
+                        },
+                        messages,
+                        stream_id,
+                        turn_id,
+                        Some(thread),
+                        model_task_tx.clone(),
+                        // The notice is already in the thread's log — recorded a
+                        // few lines up, before the history was read back. This is
+                        // the resume shape, not the chat one: the turn replays a
+                        // transcript that already ends with its own last user
+                        // message, so it must not append it a second time.
+                        true,
+                    );
+                    active_tasks
+                        .lock()
+                        .await
+                        .register(thread, turn_id, stream_id, handle, tool_cancel);
+                }
+                model_msg = model_task_rx.recv() => {
+                    if let Some(task_msg) = model_msg {
+                        match task_msg {
+                            concurrent::ModelTaskMessage::Frame {
+                                stream_id,
+                                turn_id: _,
+                                data,
+                            } => {
+                                // Deserialize and forward frame to client, on the
+                                // stream its request came in on.
+                                if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
+                                    writer.send_on_stream(stream_id, &frame).await?;
+                                }
+                            }
+                            concurrent::ModelTaskMessage::Done { thread_id, stream_id, turn_id, response, closed_out } => {
+                                // Backstop: every turn ends with exactly one
+                                // close-out, whatever path ended it. A turn that
+                                // reported an error frame and returned Ok — or a
+                                // future early return nobody audited — must not
+                                // leave the thread marked in-flight in every
+                                // client forever.
+                                if !closed_out {
+                                    // On the turn's own stream, like every frame
+                                    // that preceded it — a close-out on the
+                                    // control stream never releases the clients'
+                                    // per-stream bookkeeping for the turn.
+                                    let mut scoped =
+                                        rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                            &mut *writer,
+                                            stream_id,
+                                        );
+                                    protocol::server::send_response_done(
+                                        &mut scoped,
+                                        false,
+                                        Some(thread_id.0).filter(|id| *id != 0),
+                                    )
+                                    .await?;
+                                }
+                                // Retire this turn — unless the client's next
+                                // message already started another one on this
+                                // thread, which `reap_finished` allows.
+                                let still_this_turn =
+                                    active_tasks.lock().await.remove_if(&thread_id, turn_id);
+                                let last_turn_drained =
+                                    drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
 
-                            if last_turn_drained {
-                                break;
+                                // Record assistant response in thread history if provided
+                                if let Some(text) = response {
+                                    {
+                                        let mut tm = agent_session.thread_mgr.lock().await;
+                                        if let Some(thread) = tm.get_mut(thread_id) {
+                                            thread.add_message(rustyclaw_core::threads::MessageRole::Assistant, &text);
+                                        }
+                                    }
+                                    send_thread_messages_update_shared(&mut *writer, thread_id, &agent_session.thread_mgr).await?;
+                                }
+
+                                // The turn's stop indicator: recorded before
+                                // the broadcast below, so the thread list the
+                                // clients get says "Ready" — and before the
+                                // persist, so a crash after this point still
+                                // leaves a closed turn on disk. Only with the
+                                // licence: a Done drained after the thread's
+                                // next turn began belongs to a displaced
+                                // predecessor, whose marker the displacement
+                                // already closed — writing one here would
+                                // close the *new* turn's marker while it
+                                // streams. A completion whose entry was merely
+                                // reaped keeps the licence: it is still the
+                                // thread's last word, and nothing else will
+                                // ever close the marker.
+                                if still_this_turn {
+                                    agent_session.thread_mgr.lock().await.end_turn(thread_id, true);
+                                }
+                                requeue_deferred_wakes(&mut deferred_wakes, thread_id, &wake_tx)?;
+
+                                // Send updated thread list (status may have changed)
+                                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
+
+                                // Persist thread state
+                                crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+
+                                if last_turn_drained {
+                                    break;
+                                }
+                            }
+                            concurrent::ModelTaskMessage::Error { thread_id, stream_id, turn_id, message, closed_out } => {
+                                // Same identity check as Done above — and the
+                                // same licence: only the turn still registered
+                                // may write its stop indicator.
+                                let still_this_turn =
+                                    active_tasks.lock().await.remove_if(&thread_id, turn_id);
+                                if still_this_turn {
+                                    // A failed turn still ends — with a stop
+                                    // indicator that says so.
+                                    agent_session.thread_mgr.lock().await.end_turn(thread_id, false);
+                                    crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+                                }
+                                // A turn that failed still frees the thread, and
+                                // a download that finished behind it is still
+                                // worth saying. Nothing about the failure makes
+                                // the file less arrived.
+                                requeue_deferred_wakes(&mut deferred_wakes, thread_id, &wake_tx)?;
+                                let last_turn_drained =
+                                    drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
+
+                                // Send error frame
+                                let error_frame = ServerFrame {
+                                    frame_type: ServerFrameType::Error,
+                                    payload: ServerPayload::Error {
+                                        ok: false,
+                                        message,
+                                    },
+                                };
+                                send_frame(&mut *writer, &error_frame).await?;
+
+                                // A turn that fails still ends, and its ending
+                                // must say which turn. The success path closes
+                                // out through the turn's own sink, which stamps
+                                // the thread; this path bypasses the sink, so it
+                                // stamps by hand — unless the turn already sent
+                                // its own close-out before the error surfaced.
+                                // Without one the clients keep the errored
+                                // thread marked in-flight forever — a stuck
+                                // spinner if it is on screen, a phantom one when
+                                // the user comes back to it. Zero is the
+                                // "no thread" registry key and never goes to the
+                                // client.
+                                if !closed_out {
+                                    // On the turn's own stream, like every frame
+                                    // that preceded it — a close-out on the
+                                    // control stream never releases the clients'
+                                    // per-stream bookkeeping for the turn.
+                                    let mut scoped =
+                                        rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                            &mut *writer,
+                                            stream_id,
+                                        );
+                                    protocol::server::send_response_done(
+                                        &mut scoped,
+                                        false,
+                                        Some(thread_id.0).filter(|id| *id != 0),
+                                    )
+                                    .await?;
+                                }
+
+                                // Send updated thread list
+                                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, agent_session.foreground_id()).await?;
+
+                                if last_turn_drained {
+                                    break;
+                                }
                             }
                         }
                     }
                 }
-            }
-            // Handle thread events for push-based sidebar updates
-            thread_event = thread_events_rx.recv() => {
-                if let Ok(event) = thread_event {
-                    // Only send updates for events that affect sidebar display
-                    if event.triggers_sidebar_update() {
-                        // Healed first: one of these events is another
-                        // window closing the thread this one is in, and
-                        // reporting the pointer as it stands would tell the
-                        // client it has nothing open.
-                        let foreground = agent_session.heal_foreground().await;
-                        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, foreground).await?;
+                // Handle thread events for push-based sidebar updates
+                thread_event = thread_events_rx.recv() => {
+                    if let Ok(event) = thread_event {
+                        // Only send updates for events that affect sidebar display
+                        if event.triggers_sidebar_update() {
+                            // Healed first: one of these events is another
+                            // window closing the thread this one is in, and
+                            // reporting the pointer as it stands would tell the
+                            // client it has nothing open.
+                            let foreground = agent_session.heal_foreground().await;
+                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None, foreground).await?;
+                        }
                     }
                 }
             }
         }
+        Ok(())
     }
+    .await;
 
     // Clean up reader task
     reader_handle.abort();
@@ -2352,31 +2500,20 @@ pub(crate) async fn handle_connection(
         .await
         .ignore();
 
-    // Persist thread state on disconnect. This is the last write of the
-    // session and carries everything said during it, so a failure here is
-    // the most expensive one to lose silently.
-    // The connection is over and its turns are aborted with it — no
-    // completion message will ever drain for them. Their stop indicators
-    // say cancelled; left open, the threads would load as "open" on the
-    // next process start and resume turns whose client asked this process,
-    // which answered (or died trying) already. A process that crashes
-    // never gets here — that is the one case that leaves markers open,
-    // and exactly the one the resume path exists for.
-    {
-        let running = active_tasks.lock().await.running_threads();
-        if !running.is_empty() {
-            let mut tm = agent_session.thread_mgr.lock().await;
-            for thread in running {
-                tm.end_turn(thread, false);
-            }
-        }
-    }
-    // Through the session, not the manager directly: the last thing this
-    // client was looking at lives in a per-connection cell, and the store's
-    // foreground is how the next window finds its way back to it.
-    agent_session.persist_threads().await;
+    // The ordinary end of the connection: awaited here so what is on disk is
+    // settled before this returns, rather than left to the guard's spawn. A
+    // process that crashes reaches neither — that is the one case that leaves
+    // markers open, and exactly the one the resume path above exists for.
+    closeout.close_out().await;
 
-    Ok(())
+    // Said out loud, and only now that the cleanup above has run. A
+    // connection that ends this way ended because it could no longer reach
+    // its client, and the log is the only place that fact exists — the
+    // client, by definition, did not receive it.
+    if let Err(e) = &loop_result {
+        warn!(error = %e, "Connection ended on an error; its turns were closed out");
+    }
+    loop_result
 }
 
 /// Handle a `ProviderModelList` request: fetch the live model list for a
@@ -2577,6 +2714,8 @@ mod tests {
         /// stays connected while its turn streams. `None` hangs up the
         /// moment the frames run out (which asks running turns to stop).
         hang_up_after_done: Option<usize>,
+        /// See [`MockWriter::fail_from_streaming`].
+        fail_writes_from_streaming: bool,
     }
 
     struct MockReader {
@@ -2616,6 +2755,22 @@ mod tests {
 
     struct MockWriter {
         outgoing: Arc<Mutex<Vec<ServerFrame>>>,
+        /// Fail every write from the first thread list that reports a thread
+        /// as streaming — the broadcast the connection loop sends right after
+        /// opening a turn marker. A transport that dies exactly there is what
+        /// catches a teardown that does not run on the error path.
+        fail_from_streaming: bool,
+        /// Set once the transport has failed; it never recovers.
+        dead: bool,
+    }
+
+    /// Does this frame announce a thread as mid-turn?
+    fn announces_streaming(frame: &ServerFrame) -> bool {
+        matches!(
+            &frame.payload,
+            ServerPayload::ThreadsUpdate { threads, .. }
+                if threads.iter().any(|t| t.status.as_deref() == Some("Streaming"))
+        )
     }
 
     impl MockTransport {
@@ -2630,6 +2785,7 @@ mod tests {
                     incoming: Arc::new(Mutex::new(VecDeque::from(frames))),
                     outgoing: outgoing.clone(),
                     hang_up_after_done: None,
+                    fail_writes_from_streaming: false,
                 },
                 outgoing,
             )
@@ -2651,6 +2807,7 @@ mod tests {
                     incoming: Arc::new(Mutex::new(VecDeque::from(frames))),
                     outgoing: outgoing.clone(),
                     hang_up_after_done: Some(turns),
+                    fail_writes_from_streaming: false,
                 },
                 outgoing,
             )
@@ -2687,8 +2844,29 @@ mod tests {
                     // disconnect path instead. The test ends the connection
                     // by pushing an explicit end-of-stream.
                     hang_up_after_done: Some(usize::MAX),
+                    fail_writes_from_streaming: false,
                 },
                 incoming,
+                outgoing,
+            )
+        }
+
+        /// A client whose transport dies the instant the gateway announces a
+        /// turn as streaming — the write immediately after the turn's start
+        /// marker is written to the thread's log.
+        fn dying_on_streaming(
+            peer: PeerInfo,
+            frames: Vec<Option<ClientFrame>>,
+        ) -> (Self, Arc<Mutex<Vec<ServerFrame>>>) {
+            let outgoing = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    peer,
+                    incoming: Arc::new(Mutex::new(VecDeque::from(frames))),
+                    outgoing: outgoing.clone(),
+                    hang_up_after_done: Some(usize::MAX),
+                    fail_writes_from_streaming: true,
+                },
                 outgoing,
             )
         }
@@ -2723,6 +2901,8 @@ mod tests {
                 }),
                 Box::new(MockWriter {
                     outgoing: self.outgoing.clone(),
+                    fail_from_streaming: self.fail_writes_from_streaming,
+                    dead: false,
                 }),
             )
         }
@@ -2743,6 +2923,14 @@ mod tests {
     impl TransportWriter for MockWriter {
         async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
             self.outgoing.lock().await.push(frame.clone());
+            if self.fail_from_streaming && announces_streaming(frame) {
+                // Latched: a transport does not come back, so every write
+                // from here on fails too.
+                self.dead = true;
+            }
+            if self.dead {
+                anyhow::bail!("mock transport is gone");
+            }
             Ok(())
         }
 
@@ -3461,6 +3649,158 @@ mod tests {
         assert!(
             !restored.get(stuck).expect("thread exists").is_open(),
             "the abandoned marker must be closed, not left Streaming forever"
+        );
+
+        Ok(())
+    }
+
+    /// A connection that ends on a failed write still closes its turn marker.
+    ///
+    /// Every write in the connection loop can fail, and the loop propagated
+    /// those failures straight out of the connection handler — past the
+    /// teardown that writes the stop indicators for turns this connection
+    /// opened. The marker stayed open, so the thread reported as "Streaming"
+    /// with nothing left that could ever close it. Not until the *next*
+    /// process start, either: the sweep only touches markers older than the
+    /// running process, so a live daemon carried the stuck thread for as long
+    /// as it ran.
+    ///
+    /// The transport here dies on the broadcast the loop sends immediately
+    /// after opening the marker, which is the narrowest window there is.
+    #[tokio::test]
+    async fn a_connection_that_dies_mid_turn_still_closes_its_marker() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::dying_on_streaming(
+            peer,
+            vec![Some(ClientFrame {
+                frame_type: ClientFrameType::Chat,
+                payload: ClientPayload::Chat {
+                    messages: vec![rustyclaw_core::gateway::ChatMessage::text("user", "hello")],
+                    thread_id: None,
+                },
+            })],
+        );
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        let outcome = handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "a transport that stopped accepting writes must end the connection"
+        );
+
+        // The premise: the gateway did open a turn before the transport went.
+        assert!(
+            outgoing.lock().await.iter().any(announces_streaming),
+            "the test only means anything if a turn was announced as streaming"
+        );
+
+        let restored = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path)
+            .load()
+            .expect("the store should load");
+        let open: Vec<_> = restored.open_threads().into_iter().map(|id| id.0).collect();
+        assert!(
+            open.is_empty(),
+            "a connection that ended on a write failure must leave no turn \
+             marker open; these were left: {open:?}"
+        );
+
+        Ok(())
+    }
+
+    /// Dropping the guard without closing out still closes the markers.
+    ///
+    /// This is the path an early return or a panic takes — the one no
+    /// explicit call reaches, which is the reason the close-out is a guard
+    /// rather than a few lines at the bottom of the connection handler.
+    /// `Drop` cannot await, so the work is spawned; the test waits for it
+    /// the way the next process start would find it.
+    #[tokio::test]
+    async fn a_dropped_closeout_still_closes_the_markers() -> Result<()> {
+        let (_tmp, cfg) = test_config_with_temp_state()?;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+
+        let thread_mgr = rustyclaw_core::threads::manager_for(&threads_path);
+        let stuck = {
+            let mut tm = thread_mgr.lock().await;
+            let id = tm.create_chat("mid-turn");
+            tm.begin_turn(id);
+            id
+        };
+
+        let active = Arc::new(Mutex::new(concurrent::ActiveTasks::new()));
+        active.lock().await.register(
+            stuck,
+            1,
+            1,
+            tokio::spawn(std::future::pending::<()>()),
+            crate::ToolCancelFlag::default(),
+        );
+        let store: crate::agent_handler::StoreCell = Arc::new(std::sync::RwLock::new(
+            crate::agent_handler::ConnectionStore {
+                thread_mgr: thread_mgr.clone(),
+                threads_path: threads_path.clone(),
+                foreground: Default::default(),
+            },
+        ));
+
+        // Never closed out — the shape of a handler that returned early.
+        drop(TurnCloseout::new(active, store));
+
+        // The spawned close-out has to land; poll rather than sleep a fixed
+        // span so the test is not a race dressed up as a wait.
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !thread_mgr
+                    .lock()
+                    .await
+                    .get(stuck)
+                    .expect("thread exists")
+                    .is_open()
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            closed.is_ok(),
+            "dropping the guard must close the turn marker, not leave the \
+             thread reporting as Streaming forever"
         );
 
         Ok(())
