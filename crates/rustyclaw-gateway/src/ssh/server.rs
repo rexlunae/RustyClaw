@@ -5,7 +5,6 @@
 //! [`Transport`] abstraction.
 
 use super::*;
-use rustyclaw_core::ignore::Ignore;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -185,8 +184,15 @@ impl TransportAcceptor for SshServer {
 
 /// Session state for a connected client.
 struct ClientSession {
-    channel_data_tx: mpsc::Sender<Vec<u8>>,
+    channel_data_tx: mpsc::UnboundedSender<Vec<u8>>,
+    backlog: Arc<std::sync::atomic::AtomicUsize>,
 }
+
+/// Backlog of undecoded inbound chunks that means the connection's reader has
+/// stopped draining. Nothing enforces it — the queue is deliberately unbounded
+/// (see `channel_open_session`) and the point is only that the log says so
+/// instead of the connection going quiet.
+const INBOUND_BACKLOG_WARN: usize = 256;
 
 /// SSH connection handler.
 struct SshHandler {
@@ -453,9 +459,24 @@ impl Handler for SshHandler {
     ) -> Result<bool, Self::Error> {
         debug!(channel = ?channel.id(), "Session channel opened");
 
-        // Create channels for data transfer
-        let (data_tx, data_rx) = mpsc::channel::<Vec<u8>>(64);
-        let (_response_tx, _response_rx) = mpsc::channel::<Vec<u8>>(64);
+        // Unbounded, and it has to be. `data()` below runs *inside* russh's
+        // session loop, and that loop is also what flushes this connection's
+        // outgoing packets and applies the peer's window adjustments. A
+        // bounded queue there is not backpressure, it is a latch: the session
+        // loop parks on a full queue, so the gateway's own writes stop going
+        // out, so the connection loop parks on its outbound queue, so it stops
+        // draining inbound frames, so the reader stops draining this queue —
+        // which is what keeps it full. The ring closes and nothing ever
+        // errors or times out; the connection simply goes silent with the
+        // daemon still healthy. (The client half of the same ring is #372.)
+        //
+        // The bound that matters is the peer's SSH send window, which is
+        // enforced a layer down and does not need this queue's help.
+        let (data_tx, data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        // Counted by hand: an unbounded sender cannot report its own depth,
+        // and the depth is the one number that distinguishes "quiet client"
+        // from "reader has stopped".
+        let backlog = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         // Store session info
         let mut sessions = self.sessions.lock().await;
@@ -463,6 +484,7 @@ impl Handler for SshHandler {
             channel.id(),
             ClientSession {
                 channel_data_tx: data_tx,
+                backlog: backlog.clone(),
             },
         );
 
@@ -477,6 +499,7 @@ impl Handler for SshHandler {
             data_rx: Mutex::new(data_rx),
             channel_handle: Arc::new(Mutex::new(Some(channel))),
             recv_buffer: Mutex::new(Vec::new()),
+            backlog,
         };
 
         // Send to acceptor
@@ -495,12 +518,28 @@ impl Handler for SshHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         // Never await while holding the session map lock.
-        let tx = {
+        let session = {
             let sessions = self.sessions.lock().await;
-            sessions.get(&channel).map(|s| s.channel_data_tx.clone())
+            sessions
+                .get(&channel)
+                .map(|s| (s.channel_data_tx.clone(), s.backlog.clone()))
         };
-        if let Some(tx) = tx {
-            tx.send(data.to_vec()).await.ignore();
+        if let Some((tx, backlog)) = session {
+            // Deliberately not awaited — see `channel_open_session`. Parking
+            // here parks the whole SSH session, writes included.
+            if tx.send(data.to_vec()).is_ok() {
+                // A backlog this deep means the reader is not draining. Said
+                // once per power of two so a genuinely stuck connection is
+                // visible in the log without a burst flooding it.
+                let queued = backlog.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if queued >= INBOUND_BACKLOG_WARN && queued.is_power_of_two() {
+                    warn!(
+                        channel = ?channel,
+                        queued,
+                        "Inbound SSH chunks are backing up; the connection's reader is not draining"
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -520,9 +559,12 @@ impl Handler for SshHandler {
 /// SSH transport wrapping a russh channel.
 pub struct SshTransport {
     peer_info: PeerInfo,
-    data_rx: Mutex<mpsc::Receiver<Vec<u8>>>,
+    data_rx: Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
     channel_handle: Arc<Mutex<Option<Channel<Msg>>>>,
     recv_buffer: Mutex<Vec<u8>>,
+    /// Chunks handed over by the SSH session but not yet decoded. Diagnostic
+    /// only; see `INBOUND_BACKLOG_WARN`.
+    backlog: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait]
@@ -552,7 +594,11 @@ impl Transport for SshTransport {
 
             // Need more data
             match data_rx.recv().await {
-                Some(data) => buffer.extend(data),
+                Some(data) => {
+                    self.backlog
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    buffer.extend(data);
+                }
                 None => return Ok(None),
             }
         }
@@ -590,6 +636,7 @@ impl Transport for SshTransport {
             data_rx,
             channel_handle,
             recv_buffer,
+            backlog,
         } = *self;
 
         (
@@ -597,6 +644,7 @@ impl Transport for SshTransport {
                 peer_info: peer_info.clone(),
                 data_rx,
                 recv_buffer,
+                backlog,
             }),
             Box::new(SshWriter { channel_handle }),
         )
@@ -605,8 +653,9 @@ impl Transport for SshTransport {
 
 struct SshReader {
     peer_info: PeerInfo,
-    data_rx: Mutex<mpsc::Receiver<Vec<u8>>>,
+    data_rx: Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
     recv_buffer: Mutex<Vec<u8>>,
+    backlog: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait]
@@ -630,7 +679,11 @@ impl TransportReader for SshReader {
             }
 
             match data_rx.recv().await {
-                Some(data) => buffer.extend(data),
+                Some(data) => {
+                    self.backlog
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    buffer.extend(data);
+                }
                 None => return Ok(None),
             }
         }
