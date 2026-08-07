@@ -24,7 +24,6 @@ target
 # Added by cargo
 
 /target
-Cargo.lock
 
 # Claude Code local state (worktrees, scheduled-task locks, etc.)
 .claude/
