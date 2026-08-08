@@ -215,6 +215,8 @@ pub struct ThreadInfo {
     /// Working-directory override, or `None` when the thread inherits its
     /// project's directory.
     pub working_dir: Option<PathBuf>,
+    /// Whether the thread is pinned to the top of its project's list.
+    pub pinned: bool,
 }
 
 /// Project info for the sidebar's top level.
@@ -224,6 +226,8 @@ pub struct ProjectInfo {
     pub name: String,
     /// The project's working directory.
     pub path: PathBuf,
+    /// Whether the project is pinned to the top of the sidebar.
+    pub pinned: bool,
 }
 
 // ── Dialog state helpers ────────────────────────────────────────────────────

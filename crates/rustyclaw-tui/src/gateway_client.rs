@@ -180,6 +180,7 @@ pub(crate) fn gateway_event_to_gw_event(
                     has_summary: false,
                     project_id: t.project_id,
                     working_dir: t.working_dir,
+                    pinned: t.pinned,
                 })
                 .collect(),
             foreground_id,
@@ -201,6 +202,7 @@ pub(crate) fn gateway_event_to_gw_event(
                     id: p.id,
                     name: p.name,
                     path: p.path,
+                    pinned: p.pinned,
                 })
                 .collect(),
             active_id,

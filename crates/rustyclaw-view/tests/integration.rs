@@ -152,6 +152,7 @@ fn from_thread_info_preserves_fields() {
         is_foreground: true,
         message_count: 128,
         working_dir: Some("/tmp/worktree".into()),
+        pinned: true,
     };
 
     let data = SidebarItemData::from(&ti);
@@ -167,6 +168,7 @@ fn from_thread_info_preserves_fields() {
         data.working_dir.as_deref(),
         Some(std::path::Path::new("/tmp/worktree"))
     );
+    assert!(data.pinned, "pinned flag is carried through");
 }
 
 #[test]
@@ -180,6 +182,7 @@ fn from_thread_info_no_label() {
         is_foreground: false,
         message_count: 0,
         working_dir: None,
+        pinned: false,
     };
 
     let data = SidebarItemData::from(&ti);

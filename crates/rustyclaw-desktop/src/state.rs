@@ -1447,6 +1447,7 @@ mod tests {
             is_foreground: true,
             message_count: 0,
             working_dir: None,
+            pinned: false,
         }
     }
 

@@ -191,6 +191,10 @@ pub enum ClientFrameType {
     DownloadCancel = 92,
     /// Forget the transfers that have finished.
     DownloadsClearFinished = 93,
+    /// Pin or unpin a project in the sidebar.
+    ProjectPin = 94,
+    /// Pin or unpin a thread in the sidebar.
+    ThreadPin = 95,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -1042,6 +1046,17 @@ pub enum ClientPayload {
     },
     /// Drop the finished transfers from the list. Running ones stay.
     DownloadsClearFinished,
+    // ── Pinning (appended — positional bincode encoding) ──────────────────
+    /// Pin or unpin a project in the sidebar.
+    ProjectPin {
+        project_id: u64,
+        pinned: bool,
+    },
+    /// Pin or unpin a thread in the sidebar.
+    ThreadPin {
+        thread_id: u64,
+        pinned: bool,
+    },
 }
 
 /// Generic server frame envelope.

@@ -96,6 +96,8 @@ mod serialization {
         assert_eq!(ClientFrameType::DownloadsRequest as u8, 91);
         assert_eq!(ClientFrameType::DownloadCancel as u8, 92);
         assert_eq!(ClientFrameType::DownloadsClearFinished as u8, 93);
+        assert_eq!(ClientFrameType::ProjectPin as u8, 94);
+        assert_eq!(ClientFrameType::ThreadPin as u8, 95);
     }
 
     /// Typing the path fields as `PathBuf` did not change the wire format.
@@ -112,17 +114,20 @@ mod serialization {
             id: u64,
             name: String,
             path: String,
+            pinned: bool,
         }
 
         let typed = ProjectInfoDto {
             id: 3,
             name: "Api".into(),
             path: PathBuf::from("/srv/api"),
+            pinned: false,
         };
         let stringly = ProjectAsStrings {
             id: 3,
             name: "Api".into(),
             path: "/srv/api".into(),
+            pinned: false,
         };
         assert_eq!(
             serialize_frame(&typed).unwrap(),
@@ -281,11 +286,13 @@ mod serialization {
                         id: 1,
                         name: "Default".into(),
                         path: "/home/me/ws".into(),
+                        pinned: false,
                     },
                     ProjectInfoDto {
                         id: 2,
                         name: "Side".into(),
                         path: "/home/me/side".into(),
+                        pinned: false,
                     },
                 ],
                 active_id: 2,

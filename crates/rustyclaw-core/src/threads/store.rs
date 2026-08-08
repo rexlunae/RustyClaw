@@ -64,6 +64,8 @@ struct ThreadMeta {
     #[serde(default)]
     working_dir: Option<PathBuf>,
     result: Option<String>,
+    #[serde(default)]
+    pinned: bool,
     share_context: bool,
     #[serde(default)]
     memory_flushed: bool,
@@ -86,6 +88,7 @@ impl From<&AgentThread> for ThreadMeta {
             compacted_up_to: t.compacted_up_to,
             working_dir: t.working_dir.clone(),
             result: t.result.clone(),
+            pinned: t.pinned,
             share_context: t.share_context,
             memory_flushed: t.memory_flushed,
         }
@@ -110,6 +113,7 @@ impl From<ThreadMeta> for AgentThread {
             compacted_up_to: m.compacted_up_to,
             working_dir: m.working_dir,
             result: m.result,
+            pinned: m.pinned,
             share_context: m.share_context,
             memory_flushed: m.memory_flushed,
             open_turn: None,
@@ -420,6 +424,7 @@ fn fallback_meta(id: ThreadId) -> ThreadMeta {
         compacted_up_to: 0,
         working_dir: None,
         result: None,
+        pinned: false,
         share_context: true,
         memory_flushed: false,
     }

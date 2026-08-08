@@ -201,6 +201,17 @@ impl ThreadManager {
         }
     }
 
+    /// Pin or unpin a thread. Pinned threads sort to the top of their
+    /// project's list in the sidebar. Returns false if the thread is unknown.
+    pub fn set_pinned(&mut self, id: ThreadId, pinned: bool) -> bool {
+        if let Some(t) = self.threads.get_mut(&id) {
+            t.pinned = pinned;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Create a sub-agent thread.
     pub fn create_subagent(
         &mut self,

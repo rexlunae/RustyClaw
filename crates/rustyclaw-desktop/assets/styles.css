@@ -879,6 +879,57 @@ body,
     opacity: 0.45;
 }
 
+/* Pinned rows carry a persistent marker beside the name (the hover button
+   alone would hide the state until the cursor arrives). The button itself
+   tints amber while pinned. */
+.project-header.is-pinned .project-name::before,
+.session-row.is-pinned .session-label::before {
+    content: "📌";
+    margin-right: 4px;
+    font-size: 10px;
+    line-height: 1;
+}
+
+.row-action.is-pinned {
+    color: hsl(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l));
+}
+
+.row-action.is-pinned:hover {
+    background: hsla(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l), 0.16);
+    color: hsl(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l));
+}
+
+/* A thread parked on the user (waiting for approval/input) flashes its row
+   and header amber until answered. The overlay keeps the flash off the row's
+   own background, so an active row keeps its tint underneath. */
+.session-row.needs-input::after,
+.project-header.needs-input::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px
+        hsla(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l), 0.55);
+    background: hsla(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l), 0.10);
+    pointer-events: none;
+    animation: rc-needs-input 1.6s ease-in-out infinite;
+}
+
+.session-row.needs-input .session-label,
+.project-header.needs-input .project-name {
+    color: hsl(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l));
+}
+
+@keyframes rc-needs-input {
+    0%,
+    100% {
+        opacity: 0.2;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
 .session-row.is-active .session-state {
     opacity: 1;
 }

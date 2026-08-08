@@ -187,6 +187,27 @@ pub(crate) async fn handle_project_update(
     send_projects_update(writer, project_mgr).await
 }
 
+/// Handle a `ProjectPin`: pin or unpin a project and broadcast the new list.
+pub(crate) async fn handle_project_pin(
+    writer: &mut dyn transport::TransportWriter,
+    project_mgr: &mut ProjectManager,
+    projects_path: &Path,
+    project_id: u64,
+    pinned: bool,
+) -> Result<()> {
+    debug!("Project pin request: {} -> {}", project_id, pinned);
+    if project_mgr.set_pinned(ProjectId(project_id), pinned) {
+        crate::helpers::persist_projects(project_mgr, projects_path);
+        send_projects_update(writer, project_mgr).await
+    } else {
+        send_error(
+            writer,
+            format!("Cannot pin project {project_id}: not found"),
+        )
+        .await
+    }
+}
+
 /// Handle a `ProjectDelete`. Refuses to delete the Default or last project
 /// (enforced by [`ProjectManager::remove`]). If the active project was
 /// deleted, falls back to Default and repoints the workspace.
@@ -396,6 +417,63 @@ mod tests {
             "the stored path is the expanded one"
         );
         std::fs::remove_dir(&created).ignore();
+    }
+
+    /// Pinning flips the flag, persists it, and broadcasts the new list; an
+    /// unknown project is refused with an error that names it.
+    #[tokio::test]
+    async fn project_pin_flips_persists_and_broadcasts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut projects = ProjectManager::new();
+        let api = projects.create("Api", "/srv/api");
+        let projects_path = tmp.path().join("projects.json");
+        let mut writer = CapturingWriter::new();
+
+        handle_project_pin(&mut writer, &mut projects, &projects_path, api.0, true)
+            .await
+            .unwrap();
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert!(
+            projects.get(api).expect("project exists").pinned,
+            "the flag is flipped"
+        );
+
+        // The broadcast carries the new flag.
+        let update = writer
+            .frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ProjectsUpdate { projects, .. } => Some(projects.clone()),
+                _ => None,
+            })
+            .expect("a ProjectsUpdate was sent");
+        assert!(
+            update
+                .iter()
+                .find(|p| p.id == api.0)
+                .expect("in list")
+                .pinned,
+            "the broadcast carries the flag"
+        );
+
+        // A reload from disk sees the flag: pinning survives a restart.
+        let reloaded = ProjectManager::load_or_new(&projects_path);
+        assert!(reloaded.get(api).expect("reloaded").pinned);
+
+        // Unpin round-trips too, and an unknown id is refused.
+        let mut writer = CapturingWriter::new();
+        handle_project_pin(&mut writer, &mut projects, &projects_path, api.0, false)
+            .await
+            .unwrap();
+        assert!(!projects.get(api).expect("project exists").pinned);
+
+        let mut writer = CapturingWriter::new();
+        handle_project_pin(&mut writer, &mut projects, &projects_path, 999, true)
+            .await
+            .unwrap();
+        let errors = writer.errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("999"), "{errors:?}");
     }
 
     /// The workspace follows the foreground thread's *effective* directory,

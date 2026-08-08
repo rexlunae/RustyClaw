@@ -122,6 +122,7 @@ fn thread_dtos(
             has_summary: t.has_summary,
             project_id: t.project_id.0,
             working_dir: t.working_dir.clone(),
+            pinned: t.pinned,
         })
         .collect();
     (threads, foreground_id)
@@ -199,6 +200,7 @@ async fn send_threads_update_from(
             // project_id == 0 under the active project.
             project_id: 0,
             working_dir: None,
+            pinned: false,
         });
     }
 
@@ -242,6 +244,7 @@ async fn send_threads_update_from(
                 has_summary: session.status != SessionStatus::Active,
                 project_id: 0,
                 working_dir: None,
+                pinned: false,
             });
         }
     }
@@ -279,6 +282,7 @@ pub(crate) async fn send_projects_update(
             id: p.id.0,
             name: p.name,
             path: p.path,
+            pinned: p.pinned,
         })
         .collect();
     let frame = ServerFrame {
