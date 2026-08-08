@@ -25,10 +25,18 @@ jobs:
             features: ""
             features_label: default
             use_cross: false
+          # `deps-no-default` entries pass --no-default-features to the whole
+          # build graph, which only clears defaults for the *root* packages:
+          # dependency edges (rustyclaw → rustyclaw-core, …) still request
+          # core's defaults, and feature unification turns them back on. These
+          # jobs are real coverage for the dependent crates' own no-default
+          # configurations — the feature-off arms of rustyclaw-core and
+          # rustyclaw-gateway are only compiled by the standalone per-package
+          # step below. See issue #369.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             features: "--no-default-features"
-            features_label: no-default
+            features_label: deps-no-default
             use_cross: false
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
@@ -40,7 +48,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             features: "--no-default-features"
-            features_label: no-default
+            features_label: deps-no-default
             use_cross: true
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
@@ -52,7 +60,7 @@ jobs:
           - target: armv7-unknown-linux-gnueabihf
             runner: ubuntu-latest
             features: "--no-default-features"
-            features_label: no-default
+            features_label: deps-no-default
             use_cross: true
 
           # ── macOS x86_64 ─────────────────────────────────────────
@@ -78,7 +86,7 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             features: "--no-default-features"
-            features_label: no-default
+            features_label: deps-no-default
             use_cross: false
 
     steps:
@@ -128,6 +136,22 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo check --target ${{ matrix.target }} ${{ matrix.features }}
 
+      # Feature unification means the matrix entry above never compiles the
+      # feature-off arms of crates with non-empty default features. Check those
+      # crates by themselves so `#[cfg(not(feature = "…"))]` code builds on
+      # every deps-no-default target. Gateway is skipped under cross because it
+      # is excluded from cross builds entirely (see the cross branch above).
+      - name: Check feature-bearing crates standalone (no default features)
+        if: matrix.features_label == 'deps-no-default'
+        shell: bash
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross check --target ${{ matrix.target }} --package rustyclaw-core --no-default-features
+          else
+            cargo check --target ${{ matrix.target }} --package rustyclaw-core --no-default-features
+            cargo check --target ${{ matrix.target }} --package rustyclaw-gateway --no-default-features
+          fi
+
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -148,15 +172,18 @@ jobs:
         run: cargo test --lib --bins --no-default-features --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
 
       # The step above does not compile rustyclaw-core's `web-tools = off`
-      # arms, and neither does any `no-default` matrix entry in `check`.
+      # arms, and neither does any `deps-no-default` matrix entry in `check`.
       # rustyclaw and rustyclaw-tui both depend on rustyclaw-core with its
       # default features, so building them together unifies `web-tools` back
-      # on however the flag is passed. Checking the package by itself is what
+      # on however the flag is passed. Checking each package by itself is what
       # actually reaches that code — a `#[cfg(not(feature = "web-tools"))]`
       # function that failed to compile survived every job here until it was
-      # built alone.
-      - name: Check rustyclaw-core alone (no default features)
-        run: cargo check --package rustyclaw-core --no-default-features
+      # built alone. rustyclaw-gateway gets the same treatment for its own
+      # non-empty default features (semantic-memory, image-gen).
+      - name: Check feature-bearing crates alone (no default features)
+        run: |
+          cargo check --package rustyclaw-core --no-default-features
+          cargo check --package rustyclaw-gateway --no-default-features
 
       - name: Run doc tests
         run: cargo test --doc
