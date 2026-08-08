@@ -880,8 +880,11 @@ pub static SECURE_DELETE: ToolDef = ToolDef {
     name: "secure_delete",
     description: "Securely overwrite and delete a file or directory. Overwrites with \
                   random data multiple passes before unlinking. Requires confirm=true \
-                  to proceed (first call returns file info for review). Refuses \
-                  critical system paths.",
+                  to proceed (first call returns file info for review). The confirm \
+                  round-trip is a review aid, not an access control — the tool \
+                  permission level is what gates destructive use; keep this tool on \
+                  Ask unless you accept unattended deletion. Refuses critical system \
+                  paths.",
     parameters: vec![],
     execute: exec_secure_delete,
 };
