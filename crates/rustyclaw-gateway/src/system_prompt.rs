@@ -302,8 +302,8 @@ mod tests {
     #[test]
     fn default_base_prompt_names_the_agent() {
         assert_eq!(
-            default_base_prompt("Erskin Semaj"),
-            "You are Erskin Semaj, a helpful AI assistant running inside RustyClaw."
+            default_base_prompt("Test Agent"),
+            "You are Test Agent, a helpful AI assistant running inside RustyClaw."
         );
     }
 
@@ -317,7 +317,11 @@ mod tests {
 
     #[test]
     fn identity_section_uses_configured_name() {
-        assert!(build_identity_section("Erskin Semaj").contains("Erskin Semaj"));
-        assert!(build_identity_section("Erskin Semaj").contains("Introduce yourself by that name"));
+        // Whatever name is configured must appear — the section is built from
+        // the argument, not a hardcoded agent name.
+        for name in ["Test Agent", "Another Operative", "unit-test-bot"] {
+            assert!(build_identity_section(name).contains(name));
+        }
+        assert!(build_identity_section("Test Agent").contains("Introduce yourself by that name"));
     }
 }
