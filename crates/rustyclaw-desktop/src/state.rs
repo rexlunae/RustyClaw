@@ -1215,6 +1215,56 @@ impl AppState {
         self.streaming_bytes = 0;
     }
 
+    /// The resolved lifecycle state for a thread's sidebar icon.
+    ///
+    /// Client-side knowledge outranks the gateway's status string: a prompt
+    /// the agent is parked on (tool approval, question, credential request,
+    /// sign-in) for this thread is "Asking" even while the gateway still
+    /// reports the turn streaming, and a locally-known in-flight turn is
+    /// "Working" before the authoritative "Streaming" lands. With neither,
+    /// the gateway's status (Ready / Completed / Failed / …) speaks.
+    pub fn thread_state(&self, id: u64) -> rustyclaw_view::ThreadState {
+        use rustyclaw_view::ThreadState;
+        if self.thread_has_pending_prompt(id) {
+            return ThreadState::Asking;
+        }
+        if self.in_flight.contains(&id) {
+            return ThreadState::Working;
+        }
+        self.threads
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| ThreadState::from_status(&t.status))
+            .unwrap_or_default()
+    }
+
+    /// Whether the agent is parked waiting on the user for this thread.
+    ///
+    /// Mirrors where the prompt cards render: an entry tagged with the
+    /// thread names it, and an untagged one (raised before its turn had a
+    /// thread) shows wherever the user is — so it reads as asking on the
+    /// foreground thread.
+    fn thread_has_pending_prompt(&self, id: u64) -> bool {
+        let owned_by = |owner: Option<u64>| {
+            owner == Some(id) || (owner.is_none() && self.foreground_thread_id == Some(id))
+        };
+        self.pending_tool_approvals
+            .iter()
+            .any(|(owner, ..)| owned_by(*owner))
+            || self
+                .pending_user_prompts
+                .iter()
+                .any(|(owner, _)| owned_by(*owner))
+            || self
+                .pending_credential_requests
+                .iter()
+                .any(|(owner, ..)| owned_by(*owner))
+            || self
+                .pending_device_flows
+                .iter()
+                .any(|(owner, ..)| owned_by(*owner))
+    }
+
     /// Reset the processing/streaming indicators to idle. Does not release
     /// `streaming_thread_id` — an in-flight response keeps its owner until
     /// [`response_done`](Self::response_done) or disconnect.
@@ -1304,6 +1354,7 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
 mod tests {
     use super::*;
     use rustyclaw_core::types::MessageRole;
+    use rustyclaw_core::user_prompt_types::PromptType;
 
     /// Regression test: with extended thinking, the reasoning block folds
     /// when the first answer chunk arrives — the chunk must open a fresh
@@ -1488,6 +1539,110 @@ mod tests {
         assert!(s.in_flight.contains(&1), "thread 1 is still answering");
         assert!(!s.in_flight.contains(&2));
         assert!(s.is_processing, "the foreground thread is still running");
+    }
+
+    // ── Sidebar state icons ─────────────────────────────────────────────────
+
+    use rustyclaw_view::ThreadState;
+
+    /// A state with `threads` populated as a `ThreadsUpdate` delivered them.
+    fn with_threads(statuses: &[(&str, &str)]) -> AppState {
+        let mut s = idle_state();
+        let list: Vec<ThreadInfo> = statuses
+            .iter()
+            .map(|(id, status)| thread_at(id.parse().unwrap(), status))
+            .collect();
+        s.apply_thread_statuses(&list);
+        s.threads = list;
+        s
+    }
+
+    #[test]
+    fn ready_thread_is_ready() {
+        let s = with_threads(&[("7", "Ready")]);
+        assert_eq!(s.thread_state(7), ThreadState::Ready);
+    }
+
+    #[test]
+    fn streaming_thread_is_working() {
+        let s = with_threads(&[("7", "Streaming")]);
+        assert_eq!(s.thread_state(7), ThreadState::Working);
+    }
+
+    #[test]
+    fn failed_status_is_error() {
+        let s = with_threads(&[("7", "Failed: boom")]);
+        assert_eq!(s.thread_state(7), ThreadState::Error);
+    }
+
+    #[test]
+    fn unknown_thread_is_idle() {
+        let s = with_threads(&[]);
+        assert_eq!(s.thread_state(99), ThreadState::Idle);
+    }
+
+    /// A pending tool approval parks the thread on the user even while the
+    /// gateway still reports the turn streaming: the icon must say the ball
+    /// is in the user's court, not that the agent is busy.
+    #[test]
+    fn pending_tool_approval_is_asking_over_working() {
+        let mut s = with_threads(&[("7", "Streaming")]);
+        s.pending_tool_approvals
+            .push_back((Some(7), "call-1".into(), "bash".into(), "{}".into()));
+        assert_eq!(s.thread_state(7), ThreadState::Asking);
+    }
+
+    #[test]
+    fn pending_user_prompt_is_asking() {
+        let mut s = with_threads(&[("7", "Ready")]);
+        s.pending_user_prompts.push((
+            Some(7),
+            UserPrompt {
+                id: "p-1".into(),
+                title: "pick one".into(),
+                description: None,
+                prompt_type: PromptType::Confirm { default: true },
+            },
+        ));
+        assert_eq!(s.thread_state(7), ThreadState::Asking);
+    }
+
+    /// An untagged prompt (raised before its turn had a thread) renders its
+    /// card wherever the user is — so it reads as asking on the foreground
+    /// thread only, never on every row.
+    #[test]
+    fn untagged_prompt_reads_as_asking_on_the_foreground_only() {
+        let mut s = with_threads(&[("1", "Ready"), ("2", "Ready")]);
+        s.set_foreground_thread(Some(1));
+        s.pending_user_prompts.push((
+            None,
+            UserPrompt {
+                id: "p-1".into(),
+                title: "hi?".into(),
+                description: None,
+                prompt_type: PromptType::Confirm { default: true },
+            },
+        ));
+
+        assert_eq!(s.thread_state(1), ThreadState::Asking);
+        assert_eq!(s.thread_state(2), ThreadState::Ready);
+    }
+
+    /// A credential request for another thread must not light up this one.
+    #[test]
+    fn prompt_for_another_thread_leaves_this_one_ready() {
+        let mut s = with_threads(&[("1", "Ready"), ("2", "Ready")]);
+        s.set_foreground_thread(Some(1));
+        s.pending_credential_requests.push_back((
+            Some(2),
+            "req-1".into(),
+            "openai".into(),
+            "key".into(),
+            "msg".into(),
+        ));
+
+        assert_eq!(s.thread_state(1), ThreadState::Ready);
+        assert_eq!(s.thread_state(2), ThreadState::Asking);
     }
 
     /// Persisted history keeps its roles: a replayed conversation renders as

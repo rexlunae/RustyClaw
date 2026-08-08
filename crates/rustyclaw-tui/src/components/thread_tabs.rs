@@ -34,6 +34,7 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
         },
         Thread {
             label: String,
+            icon: &'static str,
             active: bool,
             selected: bool,
         },
@@ -60,6 +61,7 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
         }
         rows.push(Row::Thread {
             label: t.truncated_label(20).into_owned(),
+            icon: t.state.icon(),
             active: t.is_foreground,
             selected: props.focused && idx == props.selected,
         });
@@ -88,13 +90,14 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
                             )
                         }
                     }.into_any(),
-                    Row::Thread { label, active, selected } => {
-                        let indicator = if active { "▸" } else { "·" };
+                    Row::Thread { label, icon, active, selected } => {
+                        // The state icon leads (▶ working, ❓ asking, ○ ready,
+                        // …); the row colour still marks the foreground.
                         let color = if active || selected { theme::ACCENT } else { theme::TEXT_DIM };
                         element! {
                             View(padding_left: 2) {
                                 Text(
-                                    content: format!("{} {}", indicator, label),
+                                    content: format!("{} {}", icon, label),
                                     color: color,
                                     weight: if active || selected { Weight::Bold } else { Weight::Normal },
                                 )

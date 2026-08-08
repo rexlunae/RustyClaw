@@ -1325,6 +1325,21 @@ pub fn App() -> Element {
         }
     };
 
+    // The sidebar tree, with each row's state icon resolved from the
+    // client-side knowledge the gateway's status string does not carry
+    // (pending prompts, locally-known in-flight turns).
+    let sidebar_tree = {
+        let s = state.read();
+        let mut tree =
+            rustyclaw_view::SidebarTree::build(&s.projects, &s.threads, s.active_project_id);
+        for group in &mut tree.groups {
+            for item in &mut group.threads {
+                item.state = s.thread_state(item.id);
+            }
+        }
+        tree
+    };
+
     rsx! {
         style { dangerous_inner_html: BULMA }
         style { dangerous_inner_html: STYLES }
@@ -1417,11 +1432,7 @@ pub fn App() -> Element {
                         on_rename_project: on_rename_project,
                         on_edit_project: on_edit_project,
                         on_delete_project: on_delete_project,
-                        tree: rustyclaw_view::SidebarTree::build(
-                            &state.read().projects,
-                            &state.read().threads,
-                            state.read().active_project_id,
-                        ),
+                        tree: sidebar_tree,
                         foreground_id: state.read().foreground_thread_id,
                         on_pair: move |_| show_pairing.set(true),
                         on_secrets: move |_| {

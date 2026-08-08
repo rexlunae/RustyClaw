@@ -1956,6 +1956,7 @@ pub(super) fn apply_gw_event(
 /// This is the client's transport→view boundary; grouping and display logic
 /// then live entirely in rustyclaw-view.
 fn item_from_thread(t: &crate::action::ThreadInfo) -> rustyclaw_view::SidebarItemData {
+    let status = t.status.clone().unwrap_or_default();
     rustyclaw_view::SidebarItemData {
         id: t.id,
         project_id: t.project_id,
@@ -1965,7 +1966,8 @@ fn item_from_thread(t: &crate::action::ThreadInfo) -> rustyclaw_view::SidebarIte
             Some(t.label.clone())
         },
         description: t.description.clone(),
-        status: t.status.clone().unwrap_or_default(),
+        status: status.clone(),
+        state: rustyclaw_view::ThreadState::from_status(&status),
         is_foreground: t.is_foreground,
         message_count: t.message_count,
         working_dir: t.working_dir.clone(),

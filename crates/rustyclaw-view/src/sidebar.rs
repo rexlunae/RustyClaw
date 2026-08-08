@@ -7,6 +7,97 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
+/// Lifecycle state of a thread's turn, for the sidebar state icon.
+///
+/// The desktop resolves this per thread by layering client-side knowledge
+/// (a locally-known in-flight turn, a prompt the agent is parked on) over
+/// the gateway's status string; the TUI derives it from the status alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThreadState {
+    /// No conversation yet, or the status is unknown.
+    #[default]
+    Idle,
+    /// The agent is running a turn in this thread.
+    Working,
+    /// The agent is parked waiting on the user (tool approval, question,
+    /// credential request, sign-in).
+    Asking,
+    /// Turn finished cleanly; ready for the next prompt.
+    Ready,
+    /// The turn is paused (backgrounded or waiting).
+    Paused,
+    /// The task/sub-agent turn finished with a result.
+    Completed,
+    /// The turn ended in an error.
+    Error,
+    /// The turn was cancelled.
+    Cancelled,
+}
+
+impl ThreadState {
+    /// Map a gateway status string to a state.
+    ///
+    /// The gateway's `ThreadInfo.status` is one of `"Streaming"` (an open
+    /// turn), `"Ready"` (an interactive thread at rest), or the
+    /// `ThreadStatus` display text (`"Completed"`, `"Failed: …"`,
+    /// `"Waiting: …"`, …).
+    pub fn from_status(status: &str) -> Self {
+        match status {
+            "Streaming" | "Active" | "Running" => Self::Working,
+            "Ready" => Self::Ready,
+            "Paused" => Self::Paused,
+            "Completed" => Self::Completed,
+            "Cancelled" => Self::Cancelled,
+            s if s.starts_with("Running") => Self::Working,
+            s if s.starts_with("Waiting") => Self::Asking,
+            s if s.starts_with("Failed") => Self::Error,
+            _ => Self::Idle,
+        }
+    }
+
+    /// A single glyph for display.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Idle => "·",
+            Self::Working => "▶",
+            Self::Asking => "❓",
+            Self::Ready => "○",
+            Self::Paused => "⏸",
+            Self::Completed => "✓",
+            Self::Error => "✕",
+            Self::Cancelled => "⊘",
+        }
+    }
+
+    /// Short human-readable label (tooltips / accessibility).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::Working => "Working",
+            Self::Asking => "Asking",
+            Self::Ready => "Ready",
+            Self::Paused => "Paused",
+            Self::Completed => "Completed",
+            Self::Error => "Error",
+            Self::Cancelled => "Cancelled",
+        }
+    }
+
+    /// CSS modifier class for the state icon (`is-working`, `is-asking`, …).
+    pub fn css_class(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Asking => "asking",
+            Self::Ready => "ready",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Error => "error",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// Data for a single item in the thread sidebar.
 ///
 /// Rendered as a row showing the thread label, message count,
@@ -31,6 +122,9 @@ pub struct SidebarItemData {
 
     /// Status string (e.g. "active", "idle").
     pub status: String,
+
+    /// Resolved lifecycle state for the row's state icon.
+    pub state: ThreadState,
 
     /// Whether this is the currently foregrounded thread.
     pub is_foreground: bool,
@@ -82,27 +176,31 @@ impl SidebarItemData {
         }
     }
 
-    /// The full title tooltip text (label + description joined by newline).
+    /// The full title tooltip text (label + description joined by newline,
+    /// with the resolved state as the last line).
     pub fn title_text(&self) -> String {
-        let label = self.display_label();
+        let state = format!("[{}]", self.state.label());
         match self.description.as_deref() {
-            Some(desc) if !desc.is_empty() => format!("{label}\n{desc}"),
-            _ => label.into_owned(),
+            Some(desc) if !desc.is_empty() => {
+                format!("{}\n{}\n{}", self.display_label(), desc, state)
+            }
+            _ => format!("{}\n{}", self.display_label(), state),
         }
     }
 
     /// A brief status indicator character for display.
     ///
-    /// Maps common status strings to recognisable symbols:
-    /// - `"active"` / `"foreground"` → `"●"`
-    /// - `"idle"` → `"○"`
-    /// - `"error"` / `"failed"` → `"✕"`
-    /// - Anything else → `"·"`
+    /// Legacy helper kept for callers that render a plain dot; new
+    /// renderers should use [`ThreadState::icon`] on [`Self::state`]
+    /// instead, which carries the same information with colour/animation
+    /// hooks.
     pub fn status_dot(&self) -> &'static str {
-        match self.status.as_str() {
-            "active" | "foreground" => "●",
-            "idle" => "○",
-            "error" | "failed" => "✕",
+        match self.state {
+            ThreadState::Working => "●",
+            ThreadState::Asking => "?",
+            ThreadState::Ready => "○",
+            ThreadState::Completed => "✓",
+            ThreadState::Error => "✕",
             _ => "·",
         }
     }
@@ -116,6 +214,7 @@ impl From<&rustyclaw_core::ui::ThreadInfo> for SidebarItemData {
             label: t.label.clone(),
             description: t.description.clone(),
             status: t.status.clone(),
+            state: ThreadState::from_status(&t.status),
             is_foreground: t.is_foreground,
             message_count: t.message_count,
             working_dir: t.working_dir.clone(),
@@ -398,6 +497,66 @@ mod tests {
             message_count: 0,
             working_dir: None,
         }
+    }
+
+    #[test]
+    fn from_status_maps_gateway_statuses() {
+        use ThreadState::*;
+        assert_eq!(ThreadState::from_status("Streaming"), Working);
+        assert_eq!(ThreadState::from_status("Active"), Working);
+        assert_eq!(ThreadState::from_status("Running"), Working);
+        assert_eq!(
+            ThreadState::from_status("Running: downloading model"),
+            Working
+        );
+        assert_eq!(ThreadState::from_status("Ready"), Ready);
+        assert_eq!(ThreadState::from_status("Waiting: pick a tool"), Asking);
+        assert_eq!(ThreadState::from_status("Paused"), Paused);
+        assert_eq!(ThreadState::from_status("Completed"), Completed);
+        assert_eq!(ThreadState::from_status("Failed: boom"), Error);
+        assert_eq!(ThreadState::from_status("Cancelled"), Cancelled);
+        assert_eq!(ThreadState::from_status("something-else"), Idle);
+    }
+
+    #[test]
+    fn state_icon_has_a_glyph_and_label_for_every_state() {
+        use ThreadState::*;
+        for (state, icon, label) in [
+            (Idle, "·", "Idle"),
+            (Working, "▶", "Working"),
+            (Asking, "❓", "Asking"),
+            (Ready, "○", "Ready"),
+            (Paused, "⏸", "Paused"),
+            (Completed, "✓", "Completed"),
+            (Error, "✕", "Error"),
+            (Cancelled, "⊘", "Cancelled"),
+        ] {
+            assert_eq!(state.icon(), icon, "icon for {label}");
+            assert_eq!(state.label(), label);
+            assert!(!state.css_class().is_empty());
+        }
+    }
+
+    #[test]
+    fn thread_info_derives_state_from_status() {
+        let mut t = thread(1, 0);
+        t.status = "Streaming".into();
+        assert_eq!(SidebarItemData::from(&t).state, ThreadState::Working);
+
+        t.status = "Ready".into();
+        assert_eq!(SidebarItemData::from(&t).state, ThreadState::Ready);
+    }
+
+    #[test]
+    fn title_text_appends_the_state_label() {
+        let mut t = thread(1, 0);
+        t.status = "Streaming".into();
+        let item = SidebarItemData::from(&t);
+        let title = item.title_text();
+        assert!(
+            title.contains("[Working]"),
+            "tooltip names the state: {title}"
+        );
     }
 
     #[test]
