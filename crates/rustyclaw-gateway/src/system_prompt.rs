@@ -4,6 +4,7 @@
 //! including workspace files (SOUL.md, etc.), skills, tasks, and guidelines.
 
 use rustyclaw_core::config::Config;
+use rustyclaw_core::gateway::SessionOrigin;
 use rustyclaw_core::workspace_context::{SessionType, WorkspaceContext};
 
 use super::{SharedModelRegistry, SharedSkillManager, SharedTaskManager};
@@ -16,6 +17,8 @@ pub struct SessionContext<'a> {
     pub session_key: Option<&'a str>,
     /// Optional platform name (e.g., "discord", "telegram", "tui")
     pub platform: Option<&'a str>,
+    /// Where this session is coming from.
+    pub origin: Option<SessionOrigin>,
     /// Optional channel name
     pub channel: Option<&'a str>,
     /// Optional sender name
@@ -28,30 +31,11 @@ impl Default for SessionContext<'_> {
             session_type: SessionType::Main,
             session_key: None,
             platform: Some("tui"),
+            origin: None,
             channel: None,
             sender: None,
         }
     }
-}
-
-/// Build a complete system prompt for TUI or messenger sessions.
-///
-/// This function builds the full system prompt including:
-/// - Base system prompt from config
-/// - Safety guardrails
-/// - Workspace context (SOUL.md, AGENTS.md, TOOLS.md, etc.)
-/// - Skills context
-/// - Active tasks section
-/// - Model guidance (when `model_registry` is provided)
-/// - Tool usage guidelines
-/// - Silent reply and heartbeat guidance
-/// - Runtime info
-pub async fn build_system_prompt(
-    config: &Config,
-    task_mgr: &SharedTaskManager,
-    skill_mgr: &SharedSkillManager,
-) -> String {
-    build_system_prompt_full(config, task_mgr, None, skill_mgr, SessionContext::default()).await
 }
 
 /// Build a complete system prompt with all optional parameters.
@@ -145,21 +129,13 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
             .to_string(),
     );
 
-    // Add context section if we have platform/channel/sender info
-    if ctx.platform.is_some() || ctx.channel.is_some() || ctx.sender.is_some() {
-        parts.push(format!(
-            "## Session Context\n\
-            - Platform: {}\n\
-            - Channel: {}\n\
-            - Sender: {}\n\
-            \n\
-            When responding:\n\
-            - Be concise and helpful\n\
-            - You have access to tools — use them when helpful",
-            ctx.platform.unwrap_or("unknown"),
-            ctx.channel.unwrap_or("direct"),
-            ctx.sender.unwrap_or("user"),
-        ));
+    // Add context section if we have platform/channel/sender/origin info
+    if ctx.platform.is_some()
+        || ctx.channel.is_some()
+        || ctx.sender.is_some()
+        || ctx.origin.is_some()
+    {
+        parts.push(build_session_context_section(ctx));
     }
 
     // Add runtime info
@@ -171,6 +147,27 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
     ));
 
     parts.join("\n\n")
+}
+
+/// The `## Session Context` section: where this session is coming from.
+fn build_session_context_section(ctx: SessionContext<'_>) -> String {
+    format!(
+        "## Session Context\n\
+        - Origin: {}\n\
+        - Platform: {}\n\
+        - Channel: {}\n\
+        - Sender: {}\n\
+        \n\
+        When responding:\n\
+        - Be concise and helpful\n\
+        - You have access to tools — use them when helpful",
+        ctx.origin
+            .map(|o| o.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        ctx.platform.unwrap_or("unknown"),
+        ctx.channel.unwrap_or("direct"),
+        ctx.sender.unwrap_or("user"),
+    )
 }
 
 /// Build the Tool Usage Guidelines section for system prompts.
@@ -261,4 +258,31 @@ patterns are more precise and don't break on formatting differences.
 - Keep narration brief and value-dense
 - Use plain language unless in technical context"
         .to_string()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_context_reports_origin() {
+        use rustyclaw_core::gateway::SessionOrigin;
+        for origin in [
+            SessionOrigin::Desktop,
+            SessionOrigin::Tui,
+            SessionOrigin::Remote,
+            SessionOrigin::Local,
+            SessionOrigin::Messenger,
+            SessionOrigin::Trigger,
+        ] {
+            let section = build_session_context_section(SessionContext {
+                origin: Some(origin),
+                platform: None,
+                ..Default::default()
+            });
+            assert!(
+                section.contains(&format!("- Origin: {origin}")),
+                "origin {origin:?} missing from session context"
+            );
+        }
+    }
 }

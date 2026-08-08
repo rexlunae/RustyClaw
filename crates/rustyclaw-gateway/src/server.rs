@@ -16,7 +16,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use rustyclaw_core::gateway::{
     ClientFrame, ClientFrameType, ClientPayload, ProbeResult, ServerFrame, ServerFrameType,
-    ServerPayload, StatusType, WireFrame, deserialize_frame, protocol, transport,
+    ServerPayload, SessionOrigin, StatusType, WireFrame, deserialize_frame, protocol, transport,
 };
 use rustyclaw_core::providers as crate_providers;
 
@@ -124,6 +124,9 @@ struct TurnDeps {
     /// The agent this turn belongs to. What a download the turn starts is
     /// owned by — the connection is not, because it can switch agents.
     agent_id: String,
+    /// Where this turn's messages come from. Injected into the system prompt
+    /// so the agent knows.
+    session_origin: SessionOrigin,
 }
 
 /// Spawn one turn: run the conversation through `handle_chat_frame` in its
@@ -174,6 +177,7 @@ fn spawn_turn(
             &deps.thread_mgr,
             turn_thread,
             &deps.threads_path,
+            deps.session_origin,
             &deps.foreground,
             is_resume,
         )
@@ -350,6 +354,13 @@ pub(crate) async fn handle_connection(
     let peer_info = conn.peer_info().clone();
     let (mut reader, mut writer) = conn.into_split();
     let peer_ip = peer_info.addr.map(|a| a.ip());
+    // Whether this connection is local (loopback or unknown peer) or remote.
+    // Combined with the client's declared kind on each Chat frame, this is
+    // the "origin" the agent sees in its system prompt.
+    let remote_peer = match peer_info.addr {
+        Some(addr) => !addr.ip().is_loopback(),
+        None => false,
+    };
 
     // Snapshot config and model context for this connection.
     // Reload updates the shared state; new connections pick up changes.
@@ -1001,6 +1012,11 @@ pub(crate) async fn handle_connection(
                     foreground: agent_session.foreground.clone(),
                     connection_id,
                     agent_id: agent_session.agent_id.clone(),
+                    session_origin: if remote_peer {
+                        SessionOrigin::Remote
+                    } else {
+                        SessionOrigin::Local
+                    },
                 },
                 messages,
                 stream_id,
@@ -1343,7 +1359,26 @@ pub(crate) async fn handle_connection(
                                     )
                                     .await?;
                                 }
-                                ClientPayload::Chat { messages, thread_id } => {
+                                ClientPayload::Chat {
+                                    messages,
+                                    thread_id,
+                                    client_kind,
+                                } => {
+                                    // The origin the agent will see: remote
+                                    // connections report as Remote (the UI
+                                    // kind is not visible from here), local
+                                    // ones as the client's declared kind when
+                                    // it sent one, else Local.
+                                    let session_origin = if remote_peer {
+                                        SessionOrigin::Remote
+                                    } else {
+                                        match client_kind {
+                                            Some(SessionOrigin::Unknown) | None => {
+                                                SessionOrigin::Local
+                                            }
+                                            Some(kind) => kind,
+                                        }
+                                    };
                                     // A turn runs in its own task. The loop goes
                                     // straight back to serving frames, so thread
                                     // switches, history requests and project
@@ -1653,6 +1688,7 @@ pub(crate) async fn handle_connection(
                                                 foreground: agent_session.foreground.clone(),
                                                 connection_id,
                                                 agent_id: agent_session.agent_id.clone(),
+                                                session_origin,
                                             },
                                             messages,
                                             stream_id,
@@ -2293,6 +2329,11 @@ pub(crate) async fn handle_connection(
                             foreground: agent_session.foreground.clone(),
                             connection_id,
                             agent_id: agent_session.agent_id.clone(),
+                            session_origin: if remote_peer {
+                                SessionOrigin::Remote
+                            } else {
+                                SessionOrigin::Local
+                            },
                         },
                         messages,
                         stream_id,
@@ -3215,6 +3256,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", "Hello?")],
                 thread_id: None,
+                client_kind: None,
             },
         };
 
@@ -3307,6 +3349,7 @@ mod tests {
                 // Mentions the other thread by name: bait for the guess.
                 messages: vec![ChatMessage::text("user", "remind me what beta was for")],
                 thread_id: Some(alpha.0),
+                client_kind: None,
             },
         };
 
@@ -3388,6 +3431,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", "hello")],
                 thread_id: Some(alpha.0),
+                client_kind: None,
             },
         };
 
@@ -3689,6 +3733,7 @@ mod tests {
                 payload: ClientPayload::Chat {
                     messages: vec![rustyclaw_core::gateway::ChatMessage::text("user", "hello")],
                     thread_id: None,
+                    client_kind: None,
                 },
             })],
         );
@@ -3828,6 +3873,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", text)],
                 thread_id: Some(thread.0),
+                client_kind: None,
             },
         };
 
@@ -3897,6 +3943,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", "hello?")],
                 thread_id: Some(alpha.0),
+                client_kind: None,
             },
         };
 
@@ -3965,6 +4012,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", "remind me what beta was for")],
                 thread_id: None,
+                client_kind: None,
             },
         };
 
@@ -4031,6 +4079,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", "still there?")],
                 thread_id: Some(missing),
+                client_kind: None,
             },
         };
 
@@ -4362,6 +4411,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", text)],
                 thread_id: Some(thread),
+                client_kind: None,
             },
         }
     }
@@ -5414,6 +5464,7 @@ mod tests {
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", "hello")],
                 thread_id: Some(second.0),
+                client_kind: None,
             },
         }));
 

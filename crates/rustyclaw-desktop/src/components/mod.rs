@@ -21,7 +21,6 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::{
     BulmaColor, Modal, ModalCard, ModalCardBody, ModalCardFoot, ModalCardHead,
 };
-use rustyclaw_core::ignore::Ignore;
 use rustyclaw_view::Tone;
 
 mod analytics;
@@ -98,12 +97,49 @@ pub use tools_config::ToolsConfigDialog;
 pub use unsaved_changes::{UnsavedChangesDialog, UnsavedChoice};
 pub use vault_unlock::VaultUnlockDialog;
 
-/// Copy text to the system clipboard via the webview's Clipboard API.
+/// Copy text to the system clipboard.
+///
+/// Not via the webview's Clipboard API: `navigator.clipboard.writeText` only
+/// works on Linux when the wry webview was created with the `clipboard`
+/// attribute (which dioxus-desktop does not set), so on webkit2gtk the
+/// promise rejects with `NotAllowedError` and nothing is copied. Shell out to
+/// the same clipboard tools the TUI uses instead — `wl-copy` on Wayland,
+/// `xclip`/`xsel` on X11.
 pub(crate) fn copy_to_clipboard(text: String) {
-    spawn(async move {
-        let js = format!("navigator.clipboard.writeText({:?})", text);
-        document::eval(&js).await.ignore();
-    });
+    std::thread::spawn(move || copy_to_clipboard_native(&text));
+}
+
+fn copy_to_clipboard_native(text: &str) {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let candidates: [(&str, &[&str]); 3] = [
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+
+    for (bin, args) in candidates {
+        let Ok(mut child) = std::process::Command::new(bin)
+            .args(args)
+            .stdin(Stdio::piped())
+            .spawn()
+        else {
+            continue;
+        };
+        let written = child
+            .stdin
+            .as_mut()
+            .map(|stdin| stdin.write_all(text.as_bytes()))
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+        let finished = child.wait().map(|_| true).unwrap_or(false);
+        if written && finished {
+            return;
+        }
+    }
+
+    tracing::warn!("copy_to_clipboard: no clipboard tool found (wl-copy, xclip, xsel)");
 }
 
 /// Map a view-layer semantic [`Tone`] to a Bulma colour.

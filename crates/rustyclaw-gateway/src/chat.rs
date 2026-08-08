@@ -15,7 +15,7 @@ use tracing::warn;
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
     ChatMessage, ChatRequest, ScopedTransportWriter, ServerFrame, ServerFrameType, ServerPayload,
-    transport,
+    SessionOrigin, transport,
 };
 
 use crate::dispatch::dispatch_text_message;
@@ -28,6 +28,11 @@ use protocol::server::send_frame;
 use rustyclaw_core::gateway::protocol;
 
 /// Handle a client `Chat` frame: bookkeeping, context assembly, dispatch.
+///
+/// `origin` says where the message came from — resolved by the connection
+/// loop from the peer address and the client's declared kind, and injected
+/// into the system prompt so the agent knows where it is being spoken to
+/// from.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_chat_frame(
     http: &reqwest::Client,
@@ -55,6 +60,7 @@ pub(crate) async fn handle_chat_frame(
     thread_mgr: &SharedThreadMgr,
     turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
+    origin: SessionOrigin,
     // Read live rather than captured: a sidebar update sent from this turn
     // carries a `foreground_id` the client acts on, and the user may have
     // switched threads since the turn started.
@@ -164,7 +170,21 @@ pub(crate) async fn handle_chat_frame(
     let mut messages = messages;
     let client_sent_history = !messages.is_empty() && messages[0].role == "system";
     if !client_sent_history {
-        let sys = system_prompt::build_system_prompt(config, task_mgr, skill_mgr).await;
+        // `origin` was resolved by the connection loop: Desktop/Tui for local
+        // connections whose client declared its kind, Remote for anything
+        // non-loopback, Local as the fallback for older clients.
+        let sys = system_prompt::build_system_prompt_full(
+            config,
+            task_mgr,
+            None,
+            skill_mgr,
+            system_prompt::SessionContext {
+                platform: Some(origin.as_ref()),
+                origin: Some(origin),
+                ..Default::default()
+            },
+        )
+        .await;
         messages.insert(0, ChatMessage::text("system", &sys));
 
         // Inject conversation history from the

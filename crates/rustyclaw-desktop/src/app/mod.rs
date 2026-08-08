@@ -12,6 +12,7 @@ use crate::components::{
 use crate::app_support::*;
 use crate::state::{AppState, PendingWorkspaceChange};
 use rustyclaw_core::gateway::GatewayClient;
+use rustyclaw_core::gateway::SessionOrigin;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ConnectionStatus;
@@ -768,7 +769,10 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                if let Err(e) = client.chat_in_thread(prompt, turn_thread).await {
+                if let Err(e) = client
+                    .chat_in_thread(prompt, turn_thread, Some(SessionOrigin::Desktop))
+                    .await
+                {
                     tracing::error!("Failed to send message: {}", e);
                 }
             });

@@ -18,7 +18,7 @@ use crate::gateway::client_types::{GatewayCommand, GatewayEvent};
 use crate::gateway::protocol::event_log::{
     Direction, ProtocolEvent, ProtocolEventLog, default_log_path,
 };
-use crate::gateway::{ServerPayload, SshConnection, SshReader, SshWriter};
+use crate::gateway::{ServerPayload, SessionOrigin, SshConnection, SshReader, SshWriter};
 
 /// An event, and the thread whose turn produced it.
 ///
@@ -477,6 +477,7 @@ impl GatewayClient {
         self.send(GatewayCommand::Chat {
             message,
             thread_id: None,
+            client_kind: None,
         })
         .await
     }
@@ -484,8 +485,22 @@ impl GatewayClient {
     /// Send a chat message, naming the thread it belongs to. `None` leaves
     /// the choice to the gateway, for callers that have no thread of their
     /// own yet — the first message of a fresh session, a headless one-shot.
-    pub async fn chat_in_thread(&self, message: String, thread_id: Option<u64>) -> Result<()> {
-        self.send(GatewayCommand::Chat { message, thread_id }).await
+    ///
+    /// `client_kind` tells the gateway which UI sent the message
+    /// ([`SessionOrigin::Desktop`], [`SessionOrigin::Tui`], …) so the agent
+    /// knows where it is being spoken to from.
+    pub async fn chat_in_thread(
+        &self,
+        message: String,
+        thread_id: Option<u64>,
+        client_kind: Option<SessionOrigin>,
+    ) -> Result<()> {
+        self.send(GatewayCommand::Chat {
+            message,
+            thread_id,
+            client_kind,
+        })
+        .await
     }
 
     /// Authenticate with TOTP code.
@@ -623,6 +638,7 @@ mod tests {
             match client.try_send(GatewayCommand::Chat {
                 message: bulk.clone(),
                 thread_id: None,
+                client_kind: None,
             }) {
                 Ok(()) => tokio::task::yield_now().await,
                 Err(e) => {

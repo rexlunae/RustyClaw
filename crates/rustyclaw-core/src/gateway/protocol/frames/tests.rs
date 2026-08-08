@@ -955,6 +955,7 @@ mod serialization {
                     "user", "hello",
                 )],
                 thread_id: Some(12),
+                client_kind: Some(crate::gateway::SessionOrigin::Tui),
             },
         };
         let wire = WireFrame::new(7, frame);
@@ -969,10 +970,38 @@ mod serialization {
         assert_eq!(decoded.flags, 0);
         assert_eq!(decoded.frame.frame_type, ClientFrameType::Chat);
         // The thread the message was typed into has to survive the trip, or
-        // the gateway is back to guessing from its own foreground.
+        // the gateway is back to guessing from its own foreground. Same for
+        // the client's declared kind — that is what becomes the session
+        // origin in the system prompt.
         match decoded.frame.payload {
-            ClientPayload::Chat { thread_id, .. } => assert_eq!(thread_id, Some(12)),
+            ClientPayload::Chat {
+                thread_id,
+                client_kind,
+                ..
+            } => {
+                assert_eq!(thread_id, Some(12));
+                assert_eq!(client_kind, Some(crate::gateway::SessionOrigin::Tui));
+            }
             other => panic!("Expected Chat payload, got {other:?}"),
+        }
+    }
+
+    /// The wire strings for `SessionOrigin` are part of the protocol: they
+    /// must not change under refactors, or clients on the other end of an
+    /// old frame stop matching.
+    #[test]
+    fn session_origin_serializes_to_its_protocol_strings() {
+        use serde_json::json;
+        for (origin, expected) in [
+            (crate::gateway::SessionOrigin::Desktop, "desktop"),
+            (crate::gateway::SessionOrigin::Tui, "tui"),
+            (crate::gateway::SessionOrigin::Remote, "remote"),
+            (crate::gateway::SessionOrigin::Local, "local"),
+            (crate::gateway::SessionOrigin::Messenger, "messenger"),
+            (crate::gateway::SessionOrigin::Trigger, "trigger"),
+        ] {
+            let wire = serde_json::to_value(origin).expect("serialize should succeed");
+            assert_eq!(wire, json!(expected), "{origin:?} must stay {expected:?}");
         }
     }
 
