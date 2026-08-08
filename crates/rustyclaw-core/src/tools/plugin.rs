@@ -253,7 +253,7 @@ pub fn plugin_state_set_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "state".into(),
-            description: "Full new state object for the plugin (JSON object). Replaces the existing state entirely.".into(),
+            description: "Full new state object for the plugin. Replaces the existing state entirely (stored as TOML on disk).".into(),
             param_type: "object".into(),
             required: true,
         },
@@ -270,7 +270,7 @@ pub fn plugin_state_patch_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "patch".into(),
-            description: "Partial state to merge into the plugin's current state (JSON Merge Patch). Only the keys you include are changed; all other keys remain as-is.".into(),
+            description: "Partial state to merge into the plugin's current state (merge patch). Only the keys you include are changed; all other keys remain as-is.".into(),
             param_type: "object".into(),
             required: true,
         },
@@ -305,7 +305,7 @@ pub fn plugin_create_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "schema".into(),
-            description: "JSON Schema for the plugin state (optional, used for validation).".into(),
+            description: "Schema for the plugin state (optional, used for validation; stored as TOML in plugin.toml).".into(),
             param_type: "object".into(),
             required: false,
         },

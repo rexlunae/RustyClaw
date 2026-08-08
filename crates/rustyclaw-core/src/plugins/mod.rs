@@ -4,8 +4,16 @@
 //! ## Structure
 //!
 //! Each plugin lives in `<workspace>/plugins/<name>/` with:
-//!   - `plugin.json` — metadata, state schema, actions, and instructions
+//!   - `plugin.toml` — metadata, state schema, actions, and instructions
+//!   - `state.toml`  — the plugin's current state, persisted on every change
 //!   - `index.html`  — (optional) HTML template for custom rendering
+//!
+//! Like every other file this project writes, plugin manifests and state are
+//! TOML. The one wrinkle is `null`: TOML has no null, so a `null` in state is
+//! dropped at the storage boundary — a null object value is omitted (the same
+//! shape JSON Merge Patch uses to delete a key) and a null array element is
+//! skipped. In memory and on the wire, state is still JSON (`serde_json::Value`):
+//! that is the tool-call and gateway protocol, not storage.
 //!
 //! ## Communication
 //!
@@ -15,29 +23,35 @@
 //! User  → Desktop UI → Gateway      (user interactions are forwarded)
 //! ```
 //!
-//! ## Plugin JSON Format
+//! ## Plugin TOML Format
 //!
-//! ```json
-//! {
-//!   "name": "chart",
-//!   "description": "Render live charts from data",
-//!   "version": "1.0.0",
-//!   "emoji": "📊",
-//!   "instructions": "## Agent Instructions\n\nUse plugin_state_set to push data.",
-//!   "schema": {
-//!     "type": "object",
-//!     "properties": {
-//!       "title": { "type": "string" },
-//!       "chartType": { "type": "string", "enum": ["bar", "line", "pie"] },
-//!       "data": { "type": "array" }
-//!     }
-//!   },
-//!   "initial_state": { "title": "My Chart", "chartType": "bar", "data": [] },
-//!   "actions": [
-//!     { "name": "refresh", "description": "Re-fetch data" },
-//!     { "name": "export", "description": "Export as CSV" }
-//!   ]
-//! }
+//! ```toml
+//! name = "chart"
+//! description = "Render live charts from data"
+//! version = "1.0.0"
+//! emoji = "📊"
+//! instructions = "## Agent Instructions\n\nUse plugin_state_set to push data."
+//!
+//! [state_schema]
+//! type = "object"
+//!
+//! [state_schema.properties]
+//! title = { type = "string" }
+//! chartType = { type = "string", enum = ["bar", "line", "pie"] }
+//! data = { type = "array" }
+//!
+//! [initial_state]
+//! title = "My Chart"
+//! chartType = "bar"
+//! data = []
+//!
+//! [[actions]]
+//! name = "refresh"
+//! description = "Re-fetch data"
+//!
+//! [[actions]]
+//! name = "export"
+//! description = "Export as CSV"
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -51,7 +65,12 @@ pub use error::PluginError;
 // ── Plugin types ──────────────────────────────────────────────────────────
 
 /// A loaded plugin from disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// This is the in-memory shape; the on-disk manifest (`plugin.toml`) is the
+/// [`PluginFile`] mirror, which carries the two free-form fields as TOML
+/// values. State stays `serde_json::Value` because it travels over the tool
+/// layer and the gateway wire as JSON — only files on disk are TOML.
+#[derive(Debug, Clone)]
 pub struct Plugin {
     /// Unique kebab-case identifier.
     pub name: String,
@@ -65,21 +84,83 @@ pub struct Plugin {
     pub instructions: String,
     /// Path to the plugin directory.
     pub path: PathBuf,
-    /// JSON Schema for the plugin state.
-    #[serde(default)]
+    /// Schema for the plugin state (stored as TOML in `plugin.toml`).
     pub state_schema: Value,
     /// Initial state (default values).
-    #[serde(default)]
     pub initial_state: Value,
     /// Named actions the agent can invoke.
-    #[serde(default)]
     pub actions: Vec<PluginAction>,
     /// Whether this plugin is enabled.
-    #[serde(default = "default_true")]
     pub enabled: bool,
     /// Custom HTML template path (relative to plugin dir, or None for default).
-    #[serde(default)]
     pub html_template: Option<String>,
+}
+
+/// On-disk manifest shape (`plugin.toml`).
+///
+/// Mirrors [`Plugin`], except that the two free-form fields
+/// (`state_schema`, `initial_state`) are TOML values; they convert to
+/// `serde_json::Value` for the in-memory type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PluginFile {
+    name: String,
+    description: String,
+    version: String,
+    emoji: Option<String>,
+    instructions: String,
+    #[serde(default)]
+    state_schema: Option<toml::Value>,
+    #[serde(default)]
+    initial_state: Option<toml::Value>,
+    #[serde(default)]
+    actions: Vec<PluginAction>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    html_template: Option<String>,
+}
+
+impl From<PluginFile> for Plugin {
+    fn from(file: PluginFile) -> Self {
+        Self {
+            name: file.name,
+            description: file.description,
+            version: file.version,
+            emoji: file.emoji,
+            instructions: file.instructions,
+            path: PathBuf::new(), // filled in by the loader
+            state_schema: file
+                .state_schema
+                .as_ref()
+                .map(toml_to_json)
+                .unwrap_or_default(),
+            initial_state: file
+                .initial_state
+                .as_ref()
+                .map(toml_to_json)
+                .unwrap_or_default(),
+            actions: file.actions,
+            enabled: file.enabled,
+            html_template: file.html_template,
+        }
+    }
+}
+
+impl From<&Plugin> for PluginFile {
+    fn from(plugin: &Plugin) -> Self {
+        Self {
+            name: plugin.name.clone(),
+            description: plugin.description.clone(),
+            version: plugin.version.clone(),
+            emoji: plugin.emoji.clone(),
+            instructions: plugin.instructions.clone(),
+            state_schema: json_to_toml(&plugin.state_schema),
+            initial_state: json_to_toml(&plugin.initial_state),
+            actions: plugin.actions.clone(),
+            enabled: plugin.enabled,
+            html_template: plugin.html_template.clone(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -140,7 +221,7 @@ impl PluginManager {
             if !path.is_dir() {
                 continue;
             }
-            let manifest = path.join("plugin.json");
+            let manifest = path.join("plugin.toml");
             if !manifest.exists() {
                 continue;
             }
@@ -166,8 +247,9 @@ impl PluginManager {
     fn load_plugin(dir: &Path, manifest: &Path) -> Result<Plugin, PluginError> {
         let raw = std::fs::read_to_string(manifest)
             .map_err(|e| PluginError::Io(e, manifest.to_path_buf()))?;
-        let mut plugin: Plugin = serde_json::from_str(&raw)
-            .map_err(|e| PluginError::Parse(e, manifest.to_path_buf()))?;
+        let file: PluginFile =
+            toml::from_str(&raw).map_err(|e| PluginError::Parse(e, manifest.to_path_buf()))?;
+        let mut plugin = Plugin::from(file);
         plugin.path = dir.to_path_buf();
 
         // Validate
@@ -185,10 +267,10 @@ impl PluginManager {
 
     /// Load persisted state from disk.
     fn load_state(&self, plugin: &Plugin) -> Value {
-        let state_file = plugin.path.join("state.json");
+        let state_file = plugin.path.join("state.toml");
         match std::fs::read_to_string(&state_file) {
-            Ok(raw) => match serde_json::from_str(&raw) {
-                Ok(state) => state,
+            Ok(raw) => match toml::from_str::<toml::Value>(&raw) {
+                Ok(state) => toml_to_json(&state),
                 Err(e) => {
                     // Falling back to initial_state used to discard the
                     // saved state silently — and the next save_state wrote
@@ -206,9 +288,12 @@ impl PluginManager {
     pub fn save_state(&self, plugin_name: &str) -> Result<(), PluginError> {
         if let Some(plugin) = self.get(plugin_name) {
             let state = self.states.get(plugin_name).cloned().unwrap_or_default();
-            let state_file = plugin.path.join("state.json");
-            let raw = serde_json::to_string_pretty(&state)
-                .map_err(|e| PluginError::Serialize(e, plugin_name.to_string()))?;
+            let state_file = plugin.path.join("state.toml");
+            let raw = json_to_toml(&state)
+                .map(|v| toml::to_string_pretty(&v))
+                .transpose()
+                .map_err(|e| PluginError::Serialize(e, plugin_name.to_string()))?
+                .unwrap_or_default();
             crate::persist::write_atomically(&state_file, raw.as_bytes())
                 .map_err(|e| PluginError::Io(e, state_file))?;
         }
@@ -314,17 +399,20 @@ impl PluginManager {
             html_template: html_template.map(|s| s.to_string()),
         };
 
-        let manifest = serde_json::to_string_pretty(&plugin)
+        let manifest = toml::to_string_pretty(&PluginFile::from(&plugin))
             .map_err(|e| PluginError::Serialize(e, name.to_string()))?;
-        std::fs::write(plugin_dir.join("plugin.json"), &manifest)
-            .map_err(|e| PluginError::Io(e, plugin_dir.join("plugin.json")))?;
+        std::fs::write(plugin_dir.join("plugin.toml"), &manifest)
+            .map_err(|e| PluginError::Io(e, plugin_dir.join("plugin.toml")))?;
 
         // Write initial state
         let state = initial_state.cloned().unwrap_or_default();
-        let state_raw = serde_json::to_string_pretty(&state)
-            .map_err(|e| PluginError::Serialize(e, name.to_string()))?;
-        std::fs::write(plugin_dir.join("state.json"), state_raw)
-            .map_err(|e| PluginError::Io(e, plugin_dir.join("state.json")))?;
+        let state_raw = json_to_toml(&state)
+            .map(|v| toml::to_string_pretty(&v))
+            .transpose()
+            .map_err(|e| PluginError::Serialize(e, name.to_string()))?
+            .unwrap_or_default();
+        std::fs::write(plugin_dir.join("state.toml"), state_raw)
+            .map_err(|e| PluginError::Io(e, plugin_dir.join("state.toml")))?;
 
         // Write optional HTML template
         if let Some(template) = html_template {
@@ -437,6 +525,64 @@ fn json_merge(target: &mut Value, patch: &Value) {
     }
 }
 
+/// Convert a JSON value into the TOML value stored on disk.
+///
+/// TOML has no `null`, so null is dropped at the storage boundary: a null
+/// object value is omitted (the same shape JSON Merge Patch uses to delete a
+/// key), a null array element is skipped, and a wholly null value has no TOML
+/// representation at all (`None`). A `u64` beyond `i64::MAX` — TOML integers
+/// are 64-bit signed — is stored as a float rather than dropped.
+fn json_to_toml(value: &Value) -> Option<toml::Value> {
+    match value {
+        Value::Null => None,
+        Value::Bool(b) => Some(toml::Value::Boolean(*b)),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(toml::Value::Integer(i))
+            } else if let Some(u) = n.as_u64() {
+                i64::try_from(u)
+                    .map(toml::Value::Integer)
+                    .ok()
+                    .or(Some(toml::Value::Float(u as f64)))
+            } else {
+                n.as_f64().map(toml::Value::Float)
+            }
+        }
+        Value::String(s) => Some(toml::Value::String(s.clone())),
+        Value::Array(items) => Some(toml::Value::Array(
+            items.iter().filter_map(json_to_toml).collect(),
+        )),
+        Value::Object(map) => {
+            let mut table = toml::Table::new();
+            for (k, v) in map {
+                if let Some(tv) = json_to_toml(v) {
+                    table.insert(k.clone(), tv);
+                }
+            }
+            Some(toml::Value::Table(table))
+        }
+    }
+}
+
+/// Convert a TOML value back into the JSON value used in memory and on the
+/// wire. Datetimes have no JSON representation and become their RFC 3339
+/// string form.
+fn toml_to_json(value: &toml::Value) -> Value {
+    match value {
+        toml::Value::String(s) => Value::String(s.clone()),
+        toml::Value::Integer(i) => Value::from(*i),
+        toml::Value::Float(f) => Value::from(*f),
+        toml::Value::Boolean(b) => Value::from(*b),
+        toml::Value::Datetime(d) => Value::String(d.to_string()),
+        toml::Value::Array(items) => Value::Array(items.iter().map(toml_to_json).collect()),
+        toml::Value::Table(t) => Value::Object(
+            t.iter()
+                .map(|(k, v)| (k.clone(), toml_to_json(v)))
+                .collect(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,5 +611,140 @@ mod tests {
     #[test]
     fn truncate_prompt_no_truncation() {
         assert_eq!(truncate_for_prompt("abc", 10), "abc");
+    }
+
+    #[test]
+    fn json_toml_roundtrip_preserves_typed_values() {
+        let json = serde_json::json!({
+            "title": "Sales",
+            "count": 3,
+            "ratio": 0.5,
+            "enabled": true,
+            "tags": ["a", "b"],
+            "nested": { "deep": [1, 2, 3] },
+        });
+        let toml = json_to_toml(&json).expect("no nulls to drop");
+        assert_eq!(toml_to_json(&toml), json);
+    }
+
+    #[test]
+    fn null_values_are_dropped_at_the_storage_boundary() {
+        let json = serde_json::json!({
+            "keep": 1,
+            "delete": null,
+            "list": [null, 2, null],
+        });
+        let toml = json_to_toml(&json).expect("the object itself is storable");
+        let raw = toml::to_string_pretty(&toml).unwrap();
+        assert!(
+            !raw.contains("delete"),
+            "null object values must not be stored"
+        );
+        assert!(raw.contains("keep = 1"), "non-null values must survive");
+        // A null array element is skipped, not stored as anything.
+        let back = toml_to_json(&toml);
+        assert_eq!(back["list"], serde_json::json!([2]));
+    }
+
+    #[test]
+    fn wholly_null_value_has_no_toml_representation() {
+        assert!(json_to_toml(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn manifest_roundtrips_through_toml() {
+        let plugin = Plugin {
+            name: "chart".into(),
+            description: "Render live charts".into(),
+            version: "1.0.0".into(),
+            emoji: Some("📊".into()),
+            instructions: "## Agent\n\nUse plugin_state_set.".into(),
+            path: PathBuf::from("/tmp/chart"),
+            state_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "title": { "type": "string" } }
+            }),
+            initial_state: serde_json::json!({ "title": "My Chart" }),
+            actions: vec![PluginAction {
+                name: "refresh".into(),
+                description: "Re-fetch data".into(),
+                params: vec![],
+            }],
+            enabled: true,
+            html_template: None,
+        };
+
+        let raw = toml::to_string_pretty(&PluginFile::from(&plugin)).unwrap();
+        let back = Plugin::from(toml::from_str::<PluginFile>(&raw).unwrap());
+
+        assert_eq!(back.name, plugin.name);
+        assert_eq!(back.description, plugin.description);
+        assert_eq!(back.state_schema, plugin.state_schema);
+        assert_eq!(back.initial_state, plugin.initial_state);
+        assert_eq!(back.actions.len(), plugin.actions.len());
+        assert_eq!(back.actions[0].name, "refresh");
+    }
+
+    #[test]
+    fn create_then_reload_roundtrips_plugin_and_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = PluginManager::new(tmp.path().to_path_buf());
+        mgr.create(
+            "demo",
+            "A demo plugin",
+            Some("📊"),
+            "Use plugin_state_set.",
+            Some(&serde_json::json!({ "type": "object" })),
+            Some(&serde_json::json!({ "tick": 1 })),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // A fresh manager reads the same files back from disk.
+        let mut reloaded = PluginManager::new(tmp.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert_eq!(reloaded.plugins().len(), 1);
+        assert_eq!(
+            reloaded.get_state("demo").unwrap(),
+            serde_json::json!({ "tick": 1 })
+        );
+
+        // The files on disk are TOML, not JSON.
+        let dir = tmp.path().join("demo");
+        assert!(dir.join("plugin.toml").exists());
+        assert!(dir.join("state.toml").exists());
+        assert!(!dir.join("plugin.json").exists());
+        assert!(!dir.join("state.json").exists());
+    }
+
+    #[test]
+    fn state_persists_through_save_and_reload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = PluginManager::new(tmp.path().to_path_buf());
+        mgr.create(
+            "counter",
+            "Counts things",
+            None,
+            "",
+            None,
+            Some(&serde_json::json!({ "n": 0 })),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Mutate and persist.
+        mgr.set_state("counter", serde_json::json!({ "n": 42 }))
+            .unwrap();
+        drop(mgr);
+
+        // A fresh manager sees the persisted state, not the initial state.
+        let mut reloaded = PluginManager::new(tmp.path().to_path_buf());
+        reloaded.load().unwrap();
+        assert_eq!(
+            reloaded.get_state("counter").unwrap(),
+            serde_json::json!({ "n": 42 })
+        );
     }
 }
