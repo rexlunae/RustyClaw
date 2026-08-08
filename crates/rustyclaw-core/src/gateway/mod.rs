@@ -28,8 +28,7 @@ pub use protocol::{
     ChannelPairActionKind, ClientFrame, ClientFrameType, ClientPayload, CronActionKind,
     EngineActionKind, FrameCodecError, ModelActionKind, SecretEntryDto, ServerFrame,
     ServerFrameType, ServerPayload, ServiceInfoDto, SessionOrigin, StatusType, WireFrame,
-    WorkspaceEntryDto, deserialize_frame, deserialize_wire_frame, serialize_frame,
-    serialize_wire_frame,
+    deserialize_frame, deserialize_wire_frame, serialize_frame, serialize_wire_frame,
 };
 
 // Re-export public types (includes protocol types via types module)

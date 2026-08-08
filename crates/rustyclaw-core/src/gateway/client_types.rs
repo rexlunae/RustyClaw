@@ -18,7 +18,7 @@ pub use crate::gateway::protocol::frames::{
     ChannelStatusDto, CronJobDto, DownloadInfoDto, EngineInfoDto, EngineModelDto, HistoryEntryDto,
     McpServerDto, MemoryEntryDto, MessengerAccountDto, MessengerProfileDto, ModelUsageDto,
     PluginActionDto, PluginInfoDto, RoutableThreadDto, SessionUsageDto, ThreadRouteDto,
-    ToolConfigDto, UsageTotalsDto, WorkspaceEntryDto,
+    ToolConfigDto, UsageTotalsDto,
 };
 
 // ── Events (server → client) ────────────────────────────────────────────────
@@ -163,30 +163,6 @@ pub enum GatewayEvent {
 
     /// Plugin list and state updated.
     PluginsUpdate { plugins: Vec<PluginInfoDto> },
-
-    /// One directory's entries, inside the thread's working directory.
-    WorkspaceDirListing {
-        path: PathBuf,
-        entries: Vec<WorkspaceEntryDto>,
-        error: Option<String>,
-        root: PathBuf,
-    },
-
-    /// One file's contents, from inside the thread's working directory.
-    WorkspaceFileContent {
-        path: PathBuf,
-        content: String,
-        error: Option<String>,
-        root: PathBuf,
-    },
-
-    /// Outcome of writing a file in the thread's working directory.
-    WorkspaceWriteResult {
-        path: PathBuf,
-        ok: bool,
-        error: Option<String>,
-        root: PathBuf,
-    },
 
     /// The messenger setup view. Also arrives after every mutation *this
     /// client* sends, so its form never shows state the gateway has moved
@@ -567,23 +543,6 @@ pub enum GatewayCommand {
     /// Re-read one plugin's state from disk and push the refreshed list.
     #[serde(rename = "plugin_refresh")]
     PluginRefresh { plugin_name: String },
-
-    /// List a directory inside the thread's working directory.
-    #[serde(rename = "workspace_list_dir")]
-    WorkspaceListDir { path: PathBuf },
-
-    /// Read a file inside the thread's working directory.
-    #[serde(rename = "workspace_read_file")]
-    WorkspaceReadFile { path: PathBuf },
-
-    /// Write a file inside the thread's working directory.
-    #[serde(rename = "workspace_write_file")]
-    WorkspaceWriteFile {
-        path: PathBuf,
-        content: String,
-        /// The working directory the client believed it was editing.
-        expected_root: PathBuf,
-    },
 
     /// Delete a project
     #[serde(rename = "project_delete")]
@@ -996,26 +955,6 @@ impl GatewayCommand {
             GatewayCommand::PluginRefresh { plugin_name } => ClientFrame {
                 frame_type: ClientFrameType::PluginRefresh,
                 payload: ClientPayload::PluginRefresh { plugin_name },
-            },
-            GatewayCommand::WorkspaceListDir { path } => ClientFrame {
-                frame_type: ClientFrameType::WorkspaceListDir,
-                payload: ClientPayload::WorkspaceListDir { path },
-            },
-            GatewayCommand::WorkspaceReadFile { path } => ClientFrame {
-                frame_type: ClientFrameType::WorkspaceReadFile,
-                payload: ClientPayload::WorkspaceReadFile { path },
-            },
-            GatewayCommand::WorkspaceWriteFile {
-                path,
-                content,
-                expected_root,
-            } => ClientFrame {
-                frame_type: ClientFrameType::WorkspaceWriteFile,
-                payload: ClientPayload::WorkspaceWriteFile {
-                    path,
-                    content,
-                    expected_root,
-                },
             },
             GatewayCommand::MessengerConfig => ClientFrame {
                 frame_type: ClientFrameType::MessengerConfigRequest,
@@ -1619,39 +1558,6 @@ impl GatewayEvent {
             ServerPayload::PluginsUpdate { plugins } => {
                 Some(GatewayEvent::PluginsUpdate { plugins })
             }
-            ServerPayload::WorkspaceDirListing {
-                path,
-                entries,
-                error,
-                root,
-            } => Some(GatewayEvent::WorkspaceDirListing {
-                path,
-                entries,
-                error,
-                root,
-            }),
-            ServerPayload::WorkspaceFileContent {
-                path,
-                content,
-                error,
-                root,
-            } => Some(GatewayEvent::WorkspaceFileContent {
-                path,
-                content,
-                error,
-                root,
-            }),
-            ServerPayload::WorkspaceWriteResult {
-                path,
-                ok,
-                error,
-                root,
-            } => Some(GatewayEvent::WorkspaceWriteResult {
-                path,
-                ok,
-                error,
-                root,
-            }),
             ServerPayload::MessengerConfigResult {
                 accounts,
                 routes,

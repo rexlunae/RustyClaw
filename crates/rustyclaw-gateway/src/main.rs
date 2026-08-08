@@ -44,7 +44,6 @@ mod thread_updates;
 mod tool_executor;
 mod trigger_dispatch;
 mod trigger_manager;
-mod workspace_files;
 
 use rustyclaw_core::ignore::Ignore;
 use std::io::IsTerminal;

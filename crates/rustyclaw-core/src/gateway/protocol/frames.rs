@@ -173,12 +173,6 @@ pub enum ClientFrameType {
     PluginList = 80,
     /// Re-read one plugin's state from disk and push it back.
     PluginRefresh = 81,
-    /// List a directory inside the thread's working directory.
-    WorkspaceListDir = 82,
-    /// Read a file inside the thread's working directory.
-    WorkspaceReadFile = 83,
-    /// Write a file inside the thread's working directory.
-    WorkspaceWriteFile = 84,
     /// Request the messenger setup view: accounts, routes, routable threads.
     MessengerConfigRequest = 85,
     /// Create or update a messenger account.
@@ -379,12 +373,6 @@ pub enum ServerFrameType {
     ProviderModelListResult = 85,
     /// The gateway's plugin list with each plugin's current state.
     PluginsUpdate = 86,
-    /// Result of a `WorkspaceListDir`.
-    WorkspaceDirListing = 87,
-    /// Result of a `WorkspaceReadFile`.
-    WorkspaceFileContent = 88,
-    /// Result of a `WorkspaceWriteFile`.
-    WorkspaceWriteResult = 89,
     /// The messenger setup view: accounts, routes, and routable threads.
     MessengerConfigResult = 90,
     /// Outcome of an account save, delete, or credential migration.
@@ -967,33 +955,6 @@ pub enum ClientPayload {
     PluginRefresh {
         plugin_name: String,
     },
-    // ── Workspace file access ─────────────────────────────────────────────
-    //
-    // Client-driven file I/O for editor-style UI, confined to the foreground
-    // thread's effective working directory. Distinct from the agent's file
-    // tools: those run under the sandbox policy, which permits anything not
-    // explicitly denied, whereas these refuse everything outside the thread's
-    // directory. `path` is always relative to that directory.
-    /// List one directory.
-    WorkspaceListDir {
-        path: PathBuf,
-    },
-    /// Read one file's contents.
-    WorkspaceReadFile {
-        path: PathBuf,
-    },
-    /// Overwrite one file's contents.
-    ///
-    /// `expected_root` is the working directory the client believed it was
-    /// editing. The gateway refuses the write when that no longer matches,
-    /// so a buffer captured before a directory change cannot be written into
-    /// a same-named file in the new one — the confinement check alone would
-    /// happily allow that, since the path is legal in both.
-    WorkspaceWriteFile {
-        path: PathBuf,
-        content: String,
-        expected_root: PathBuf,
-    },
     /// Stop a running turn.
     ///
     /// `thread_id` names which one. With turns running per thread, "the
@@ -1555,34 +1516,6 @@ pub enum ServerPayload {
     /// on request, and after a refresh.
     PluginsUpdate {
         plugins: Vec<PluginInfoDto>,
-    },
-    /// One directory's entries. `error` is set when the listing was refused
-    /// or failed, in which case `entries` is empty.
-    WorkspaceDirListing {
-        path: PathBuf,
-        entries: Vec<WorkspaceEntryDto>,
-        error: Option<String>,
-        /// The working directory these paths are relative to. A client that
-        /// has since moved discards the reply rather than mixing it into a
-        /// view of somewhere else.
-        root: PathBuf,
-    },
-    /// One file's contents. `error` is set when the read was refused or
-    /// failed, in which case `content` is empty.
-    WorkspaceFileContent {
-        path: PathBuf,
-        content: String,
-        error: Option<String>,
-        /// See [`ServerPayload::WorkspaceDirListing::root`].
-        root: PathBuf,
-    },
-    /// Outcome of a write. `error` carries the reason when `ok` is false.
-    WorkspaceWriteResult {
-        path: PathBuf,
-        ok: bool,
-        error: Option<String>,
-        /// See [`ServerPayload::WorkspaceDirListing::root`].
-        root: PathBuf,
     },
     // ── Messenger setup ───────────────────────────────────────────────────
     /// The full messenger setup view. Also sent after every mutation on
