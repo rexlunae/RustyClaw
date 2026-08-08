@@ -12,7 +12,8 @@ use rustyclaw_core::gateway::protocol::server::{send_frame, send_info};
 use rustyclaw_core::gateway::{
     ChatMessage, ProviderRequest, ServerFrame, ServerFrameType, ServerPayload, protocol, transport,
 };
-use rustyclaw_core::threads::ThreadId;
+use rustyclaw_core::projects::ProjectId;
+use rustyclaw_core::threads::{MessageRole, ThreadId};
 
 use crate::thread_updates::{send_thread_messages_update_shared, send_threads_update_shared};
 use crate::{SharedModelCtx, SharedTaskManager, providers};
@@ -707,6 +708,238 @@ pub(crate) async fn handle_thread_pin(
     Ok(())
 }
 
+/// Handle a `ThreadMove`: move a thread to a different project and broadcast
+/// the new list.
+///
+/// The thread keeps its caption, working-directory override, and history;
+/// only its project changes. The target project must exist. Moving this
+/// connection's foreground thread repoints the workspace right away — a
+/// thread without its own directory now runs in the new project's directory.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_thread_move(
+    writer: &mut dyn transport::TransportWriter,
+    config: &mut rustyclaw_core::config::Config,
+    thread_mgr: &crate::SharedThreadMgr,
+    project_mgr: &rustyclaw_core::projects::ProjectManager,
+    task_mgr: &SharedTaskManager,
+    threads_path: &std::path::Path,
+    thread_id: u64,
+    project_id: u64,
+    foreground: Option<ThreadId>,
+) -> Result<()> {
+    debug!(
+        "Thread move request: {} -> project {}",
+        thread_id, project_id
+    );
+    let id = ThreadId(thread_id);
+    let project = ProjectId(project_id);
+
+    if !project_mgr.contains(project) {
+        return send_error(
+            writer,
+            format!("Cannot move thread {thread_id}: project {project_id} not found"),
+        )
+        .await;
+    }
+    if thread_mgr.lock().await.get(id).is_none() {
+        return send_error(writer, format!("Cannot move thread {thread_id}: not found")).await;
+    }
+
+    {
+        let mut tm = thread_mgr.lock().await;
+        tm.set_project(id, project);
+        crate::helpers::persist_threads(&mut tm, threads_path);
+        // Moving the foreground thread changes the directory its tools run
+        // in unless it overrides its own; take effect right away, and only
+        // for *this* connection's foreground.
+        if foreground == Some(id) {
+            crate::project_handler::repoint_workspace(config, project_mgr, &tm, foreground);
+        }
+    }
+
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None, foreground).await
+}
+
+/// Handle a `ThreadExport`: reply with the thread's transcript as Markdown,
+/// ready for the client to write wherever the user chooses.
+///
+/// Sidebar rows for sub-agent and cron *sessions* carry pseudo-ids; like
+/// history, an export for those serves the session's transcript, so the
+/// download button never opens onto nothing.
+pub(crate) async fn handle_thread_export(
+    writer: &mut dyn transport::TransportWriter,
+    thread_mgr: &crate::SharedThreadMgr,
+    project_mgr: &rustyclaw_core::projects::ProjectManager,
+    thread_id: u64,
+) -> Result<()> {
+    debug!("Thread export request: {}", thread_id);
+    let target_id = ThreadId(thread_id);
+    let tm = thread_mgr.lock().await;
+    let (ok, filename, content, error) = match tm.get(target_id) {
+        Some(thread) => {
+            let project = project_mgr.get(thread.project_id).map(|p| p.name.clone());
+            let messages: Vec<ChatMessage> =
+                thread.messages.iter().map(thread_message_to_wire).collect();
+            info!(
+                thread_id,
+                caption = %thread.label,
+                message_count = messages.len(),
+                "Gateway exported thread transcript"
+            );
+            (
+                true,
+                export_filename(&thread.label, thread_id),
+                render_transcript(
+                    &thread.label,
+                    project.as_deref(),
+                    Some(thread.created_at),
+                    Some(thread.last_activity),
+                    &messages,
+                ),
+                None,
+            )
+        }
+        None => match crate::thread_updates::session_transcript(thread_id) {
+            Some((label, messages)) => {
+                info!(
+                    thread_id,
+                    caption = %label,
+                    message_count = messages.len(),
+                    "Exporting session transcript for sidebar row"
+                );
+                (
+                    true,
+                    export_filename(&label, thread_id),
+                    render_transcript(&label, None, None, None, &messages),
+                    None,
+                )
+            }
+            None => (
+                false,
+                String::new(),
+                String::new(),
+                Some(format!("Thread {thread_id} not found")),
+            ),
+        },
+    };
+    drop(tm);
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ThreadExportResult,
+        payload: ServerPayload::ThreadExportResult {
+            thread_id,
+            ok,
+            filename,
+            content,
+            error,
+        },
+    };
+    debug!(thread_id, ok, "Sending ThreadExportResult");
+    send_frame(writer, &frame).await
+}
+
+/// Map a stored thread message onto the wire `ChatMessage` shape — the same
+/// boundary conversion `handle_thread_history` performs, shared so the
+/// transcript a client downloads is byte-identical to the one it displays.
+fn thread_message_to_wire(m: &rustyclaw_core::threads::ThreadMessage) -> ChatMessage {
+    let role = match m.role {
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::System => "system",
+        MessageRole::Tool => "tool",
+    };
+    ChatMessage {
+        role: role.to_string(),
+        content: m.content.clone(),
+        // Threads persist as JSON and can hold a bare `Value`; the bincode
+        // wire cannot. Decode here, at the boundary.
+        tool_calls: m
+            .tool_calls
+            .as_ref()
+            .map(rustyclaw_core::gateway::ToolCallRecord::from_stored_json),
+        tool_call_id: m.tool_call_id.clone(),
+        media: None,
+    }
+}
+
+/// Render a transcript as Markdown for export.
+///
+/// Plain Markdown: a `#` title, a short metadata list, then a `## role`
+/// section per message in chronological order. Role headings read better
+/// than run-in labels when a message has several paragraphs, and tool
+/// results carry their call id so they can be matched back to the call
+/// that produced them.
+fn render_transcript(
+    label: &str,
+    project: Option<&str>,
+    created_at: Option<std::time::SystemTime>,
+    last_activity: Option<std::time::SystemTime>,
+    messages: &[ChatMessage],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# {label}\n\n"));
+    out.push_str("_Exported from RustyClaw._\n");
+    if let Some(project) = project {
+        out.push_str(&format!("- Project: {project}\n"));
+    }
+    if let Some(t) = created_at {
+        out.push_str(&format!("- Created: {}\n", fmt_time(t)));
+    }
+    if let Some(t) = last_activity {
+        out.push_str(&format!("- Updated: {}\n", fmt_time(t)));
+    }
+    out.push_str(&format!("- Messages: {}\n\n", messages.len()));
+
+    for message in messages {
+        let role = &message.role;
+        out.push_str("## ");
+        out.push_str(&role.to_uppercase());
+        if let Some(id) = message.tool_call_id.as_deref() {
+            out.push_str(&format!(" · call `{id}`"));
+        }
+        out.push('\n');
+        if message.content.trim().is_empty() {
+            out.push_str("_(no text)_\n");
+        } else {
+            out.push_str(&message.content);
+            if !message.content.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// An RFC 3339 timestamp for the transcript header.
+fn fmt_time(t: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+}
+
+/// A filesystem-safe filename for the exported transcript, derived from the
+/// thread's caption so the saved file means something before it is opened.
+fn export_filename(label: &str, thread_id: u64) -> String {
+    let slug: String = label
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug: String = slug
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        format!("thread-{thread_id}.md")
+    } else {
+        format!("{slug}.md")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -953,6 +1186,214 @@ mod tests {
         let errors = writer.errors();
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("999"), "{errors:?}");
+    }
+
+    /// Moving a thread reparents it, persists the move, broadcasts it, and
+    /// repoints the workspace when the moved thread is the foreground one.
+    #[tokio::test]
+    async fn thread_move_reparents_persists_and_broadcasts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut config, mut projects, threads, id) = fixture(tmp.path());
+        let other = projects.create("Docs", tmp.path().join("docs"));
+        let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let threads_path = tmp.path().join("threads.json");
+        let mut writer = CapturingWriter { frames: Vec::new() };
+
+        handle_thread_move(
+            &mut writer,
+            &mut config,
+            &threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            other.0,
+            Some(id),
+        )
+        .await
+        .unwrap();
+
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert_eq!(
+            threads.lock().await.get(id).unwrap().project_id,
+            other,
+            "the thread is reparented"
+        );
+        assert_eq!(
+            config.workspace_dir(),
+            tmp.path().join("docs"),
+            "the foreground thread's move repoints the workspace"
+        );
+
+        // The broadcast carries the new project id.
+        let update = writer
+            .frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadsUpdate { threads, .. } => Some(threads.clone()),
+                _ => None,
+            })
+            .expect("a ThreadsUpdate was sent");
+        assert_eq!(
+            update
+                .iter()
+                .find(|t| t.id == id.0)
+                .expect("in list")
+                .project_id,
+            other.0,
+            "the broadcast carries the new project"
+        );
+
+        // A fresh manager loads the move back.
+        let store = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
+        assert_eq!(store.get(id).expect("reloaded").project_id, other);
+    }
+
+    /// Moving to a project that doesn't exist, or a thread that doesn't, is
+    /// refused with an error that names the culprit.
+    #[tokio::test]
+    async fn thread_move_refuses_unknown_thread_or_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut config, projects, threads, id) = fixture(tmp.path());
+        let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let threads_path = tmp.path().join("threads.json");
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_move(
+            &mut writer,
+            &mut config,
+            &threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            4242,
+            Some(id),
+        )
+        .await
+        .unwrap();
+        let errors = writer.errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("4242"), "{errors:?}");
+        assert!(
+            errors[0].contains("project"),
+            "the error names the missing project: {errors:?}"
+        );
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_move(
+            &mut writer,
+            &mut config,
+            &threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            4242,
+            projects.active_id().0,
+            Some(id),
+        )
+        .await
+        .unwrap();
+        let errors = writer.errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("4242"), "{errors:?}");
+        assert!(
+            errors[0].contains("thread"),
+            "the error names the missing thread: {errors:?}"
+        );
+
+        // Neither failure moved anything.
+        assert_eq!(
+            threads.lock().await.get(id).unwrap().project_id,
+            projects.active_id()
+        );
+    }
+
+    /// An export renders the thread's transcript as Markdown with a sensible
+    /// filename; an unknown id comes back as a failed result naming it.
+    #[tokio::test]
+    async fn thread_export_renders_a_markdown_transcript() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, projects, threads, id) = fixture(tmp.path());
+        {
+            let mut tm = threads.lock().await;
+            let thread = tm.get_mut(id).unwrap();
+            thread.label = "Fix the API".to_string();
+            thread
+                .messages
+                .push_back(rustyclaw_core::threads::ThreadMessage {
+                    role: MessageRole::User,
+                    content: "What is 2+2?".to_string(),
+                    timestamp: std::time::SystemTime::now(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            thread
+                .messages
+                .push_back(rustyclaw_core::threads::ThreadMessage {
+                    role: MessageRole::Assistant,
+                    content: "Four.".to_string(),
+                    timestamp: std::time::SystemTime::now(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+        }
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_export(&mut writer, &threads, &projects, id.0)
+            .await
+            .unwrap();
+
+        let result = writer
+            .frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadExportResult { thread_id, .. } => {
+                    Some((*thread_id, &f.payload))
+                }
+                _ => None,
+            })
+            .expect("a ThreadExportResult was sent");
+        assert_eq!(result.0, id.0);
+        let ServerPayload::ThreadExportResult {
+            ok,
+            filename,
+            content,
+            error,
+            ..
+        } = result.1
+        else {
+            unreachable!()
+        };
+        assert!(*ok, "{error:?}");
+        assert_eq!(filename, "fix-the-api.md");
+        assert!(content.contains("# Fix the API"), "{content}");
+        assert!(content.contains("Project: Api"), "{content}");
+        assert!(content.contains("## USER"), "{content}");
+        assert!(content.contains("What is 2+2?"), "{content}");
+        assert!(content.contains("## ASSISTANT"), "{content}");
+        assert!(content.contains("Four."), "{content}");
+
+        // Unknown id: failed result that names it, not a protocol error.
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_export(&mut writer, &threads, &projects, 999)
+            .await
+            .unwrap();
+        let result = writer
+            .frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadExportResult { .. } => Some(&f.payload),
+                _ => None,
+            })
+            .expect("a ThreadExportResult was sent");
+        let ServerPayload::ThreadExportResult { ok, error, .. } = result else {
+            unreachable!()
+        };
+        assert!(!ok);
+        assert!(
+            error.as_deref().unwrap_or_default().contains("999"),
+            "{error:?}"
+        );
     }
 
     /// A path that isn't valid UTF-8 is refused at the edit, naming the path,
