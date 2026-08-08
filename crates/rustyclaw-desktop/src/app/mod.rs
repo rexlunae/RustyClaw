@@ -1742,17 +1742,40 @@ pub fn App() -> Element {
                             .find(|p| p.id == project_id)
                             .map(|p| p.path.clone())
                             .unwrap_or_default();
+                        let projects = state
+                            .read()
+                            .projects
+                            .iter()
+                            .map(|p| (p.id, p.name.clone()))
+                            .collect::<Vec<_>>();
+                        let current_project_id = project_id;
                         rsx! {
                             EditThreadDialog {
                     thread_id: thread.id,
                     label: thread.label.clone().unwrap_or_default(),
                     working_dir: thread.working_dir.clone(),
                     project_path,
+                    project_id,
+                    projects,
                     on_cancel: move |_| edit_thread.set(None),
-                    on_save: move |(thread_id, label, working_dir): (
+                    on_download: move |thread_id: u64| {
+                        let gw = gateway.read().clone();
+                        if let Some(client) = gw {
+                            spawn(async move {
+                                if let Err(e) = client
+                                    .send(GatewayCommand::ThreadExport { thread_id })
+                                    .await
+                                {
+                                    tracing::error!(thread_id, error = %e, "ThreadExport send failed");
+                                }
+                            });
+                        }
+                    },
+                    on_save: move |(thread_id, label, working_dir, project_id): (
                         u64,
                         String,
                         Option<std::path::PathBuf>,
+                        u64,
                     )| {
                         edit_thread.set(None);
                         let gw = gateway.read().clone();
@@ -1763,6 +1786,19 @@ pub fn App() -> Element {
                                     .await
                                 {
                                     tracing::error!(thread_id, error = %e, "ThreadUpdate send failed");
+                                }
+                                // Only a changed project needs a move; the
+                                // guard keeps a caption-only save off the
+                                // move's error path.
+                                let moved = if project_id != current_project_id {
+                                    client
+                                        .send(GatewayCommand::ThreadMove { thread_id, project_id })
+                                        .await
+                                } else {
+                                    Ok(())
+                                };
+                                if let Err(e) = moved {
+                                    tracing::error!(thread_id, error = %e, "ThreadMove send failed");
                                 }
                             });
                         }

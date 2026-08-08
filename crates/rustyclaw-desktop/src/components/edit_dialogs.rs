@@ -155,9 +155,17 @@ pub struct EditThreadDialogProps {
     /// The project directory this thread inherits when it has no override.
     /// Shown so the effective directory is never a mystery.
     pub project_path: PathBuf,
-    /// User confirmed: `(thread_id, label, working_dir)`. `None` clears the
-    /// override.
-    pub on_save: EventHandler<(u64, String, Option<PathBuf>)>,
+    /// The thread's current project id (its own, or the active project's when
+    /// the thread belongs to the implicit default).
+    pub project_id: u64,
+    /// Every project, `(id, name)`, for the move-to-project selector.
+    pub projects: Vec<(u64, String)>,
+    /// User confirmed: `(thread_id, label, working_dir, project_id)`. The
+    /// caller moves the thread when the project changed. `None` clears the
+    /// directory override.
+    pub on_save: EventHandler<(u64, String, Option<PathBuf>, u64)>,
+    /// User asked to download a copy of the transcript. Carries the thread id.
+    pub on_download: EventHandler<u64>,
     /// User dismissed the dialog.
     pub on_cancel: EventHandler<()>,
 }
@@ -176,6 +184,7 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
         )
     });
     let mut overridden = use_signal(|| props.working_dir.is_some());
+    let mut project = use_signal(|| props.project_id);
 
     let thread_id = props.thread_id;
     let inherited_display = if props.project_path.as_os_str().is_empty() {
@@ -184,7 +193,9 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
         path_field(&props.project_path)
     };
     let on_save = props.on_save;
+    let on_download = props.on_download;
     let on_cancel = props.on_cancel;
+    let projects = props.projects;
 
     let is_overridden = *overridden.read();
     let can_save =
@@ -203,7 +214,7 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
         } else {
             None
         };
-        on_save.call((thread_id, l, dir));
+        on_save.call((thread_id, l, dir, *project.read()));
     };
 
     rsx! {
@@ -214,6 +225,11 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
             onclose: move |_| on_cancel.call(()),
             footer: rsx! {
                 Buttons {
+                    Button {
+                        color: BulmaColor::Light,
+                        onclick: move |_| on_download.call(thread_id),
+                        "Download copy…"
+                    }
                     Button {
                         color: BulmaColor::Light,
                         onclick: move |_| on_cancel.call(()),
@@ -245,6 +261,28 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
                         },
                     }
                 }
+            }
+            Field {
+                FieldLabel { "Project" }
+                Control {
+                    div { class: "select",
+                        select {
+                            onchange: move |evt| {
+                                if let Ok(id) = evt.value().parse::<u64>() {
+                                    project.set(id);
+                                }
+                            },
+                            for (id, name) in &projects {
+                                option {
+                                    value: "{id}",
+                                    selected: *id == *project.read(),
+                                    "{name}"
+                                }
+                            }
+                        }
+                    }
+                }
+                Help { "Moves this thread to the chosen project. Its conversation and directory override, if any, stay with it." }
             }
             Field {
                 FieldLabel { "Working directory" }
