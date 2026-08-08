@@ -702,6 +702,28 @@ mod tests {
             .expect("spawning a shell should succeed")
     }
 
+    /// Spawn a child that stays alive until killed and whose pipes close the
+    /// moment it dies.
+    ///
+    /// `exec` replaces the shell with `sleep`, so the direct child is the
+    /// process holding the pipe write ends. Without it a shell may fork a
+    /// grandchild instead of exec'ing, and that orphan keeps the pipes open
+    /// after the shell is killed — the reader never sees EOF and `close` looks
+    /// like it did nothing. (Whether the shell execs varies by shell and
+    /// environment, which is exactly the kind of nondeterminism a test must
+    /// not depend on.)
+    fn closeable_child() -> tokio::process::Child {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("exec sleep 30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawning a shell should succeed")
+    }
+
     /// A connection whose reader has died must end its event stream.
     ///
     /// The writer parks on the command channel until the last client is
@@ -741,7 +763,7 @@ mod tests {
     #[tokio::test]
     async fn close_ends_the_connection_on_demand() {
         let (conn, writer, reader) =
-            SshConnection::from_child(deaf_child()).expect("splitting the child");
+            SshConnection::from_child(closeable_child()).expect("splitting the child");
         let client = GatewayClient::from_transport(conn, writer, reader, None);
         assert!(client.is_connected(), "a fresh client starts connected");
 
