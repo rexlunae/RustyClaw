@@ -19,6 +19,25 @@ pub fn AuthDialog(props: &AuthDialogProps) -> impl Into<AnyElement<'static>> {
 
     let has_error = !props.data.error.is_empty();
 
+    // TOTP codes rotate every 30 seconds. Show how much of the current
+    // window is left so users don't submit a code that's about to expire —
+    // the surrounding tick loop re-renders continuously, keeping this live.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let remaining = 30 - (now_secs % 30);
+    let countdown_color = if remaining <= 5 {
+        theme::ERROR
+    } else {
+        theme::MUTED
+    };
+    let countdown_bar = format!(
+        "{}{}  code expires in {remaining:>2}s",
+        "▰".repeat(remaining as usize / 3),
+        "▱".repeat(10 - remaining as usize / 3),
+    );
+
     element! {
         // Full-screen overlay with semi-transparent feel
         View(
@@ -67,6 +86,18 @@ pub fn AuthDialog(props: &AuthDialogProps) -> impl Into<AnyElement<'static>> {
                         content: format!("  {}  ", display),
                         color: theme::ACCENT_BRIGHT,
                         weight: Weight::Bold,
+                    )
+                }
+
+                // Countdown for the current 30-second TOTP window
+                View(
+                    margin_top: 1,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::Center,
+                ) {
+                    Text(
+                        content: countdown_bar,
+                        color: countdown_color,
                     )
                 }
 

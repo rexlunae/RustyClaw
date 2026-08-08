@@ -21,6 +21,24 @@ use super::types::{
 /// [`crate::messengers::setup::secret_name`] does.
 pub const SERVICE_CREDENTIAL_NAMESPACES: &[&str] = &["messenger/"];
 
+/// How far (in 30-second steps, each direction) the drift scan looks for a
+/// nearby-window match after a TOTP code fails the real ±1-step check.
+/// 20 steps = ±10 minutes, generous enough to catch an unsynced host clock.
+const TOTP_DRIFT_SCAN_STEPS: i64 = 20;
+
+/// Outcome of [`SecretsManager::verify_totp_detailed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TotpOutcome {
+    /// Code is valid within the accepted ±1-step window.
+    Valid,
+    /// Code matches the stored secret `steps` 30-second windows away from
+    /// this host's current time — the clocks disagree. Authentication still
+    /// fails; this exists so callers can say *why*.
+    ClockDrift { steps: i64 },
+    /// Code does not match the stored secret at any nearby window.
+    Invalid,
+}
+
 /// Whether a caller-supplied credential name (or raw vault key) lands inside
 /// a service namespace.
 ///
@@ -391,6 +409,18 @@ impl SecretsManager {
     /// Returns `Ok(true)` if the code is valid, `Ok(false)` if invalid,
     /// or an error if no TOTP secret is configured.
     pub fn verify_totp(&mut self, code: &str) -> Result<bool> {
+        Ok(matches!(
+            self.verify_totp_detailed(code)?,
+            TotpOutcome::Valid
+        ))
+    }
+
+    /// Like [`verify_totp`](Self::verify_totp), but distinguishes a plain
+    /// mismatch from a code that matches the stored secret at a *nearby*
+    /// time window. The latter means the authenticator and this host's
+    /// clock disagree — the classic "it rejects every fresh code" failure —
+    /// and callers can surface that instead of a bare "invalid code".
+    pub fn verify_totp_detailed(&mut self, code: &str) -> Result<TotpOutcome> {
         let encoded = self
             .get_secret(Self::TOTP_SECRET_KEY, true)?
             .ok_or_else(|| anyhow::anyhow!("No TOTP secret configured"))?;
@@ -405,7 +435,7 @@ impl SecretsManager {
             digits_only
         };
         if candidate.len() != 6 || !candidate.chars().all(|c| c.is_ascii_digit()) {
-            return Ok(false);
+            return Ok(TotpOutcome::Invalid);
         }
 
         let secret = TotpSecret::Encoded(encoded);
@@ -429,7 +459,25 @@ impl SecretsManager {
             .context("System time error")?
             .as_secs();
 
-        Ok(totp.check(&candidate, now))
+        if totp.check(&candidate, now) {
+            return Ok(TotpOutcome::Valid);
+        }
+
+        // The accepted window is ±1 step. Scan further out (±10 minutes)
+        // purely for diagnostics: a hit there proves the secret is right and
+        // the clocks are wrong. This does not widen what is accepted.
+        for offset in 2..=TOTP_DRIFT_SCAN_STEPS {
+            for steps in [offset, -offset] {
+                let Some(t) = now.checked_add_signed(steps * 30) else {
+                    continue;
+                };
+                if totp.generate(t) == candidate {
+                    return Ok(TotpOutcome::ClockDrift { steps });
+                }
+            }
+        }
+
+        Ok(TotpOutcome::Invalid)
     }
 
     /// Check whether a TOTP secret is stored in the vault.
