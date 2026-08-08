@@ -280,6 +280,11 @@ pub struct MediaPayload {
 // ============================================================================
 
 /// DTO for a scheduled cron job.
+///
+/// The trailing fields are appended (positional bincode: new fields go
+/// last, defaulted) and carry the wake-schedule surface: whether the
+/// payload is an agent turn, its model override, the target thread, and
+/// the owning agent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CronJobDto {
     pub id: String,
@@ -291,6 +296,14 @@ pub struct CronJobDto {
     pub last_run: Option<String>,
     pub last_status: Option<String>,
     pub run_count: u64,
+    #[serde(default)]
+    pub agent_turn: bool,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<u64>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 // ============================================================================

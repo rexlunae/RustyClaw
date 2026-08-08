@@ -12,6 +12,7 @@ mod chat;
 mod cli;
 mod command_wrapper;
 mod concurrent;
+mod cron_runtime;
 mod dispatch;
 mod download_handler;
 mod engine_handler;

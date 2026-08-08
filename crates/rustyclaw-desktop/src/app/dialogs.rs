@@ -805,7 +805,59 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
             CronDialog {
                 visible: state.read().show_cron_dialog,
                 data: state.read().cron_data.clone(),
+                threads: state
+                    .read()
+                    .threads
+                    .iter()
+                    .map(|t| (t.id.0, t.label.clone()))
+                    .collect::<Vec<_>>(),
                 on_close: move |_| state.write().show_cron_dialog = false,
+                on_command: move |cmd: crate::components::CronCommand| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn_reporting("cron command", async move {
+                            match cmd {
+                                crate::components::CronCommand::Action { id, action } => {
+                                    client
+                                        .send(GatewayCommand::CronAction { id, action })
+                                        .await
+                                        .context("sending CronAction")?;
+                                }
+                                crate::components::CronCommand::Save {
+                                    id,
+                                    name,
+                                    expr,
+                                    prompt,
+                                    model,
+                                    thread_id,
+                                } => {
+                                    client
+                                        .send(GatewayCommand::CronUpsert {
+                                            id,
+                                            name,
+                                            expr,
+                                            payload: prompt,
+                                            paused: false,
+                                            // The editor authors wakes: the
+                                            // prompt runs as an agent turn.
+                                            agent_turn: true,
+                                            model,
+                                            thread_id,
+                                        })
+                                        .await
+                                        .context("sending CronUpsert")?;
+                                }
+                            }
+                            // Re-fetch so the panel reflects the change
+                            // (the gateway handles frames in order).
+                            client
+                                .send(GatewayCommand::CronList)
+                                .await
+                                .context("sending CronList")?;
+                            Ok(())
+                        });
+                    }
+                },
             }
 
             MemoryDialog {

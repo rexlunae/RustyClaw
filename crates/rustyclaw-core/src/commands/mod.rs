@@ -70,7 +70,13 @@ pub enum CommandAction {
     /// Cron job action: (job id, action)
     CronAction(String, CronActionKind),
     /// Create a cron job: (name, expr, payload)
-    CronAdd(String, String, String),
+    CronAdd {
+        name: String,
+        expr: String,
+        prompt: String,
+        model: Option<String>,
+        thread_id: Option<u64>,
+    },
     /// Show the memory panel, optionally filtered by a query
     ShowMemory(Option<String>),
     /// Add a memory entry: (category, content)
@@ -1012,9 +1018,12 @@ fn handle_cron_subcommand(args: &[&str]) -> CommandResponse {
     let usage = || CommandResponse {
         messages: vec![
             "Usage: /cron — open the scheduled-jobs panel".to_string(),
-            "       /cron add <name> | <schedule> | <message>".to_string(),
+            "       /cron add <name> | <schedule> | <prompt> [| model=<id>] [| thread=<n>]"
+                .to_string(),
             "         schedule: 'at <ISO-8601>', 'every <N>[ms|s|m|h]', or a 5-field cron expr"
                 .to_string(),
+            "         the prompt wakes the agent in the chosen thread on schedule".to_string(),
+            "       /cron run <job-id> — fire a job immediately".to_string(),
             "       /cron pause|resume|rm <job-id>".to_string(),
         ],
         action: CommandAction::None,
@@ -1031,26 +1040,45 @@ fn handle_cron_subcommand(args: &[&str]) -> CommandResponse {
             let rest = args[1..].join(" ");
             let fields: Vec<&str> = rest.split('|').map(str::trim).collect();
             match fields.as_slice() {
-                [name, expr, payload]
-                    if !name.is_empty() && !expr.is_empty() && !payload.is_empty() =>
+                [name, expr, prompt, extras @ ..]
+                    if !name.is_empty() && !expr.is_empty() && !prompt.is_empty() =>
                 {
+                    // Trailing segments are `model=<id>` / `thread=<n>`, in
+                    // any order.
+                    let mut model = None;
+                    let mut thread_id = None;
+                    for extra in extras {
+                        if let Some(m) = extra.strip_prefix("model=") {
+                            model = Some(m.trim().to_string());
+                        } else if let Some(t) = extra.strip_prefix("thread=") {
+                            match t.trim().parse::<u64>() {
+                                Ok(n) => thread_id = Some(n),
+                                Err(_) => return usage(),
+                            }
+                        } else {
+                            return usage();
+                        }
+                    }
                     CommandResponse {
                         messages: vec![format!("Creating job '{}'…", name)],
-                        action: CommandAction::CronAdd(
-                            name.to_string(),
-                            expr.to_string(),
-                            payload.to_string(),
-                        ),
+                        action: CommandAction::CronAdd {
+                            name: name.to_string(),
+                            expr: expr.to_string(),
+                            prompt: prompt.to_string(),
+                            model,
+                            thread_id,
+                        },
                     }
                 }
                 _ => usage(),
             }
         }
-        Some(&action @ ("pause" | "resume" | "rm" | "remove")) => match args.get(1) {
+        Some(&action @ ("pause" | "resume" | "rm" | "remove" | "run")) => match args.get(1) {
             Some(id) => {
                 let kind = match action {
                     "pause" => CronActionKind::Pause,
                     "resume" => CronActionKind::Resume,
+                    "run" => CronActionKind::Run,
                     _ => CronActionKind::Remove,
                 };
                 CommandResponse {

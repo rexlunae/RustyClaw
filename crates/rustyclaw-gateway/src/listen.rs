@@ -377,6 +377,31 @@ pub async fn run_gateway(
         });
     }
 
+    // ── Cron scheduler ──────────────────────────────────────────────
+    //
+    // Fires stored wake schedules as headless agent turns. Standalone
+    // mode only, same as the trigger manager: a per-connection stdio
+    // gateway must not run a duplicate scheduler against the same store.
+    {
+        let cron_notify = Arc::new(tokio::sync::Notify::new());
+        rustyclaw_core::runtime_ctx::set_cron_notify(cron_notify.clone());
+        let deps = crate::cron_runtime::CronDeps {
+            config: shared_config.clone(),
+            model_ctx: shared_model_ctx.clone(),
+            copilot: shared_copilot_session.clone(),
+            vault: vault.clone(),
+            skill_mgr: skill_mgr.clone(),
+            task_mgr: task_mgr.clone(),
+            model_registry: model_registry.clone(),
+        };
+        let cron_cancel = cancel.child_token();
+        tokio::spawn(crate::cron_runtime::run_cron_scheduler(
+            deps,
+            cron_notify,
+            cron_cancel,
+        ));
+    }
+
     // Determine SSH listen address from CLI option or config.
     let ssh_listen = options
         .ssh_listen

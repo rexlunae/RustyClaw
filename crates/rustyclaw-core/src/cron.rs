@@ -186,7 +186,10 @@ impl CronJob {
                 let t = chrono::DateTime::parse_from_rfc3339(at).ok()?;
                 Some(t.timestamp_millis().max(0) as u64)
             }
-            Schedule::Every { every_ms, anchor_ms } => {
+            Schedule::Every {
+                every_ms,
+                anchor_ms,
+            } => {
                 if *every_ms == 0 {
                     return None;
                 }
@@ -888,5 +891,4 @@ mod tests {
         let earliest = store.ensure_next_runs(150).unwrap();
         assert_eq!(earliest, Some(200), "recomputed forward from now");
     }
-
 }

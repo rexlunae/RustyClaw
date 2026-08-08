@@ -14,6 +14,12 @@ pub struct CronJobData {
     pub last_run: Option<String>,
     pub last_status: Option<String>,
     pub run_count: u64,
+    /// The payload is a scheduled agent turn (a wake), not a plain note.
+    pub agent_turn: bool,
+    /// Model override for the scheduled turn, when set.
+    pub model: Option<String>,
+    /// Thread the wake uses for context and lands in, when pinned.
+    pub thread_id: Option<u64>,
 }
 
 impl From<&rustyclaw_core::gateway::protocol::frames::CronJobDto> for CronJobData {
@@ -28,6 +34,9 @@ impl From<&rustyclaw_core::gateway::protocol::frames::CronJobDto> for CronJobDat
             last_run: dto.last_run.clone(),
             last_status: dto.last_status.clone(),
             run_count: dto.run_count,
+            agent_turn: dto.agent_turn,
+            model: dto.model.clone(),
+            thread_id: dto.thread_id,
         }
     }
 }
