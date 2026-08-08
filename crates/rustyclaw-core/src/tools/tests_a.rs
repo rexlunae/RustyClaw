@@ -1066,6 +1066,18 @@ fn test_cron_missing_action() {
 
 #[test]
 fn test_cron_invalid_action() {
+    // `exec_cron` opens the central cron store under the gateway settings
+    // dir, which nothing sets in this module — whether the error below is
+    // even reachable depends on which other test module happened to publish
+    // it first (agent/swarm/trigger tests do, and a fast sync test can run
+    // before them). Pin the context so this test is the same everywhere,
+    // exactly as the agent/swarm tests do.
+    let _guard = crate::runtime_ctx::TEST_CTX_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    crate::runtime_ctx::set_agent_registry_info(tmp.path(), "RustyClaw");
+
     let args = json!({ "action": "invalid" });
     let result = exec_cron(&args, ws());
     assert!(result.is_err());
