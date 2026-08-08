@@ -457,16 +457,34 @@ pub(crate) async fn handle_connection(
 
             match auth_result {
                 Ok(Ok(code)) => {
-                    let valid = {
+                    use rustyclaw_core::secrets::TotpOutcome;
+                    let outcome = {
                         let mut v = vault.lock().await;
-                        match v.verify_totp(code.trim()) {
+                        match v.verify_totp_detailed(code.trim()) {
                             Ok(result) => result,
                             Err(e) => {
                                 warn!(error = %e, "TOTP verification error (vault issue?)");
-                                false
+                                TotpOutcome::Invalid
                             }
                         }
                     };
+                    // A nearby-window match means the code is genuine but
+                    // this host's clock and the authenticator disagree —
+                    // to the user every fresh code "just stops working".
+                    // Say so instead of a bare "invalid code".
+                    let drift_hint = if let TotpOutcome::ClockDrift { steps } = outcome {
+                        let secs = steps.unsigned_abs() * 30;
+                        warn!(
+                            drift_steps = steps,
+                            "TOTP code matched a nearby time window — gateway clock is off by roughly {secs}s; check system time (NTP)"
+                        );
+                        format!(
+                            " The code matches but this machine's clock appears off by roughly {secs}s — sync the gateway's system time."
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let valid = outcome == TotpOutcome::Valid;
                     if valid {
                         auth::clear_rate_limit(&rate_limiter, rate_ip).await;
                         protocol::server::send_auth_result(&mut *writer, true, None, None).await?;
@@ -503,7 +521,7 @@ pub(crate) async fn handle_connection(
                         } else {
                             let remaining = MAX_TOTP_ATTEMPTS - attempts;
                             let msg = format!(
-                                "Invalid 2FA code. {} attempt{} remaining.",
+                                "Invalid 2FA code. {} attempt{} remaining.{drift_hint}",
                                 remaining,
                                 if remaining == 1 { "" } else { "s" }
                             );
