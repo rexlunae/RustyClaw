@@ -65,7 +65,7 @@ pub async fn build_system_prompt_full(
     let base_prompt = config
         .system_prompt
         .clone()
-        .unwrap_or_else(|| "You are a helpful AI assistant running inside RustyClaw.".to_string());
+        .unwrap_or_else(|| default_base_prompt(&config.agent_name));
 
     // Safety guardrails (inspired by Anthropic's constitution)
     let safety_section = "\
@@ -81,6 +81,14 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     // Start building parts
     let mut parts = vec![base_prompt, safety_section.to_string()];
+
+    // Tell the agent its configured name. Without this the agent only knows
+    // who it is when workspace files (IDENTITY.md / SOUL.md) happen to be
+    // injected — the config value is the source of truth and should always
+    // reach the prompt.
+    if !config.agent_name.trim().is_empty() {
+        parts.push(build_identity_section(&config.agent_name));
+    }
 
     if !workspace_prompt.is_empty() {
         parts.push(workspace_prompt);
@@ -173,6 +181,30 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
     parts.join("\n\n")
 }
 
+/// Build the default base prompt, naming the configured agent when one is set.
+///
+/// The generic fallback ("You are a helpful AI assistant…") left the agent
+/// without a name unless workspace files carried one; the configured
+/// `agent_name` should always reach the prompt.
+fn default_base_prompt(agent_name: &str) -> String {
+    let name = agent_name.trim();
+    if name.is_empty() {
+        "You are a helpful AI assistant running inside RustyClaw.".to_string()
+    } else {
+        format!("You are {name}, a helpful AI assistant running inside RustyClaw.")
+    }
+}
+
+/// Tell the agent the name configured for it, so it answers to the same name
+/// the UI shows. Mirrors the messenger handler's identity section.
+fn build_identity_section(agent_name: &str) -> String {
+    format!(
+        "## Identity\n\
+        Your configured name is \"{}\". Introduce yourself by that name.",
+        agent_name.trim()
+    )
+}
+
 /// Build the Tool Usage Guidelines section for system prompts.
 fn build_tool_usage_section() -> String {
     "\
@@ -261,4 +293,31 @@ patterns are more precise and don't break on formatting differences.
 - Keep narration brief and value-dense
 - Use plain language unless in technical context"
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_base_prompt_names_the_agent() {
+        assert_eq!(
+            default_base_prompt("Erskin Semaj"),
+            "You are Erskin Semaj, a helpful AI assistant running inside RustyClaw."
+        );
+    }
+
+    #[test]
+    fn default_base_prompt_falls_back_when_name_empty() {
+        assert_eq!(
+            default_base_prompt("   "),
+            "You are a helpful AI assistant running inside RustyClaw."
+        );
+    }
+
+    #[test]
+    fn identity_section_uses_configured_name() {
+        assert!(build_identity_section("Erskin Semaj").contains("Erskin Semaj"));
+        assert!(build_identity_section("Erskin Semaj").contains("Introduce yourself by that name"));
+    }
 }
