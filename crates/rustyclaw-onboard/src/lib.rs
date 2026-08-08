@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use anyhow::{Context, Result};
 
 use rustyclaw_core::config::{Config, ModelProvider};
-use rustyclaw_core::providers::PROVIDERS;
+use rustyclaw_core::providers::{PROVIDERS, ProviderDef};
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::soul::{DEFAULT_SOUL_CONTENT, SoulManager};
 use rustyclaw_core::theme as t;
@@ -40,6 +40,8 @@ pub struct OnboardArgs {
     pub deepseek_api_key: Option<String>,
     pub reset: bool,
     pub non_interactive: bool,
+    /// Default model to configure, skipping the interactive picker.
+    pub model: Option<String>,
 }
 
 /// Run the interactive onboarding wizard, mutating `config` in place and
@@ -670,93 +672,23 @@ pub fn run_onboard_wizard(
 
     // ── 5. Select a model ──────────────────────────────────────────
 
-    // Try to dynamically fetch models from the provider API.
-    let api_key = provider
-        .secret_key
-        .and_then(|sk| secrets.get_secret(sk, true).ok().flatten());
+    // A --model flag (or non-interactive mode) skips the fetch + picker
+    // entirely so scripted setups never block on a prompt.
+    let model_override = args.as_ref().and_then(|a| a.model.clone());
 
-    let fetched_models: Vec<String> = {
-        let handle = tokio::runtime::Handle::current();
-        let base_ref = if base_url.is_empty() {
-            None
-        } else {
-            Some(base_url.as_str())
-        };
-        print!("  {} Fetching available models…", t::muted("⠋"));
-        io::stdout().flush()?;
-        let result = tokio::task::block_in_place(|| {
-            handle.block_on(rustyclaw_core::providers::fetch_models(
-                provider.id,
-                api_key.as_deref(),
-                base_ref,
-            ))
-        });
-        // Clear the spinner line
-        print!("\r{}\r", " ".repeat(50));
-        io::stdout().flush()?;
-        match result {
-            Ok(models) => {
-                println!(
-                    "  {}",
-                    t::icon_ok(&format!(
-                        "Loaded {} models from {} API.",
-                        models.len(),
-                        provider.display,
-                    ))
-                );
-                models
-            }
-            Err(e) => {
-                println!(
-                    "  {}",
-                    t::warn(&format!(
-                        "Could not fetch models from {} API: {:#}",
-                        provider.display, e
-                    ))
-                );
-                Vec::new()
-            }
-        }
-    };
-
-    // Use fetched models if available, otherwise fall back to static list.
-    let available_models: Vec<String> = if !fetched_models.is_empty() {
-        fetched_models
-    } else {
-        if !provider.models.is_empty() {
-            println!(
-                "  {}",
-                t::warn("Falling back to the built-in model list, which may be outdated.")
-            );
-        }
-        provider.models.iter().map(|s| s.to_string()).collect()
-    };
-
-    let model: String = if available_models.is_empty() {
-        // No models available — ask for a model name.
-        let m = prompt_line(&mut reader, &format!("{} ", t::accent("Model name:")))?;
+    let model: String = if let Some(m) = model_override {
         m.trim().to_string()
-    } else if available_models.len() > 20 {
-        // Large list — use fuzzy search for better UX
-        match fuzzy_select(
-            &available_models,
-            "Select a default model (type to filter):",
-        )? {
-            Some(idx) => available_models[idx].clone(),
-            None => {
-                println!("  {}", t::warn("Cancelled — no model selected."));
-                String::new()
-            }
-        }
+    } else if non_interactive {
+        println!(
+            "  {}",
+            t::warn(
+                "Non-interactive mode with no --model: leaving the default model unset. \
+                 Set model.model in config.toml or re-run with --model."
+            )
+        );
+        String::new()
     } else {
-        // Small list — use simple arrow select
-        match arrow_select(&available_models, "Select a default model:")? {
-            Some(idx) => available_models[idx].clone(),
-            None => {
-                println!("  {}", t::warn("Cancelled — no model selected."));
-                String::new()
-            }
-        }
+        interactive_model_select(provider, secrets, &base_url, &mut reader)?
     };
 
     if !model.is_empty() {
@@ -853,4 +785,105 @@ pub fn run_onboard_wizard(
     println!();
 
     Ok(true)
+}
+
+/// Fetch the provider's model list (from its API, falling back to the
+/// built-in list) and prompt the user to pick a default model.
+///
+/// Returns an empty string when the user cancels the picker.
+fn interactive_model_select(
+    provider: &ProviderDef,
+    secrets: &mut SecretsManager,
+    base_url: &str,
+    reader: &mut impl io::BufRead,
+) -> Result<String> {
+    let api_key = provider
+        .secret_key
+        .and_then(|sk| secrets.get_secret(sk, true).ok().flatten());
+
+    let fetched_models: Vec<String> = {
+        let handle = tokio::runtime::Handle::current();
+        let base_ref = if base_url.is_empty() {
+            None
+        } else {
+            Some(base_url)
+        };
+        print!("  {} Fetching available models…", t::muted("⠋"));
+        io::stdout().flush()?;
+        let result = tokio::task::block_in_place(|| {
+            handle.block_on(rustyclaw_core::providers::fetch_models(
+                provider.id,
+                api_key.as_deref(),
+                base_ref,
+            ))
+        });
+        // Clear the spinner line
+        print!("\r{}\r", " ".repeat(50));
+        io::stdout().flush()?;
+        match result {
+            Ok(models) => {
+                println!(
+                    "  {}",
+                    t::icon_ok(&format!(
+                        "Loaded {} models from {} API.",
+                        models.len(),
+                        provider.display,
+                    ))
+                );
+                models
+            }
+            Err(e) => {
+                println!(
+                    "  {}",
+                    t::warn(&format!(
+                        "Could not fetch models from {} API: {:#}",
+                        provider.display, e
+                    ))
+                );
+                Vec::new()
+            }
+        }
+    };
+
+    // Use fetched models if available, otherwise fall back to static list.
+    let available_models: Vec<String> = if !fetched_models.is_empty() {
+        fetched_models
+    } else {
+        if !provider.models.is_empty() {
+            println!(
+                "  {}",
+                t::warn("Falling back to the built-in model list, which may be outdated.")
+            );
+        }
+        provider.models.iter().map(|s| s.to_string()).collect()
+    };
+
+    let model: String = if available_models.is_empty() {
+        // No models available — ask for a model name.
+        let m = prompt_line(reader, &format!("{} ", t::accent("Model name:")))?;
+        m.trim().to_string()
+    } else if available_models.len() > 20 {
+        // Large list — use fuzzy search for better UX
+        match fuzzy_select(
+            &available_models,
+            "Select a default model (type to filter):",
+        )? {
+            Some(idx) => available_models[idx].clone(),
+            None => {
+                println!("  {}", t::warn("Cancelled — no model selected."));
+                String::new()
+            }
+        }
+    } else {
+        // Small list — use simple arrow select
+        match arrow_select(&available_models, "Select a default model:")? {
+            Some(idx) => available_models[idx].clone(),
+            None => {
+                println!("  {}", t::warn("Cancelled — no model selected."));
+                String::new()
+            }
+        }
+    };
+
+    Ok(model)
 }
