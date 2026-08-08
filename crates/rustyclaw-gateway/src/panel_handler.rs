@@ -1278,9 +1278,10 @@ mod cron_panel_tests {
     use super::*;
 
     fn test_config(dir: &std::path::Path) -> Config {
-        let mut config = Config::default();
-        config.settings_dir = dir.to_path_buf();
-        config
+        Config {
+            settings_dir: dir.to_path_buf(),
+            ..Default::default()
+        }
     }
 
     fn upsert(config: &Config, req: CronUpsert) -> Option<CronJobDto> {
