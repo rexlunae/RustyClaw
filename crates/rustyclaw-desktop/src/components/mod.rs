@@ -67,7 +67,7 @@ pub use channels::ChannelsDialog;
 pub use chat::Chat;
 pub use connection::ConnectionDialog;
 pub use credential_request::CredentialRequestDialog;
-pub use cron::CronDialog;
+pub use cron::{CronCommand, CronDialog};
 pub use device_flow::DeviceFlowDialog;
 pub use downloads::DownloadsDialog;
 pub use edit_dialogs::{EditProjectDialog, EditThreadDialog};

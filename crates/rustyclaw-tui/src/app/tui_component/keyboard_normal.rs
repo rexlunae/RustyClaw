@@ -223,7 +223,6 @@ pub(super) fn handle_normal_key(
     }
 
     // Gateway panel dialogs: Esc to close, ↑/↓ to move the selection.
-    // Mutations go through their slash subcommands (/cron pause …).
     if show_cron_dialog.get() {
         match code {
             KeyCode::Esc => show_cron_dialog.set(false),
@@ -235,6 +234,37 @@ pub(super) fn handle_normal_key(
                     data.select_next();
                 }
                 cron_data.set(Some(data));
+            }
+            // The keys the dialog's footer promises. Each acts on the
+            // selected job; the action result triggers a panel refresh.
+            KeyCode::Char('p') | KeyCode::Char('r') | KeyCode::Char('d') => {
+                let send_input = |input: UserInput| {
+                    if let Ok(guard) = tx_for_keys.lock() {
+                        if let Some(ref tx) = *guard {
+                            tx.send(input).ignore();
+                        }
+                    }
+                };
+                let data = cron_data.read().clone().unwrap_or_default();
+                if let Some(job) = data.selected_job() {
+                    let action = match code {
+                        KeyCode::Char('p') => {
+                            if job.paused {
+                                rustyclaw_core::gateway::CronActionKind::Resume
+                            } else {
+                                rustyclaw_core::gateway::CronActionKind::Pause
+                            }
+                        }
+                        KeyCode::Char('r') => rustyclaw_core::gateway::CronActionKind::Run,
+                        _ => rustyclaw_core::gateway::CronActionKind::Remove,
+                    };
+                    send_input(UserInput::MessengerCommand(
+                        rustyclaw_core::gateway::client_types::GatewayCommand::CronAction {
+                            id: job.id.clone(),
+                            action,
+                        },
+                    ));
+                }
             }
             _ => {}
         }

@@ -57,6 +57,21 @@ pub fn CronDialog(props: &CronDialogProps) -> impl Into<AnyElement<'static>> {
                 if !details.is_empty() {
                     rows.push(("".into(), format!("  {}", details.join(" | "))));
                 }
+
+                // The wake surface: what fires, with what, into where.
+                let mut wake = Vec::new();
+                if job.agent_turn {
+                    wake.push("agent turn".to_string());
+                }
+                if let Some(ref model) = job.model {
+                    wake.push(format!("model: {}", model));
+                }
+                if let Some(thread) = job.thread_id {
+                    wake.push(format!("thread: {}", thread));
+                }
+                if !wake.is_empty() {
+                    rows.push(("".into(), format!("  {}", wake.join(" | "))));
+                }
             }
         }
     } else {

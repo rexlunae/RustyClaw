@@ -513,15 +513,26 @@ pub(super) async fn handle_command_action(
                 .context("sending CronList")
                 .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
-        CommandAction::CronAdd(name, expr, payload) => {
+        CommandAction::CronAdd {
+            name,
+            expr,
+            prompt,
+            model,
+            thread_id,
+        } => {
             crate::app::events::emit(gw_tx, GwEvent::ShowCron);
             client
                 .send(GatewayCommand::CronUpsert {
                     id: None,
                     name,
                     expr,
-                    payload,
+                    payload: prompt,
                     paused: false,
+                    // A /cron add is a wake: the prompt runs as an agent
+                    // turn on schedule, not a passive note.
+                    agent_turn: true,
+                    model,
+                    thread_id,
                 })
                 .await
                 .context("sending CronUpsert")
