@@ -162,20 +162,6 @@ pub(crate) fn handle_gateway_event(
             s.pending_tool_approvals.clear();
             s.pending_credential_requests.clear();
             s.pending_device_flows.clear();
-            // The gateway repoints the workspace at the restored foreground
-            // thread's directory on connect, which need not be where the
-            // previous session's editor cache came from.
-            let dropped = s.workspace.rebase_to_current_thread();
-            if !dropped.is_empty() {
-                let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
-                s.push_notice(
-                    MessageRole::Warning,
-                    format!(
-                        "Reconnected; discarded unsaved editor changes: {}",
-                        names.join(", ")
-                    ),
-                );
-            }
         }
         GatewayEvent::Disconnected { reason } => {
             let mut s = state.write();
@@ -454,77 +440,23 @@ pub(crate) fn handle_gateway_event(
                 })
                 .collect();
             let mut s = state.write();
-            // Selecting the first plugin when nothing is selected means the
-            // panel shows content immediately instead of a bare tab strip.
-            if s.active_plugin.is_none() {
-                s.active_plugin = snapshots.first().map(|p| p.name.clone());
+            // The dock is hidden until a plugin is actually called for. A
+            // plugin update is the agent calling for its plugins, so the dock
+            // shows itself when there is something to render — and folds away
+            // when the last plugin disappears instead of leaving an empty
+            // column.
+            if snapshots.is_empty() {
+                s.plugin_dock_visible = false;
+                s.active_plugin = None;
+            } else {
+                s.plugin_dock_visible = true;
+                // Selecting the first plugin when nothing is selected means the
+                // panel shows content immediately instead of a bare tab strip.
+                if s.active_plugin.is_none() {
+                    s.active_plugin = snapshots.first().map(|p| p.name.clone());
+                }
             }
             s.plugins = snapshots;
-        }
-        // Every workspace reply carries the directory its paths are relative
-        // to. A reply for somewhere else is in flight from before a move, and
-        // mixing it into the current view is exactly how a stale path used to
-        // survive — so it is dropped, loudly enough to debug.
-        GatewayEvent::WorkspaceDirListing {
-            path,
-            entries,
-            error,
-            root,
-        } => {
-            let mut s = state.write();
-            if !s.workspace.accepts(&root) {
-                tracing::debug!(root = %root.display(), "Ignoring listing for a previous workspace");
-                return;
-            }
-            s.workspace.adopt_root(root);
-            match error {
-                // A refused or failed listing is surfaced, not dropped: the
-                // tree would otherwise just silently fail to expand.
-                Some(message) => s.push_notice(MessageRole::Error, message),
-                None => s.workspace.set_listing(path, entries),
-            }
-        }
-        GatewayEvent::WorkspaceFileContent {
-            path,
-            content,
-            error,
-            root,
-        } => {
-            let mut s = state.write();
-            if !s.workspace.accepts(&root) {
-                tracing::debug!(root = %root.display(), "Ignoring file for a previous workspace");
-                return;
-            }
-            s.workspace.adopt_root(root);
-            match error {
-                Some(message) => s.push_notice(MessageRole::Error, message),
-                None => s.workspace.set_file(path, content),
-            }
-        }
-        GatewayEvent::WorkspaceWriteResult {
-            path,
-            ok,
-            error,
-            root,
-        } => {
-            let mut s = state.write();
-            if !s.workspace.accepts(&root) {
-                tracing::debug!(root = %root.display(), "Ignoring write result for a previous workspace");
-                return;
-            }
-            // Promote the written text to the loaded text. Dirtiness is
-            // derived by comparing the two, so this alone clears the marker —
-            // and correctly leaves it set when the user typed more while the
-            // save was in flight.
-            s.workspace.finish_save(&path, ok);
-            if ok {
-                s.push_notice(MessageRole::Info, format!("Saved {}", path.display()));
-            } else {
-                s.push_notice(
-                    MessageRole::Error,
-                    error.unwrap_or_else(|| format!("Could not save {}", path.display())),
-                );
-            }
         }
         GatewayEvent::ProjectsUpdate {
             projects,

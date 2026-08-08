@@ -35,9 +35,7 @@ mod device_flow;
 mod dir_picker;
 mod downloads;
 mod edit_dialogs;
-mod editor;
 mod engines;
-mod file_browser;
 mod hatching;
 mod logs;
 mod mcp;
@@ -55,7 +53,6 @@ mod swarm_panel;
 mod system_info;
 mod tool_approval;
 mod tools_config;
-mod unsaved_changes;
 mod user_prompt;
 mod vault_unlock;
 
@@ -70,11 +67,8 @@ pub use cron::{CronCommand, CronDialog};
 pub use device_flow::DeviceFlowDialog;
 pub use downloads::DownloadsDialog;
 pub use edit_dialogs::{EditProjectDialog, EditThreadDialog};
-pub use editor::{EDITOR_PLUGIN, Editor, EditorAction};
 #[allow(unused_imports)]
 pub use engines::EnginesDialog;
-#[allow(unused_imports)]
-pub use file_browser::FileBrowser;
 pub use hatching::HatchingDialog;
 pub use logs::LogsDialog;
 pub use mcp::McpDialog;
@@ -82,6 +76,7 @@ pub use memory::MemoryDialog;
 pub use messengers::{MessengerCommand, MessengersDialog};
 pub use new_project::NewProjectDialog;
 pub use pairing::{PairingDialog, generate_qr_code};
+#[allow(unused_imports)]
 pub use plugin_panel::{
     NativePluginTab, PluginActionEvent, PluginActionInfo, PluginPanel, PluginSnapshot,
 };
@@ -94,7 +89,6 @@ pub use swarm_panel::SwarmPanel;
 pub use system_info::SystemInfoDialog;
 pub use tool_approval::ToolApprovalDialog;
 pub use tools_config::ToolsConfigDialog;
-pub use unsaved_changes::{UnsavedChangesDialog, UnsavedChoice};
 pub use vault_unlock::VaultUnlockDialog;
 
 /// Copy text to the system clipboard.

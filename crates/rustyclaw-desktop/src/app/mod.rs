@@ -10,7 +10,7 @@ use crate::components::{
 };
 
 use crate::app_support::*;
-use crate::state::{AppState, PendingWorkspaceChange};
+use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::SessionOrigin;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
@@ -247,47 +247,6 @@ pub fn App() -> Element {
         }
     });
 
-    // Keep the editor's root file listing in step with the workspace.
-    //
-    // The gateway only sends a listing in reply to a request, and the editor
-    // component stays mounted across thread switches, project switches, and
-    // reconnects — so a mount-time effect inside it would fire once and leave
-    // the tree blank forever after the first reset. Watching the generation
-    // counter here covers every reset path, including reconnect, which has no
-    // gateway handle of its own. Tracking the generation rather than "is the
-    // cache empty" means a directory that really is empty, or one whose
-    // listing failed, does not re-request in a loop.
-    let mut listed_generation = use_signal(|| None::<u64>);
-    use_effect(move || {
-        let (generation, connected) = {
-            let s = state.read();
-            (
-                s.workspace.generation(),
-                matches!(
-                    s.connection,
-                    ConnectionStatus::Connected | ConnectionStatus::Authenticated
-                ),
-            )
-        };
-        if !connected || *listed_generation.read() == Some(generation) {
-            return;
-        }
-        listed_generation.set(Some(generation));
-        let gw = gateway.read().clone();
-        if let Some(client) = gw {
-            spawn(async move {
-                if let Err(e) = client
-                    .send(GatewayCommand::WorkspaceListDir {
-                        path: std::path::PathBuf::new(),
-                    })
-                    .await
-                {
-                    tracing::error!(error = %e, "Root workspace listing failed to send");
-                }
-            });
-        }
-    });
-
     // Ask the gateway for the active provider's live model list so the
     // model picker reflects the provider API instead of the static
     // catalogue.  Re-runs on provider switches; the `requested` set keeps
@@ -346,9 +305,6 @@ pub fn App() -> Element {
             let mut s = state.write();
             s.working_directory = Some(path);
             s.available_directories = options;
-            if let Some(root) = s.working_directory.as_deref() {
-                s.file_browser = rustyclaw_view::FileBrowserData::load(root);
-            }
         }
     });
 
@@ -871,128 +827,18 @@ pub fn App() -> Element {
 
     let on_new_project = move |_| show_new_project.set(true);
 
-    /// Say what unsaved work a workspace move discarded, if any.
-    ///
-    /// Take the list as an argument rather than doing the rebase here: a
-    /// caller must bind the rebase result to a variable first, so the write
-    /// guard is released before this takes its own.
-    fn warn_dropped(mut state: Signal<AppState>, dropped: Vec<std::path::PathBuf>) {
-        if dropped.is_empty() {
-            return;
-        }
-        let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
-        state.write().push_notice(
-            MessageRole::Warning,
-            format!(
-                "Working directory changed with unsaved editor changes; discarded: {}",
-                names.join(", ")
-            ),
-        );
-    }
-
-    // ── Workspace changes and unsaved editor work ───────────────────────
-    //
-    // Anything that repoints the working directory invalidates every path the
-    // editor holds, so unsaved changes cannot come along. `guard` defers the
-    // change behind a prompt when there is work at stake; `apply` performs it
-    // once there is nothing to lose (or the user has said to go ahead).
-    let mut apply_workspace_change = move |change: PendingWorkspaceChange| {
-        let gw = gateway.read().clone();
-        match change {
-            // The reset happens inside the success arm only: a directory that
-            // fails to open has not moved anything, and discarding the
-            // editor's work for a change that did not happen would be a
-            // gratuitous loss.
-            PendingWorkspaceChange::Directory(path) => match std::env::set_current_dir(&path) {
-                Ok(()) => {
-                    let dropped = state.write().workspace.rebase(path.clone().into());
-                    warn_dropped(state, dropped);
-                    let options = build_directory_options(&path);
-                    {
-                        let mut s = state.write();
-                        s.working_directory = Some(path.clone());
-                        s.available_directories = options;
-                        s.file_browser = rustyclaw_view::FileBrowserData::load(&path);
-                        s.directory_selector_expanded = false;
-                        s.directory_selector_error = None;
-                        s.push_notice(
-                            MessageRole::Info,
-                            format!("Working directory set to {}", display_path(&path)),
-                        );
-                    }
-                    if let Some(client) = gw {
-                        let p = std::path::PathBuf::from(path);
-                        spawn(async move {
-                            if let Err(e) = client
-                                .send(GatewayCommand::SetWorkingDirectory { path: p })
-                                .await
-                            {
-                                tracing::error!(error = %e, "SetWorkingDirectory send failed");
-                            }
-                        });
-                    }
-                }
-                Err(e) => {
-                    state.write().directory_selector_error =
-                        Some(format!("Failed to change directory: {}", e));
-                }
-            },
-            PendingWorkspaceChange::Project(project_id) => {
-                let dropped = state.write().workspace.rebase_to_current_thread();
-                warn_dropped(state, dropped);
-                if let Some(client) = gw {
-                    spawn(async move {
-                        if let Err(e) = client
-                            .send(GatewayCommand::ProjectSwitch { project_id })
-                            .await
-                        {
-                            tracing::error!(error = %e, "ProjectSwitch send failed");
-                        }
-                    });
-                }
-            }
-            PendingWorkspaceChange::Thread(thread_id) => {
-                // `switch_thread` resets the view itself.
-                if let Some(client) = gw {
-                    spawn_reporting("open thread", async move {
-                        client
-                            .send(GatewayCommand::ThreadSwitch { thread_id })
-                            .await
-                            .with_context(|| format!("switching to thread {thread_id}"))?;
-                        tracing::info!(
-                            thread_id,
-                            "Desktop requesting thread history after ThreadSwitch"
-                        );
-                        // Stopping here matters: the view has already been
-                        // reset for the incoming thread, so a history request
-                        // that never leaves the process is the empty
-                        // transcript the user ends up looking at.
-                        client
-                            .send(GatewayCommand::ThreadHistoryRequest { thread_id })
-                            .await
-                            .with_context(|| {
-                                format!("requesting history for thread {thread_id}")
-                            })?;
-                        Ok(())
-                    });
-                }
-                state.write().switch_thread(thread_id);
-            }
-        }
-    };
-
-    // Apply now when nothing is at stake; otherwise park it behind the prompt.
-    let mut guard_workspace_change = move |change: PendingWorkspaceChange| {
-        if state.read().workspace.unsaved().is_empty() {
-            apply_workspace_change(change);
-        } else {
-            state.write().pending_workspace_change = Some(change);
-        }
-    };
-
     let on_switch_project = move |project_id: u64| {
-        // A different project means a different directory.
-        guard_workspace_change(PendingWorkspaceChange::Project(project_id));
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                if let Err(e) = client
+                    .send(GatewayCommand::ProjectSwitch { project_id })
+                    .await
+                {
+                    tracing::error!(error = %e, "ProjectSwitch send failed");
+                }
+            });
+        }
     };
 
     let on_rename_project = move |(project_id, new_name): (u64, String)| {
@@ -1027,9 +873,30 @@ pub fn App() -> Element {
     };
 
     let on_switch_thread = move |thread_id: u64| {
-        // A thread may pin its own working directory, so this can move the
-        // workspace out from under the editor.
-        guard_workspace_change(PendingWorkspaceChange::Thread(thread_id));
+        // `switch_thread` resets the view for the incoming thread.
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn_reporting("open thread", async move {
+                client
+                    .send(GatewayCommand::ThreadSwitch { thread_id })
+                    .await
+                    .with_context(|| format!("switching to thread {thread_id}"))?;
+                tracing::info!(
+                    thread_id,
+                    "Desktop requesting thread history after ThreadSwitch"
+                );
+                // Stopping here matters: the view has already been reset for
+                // the incoming thread, so a history request that never leaves
+                // the process is the empty transcript the user ends up
+                // looking at.
+                client
+                    .send(GatewayCommand::ThreadHistoryRequest { thread_id })
+                    .await
+                    .with_context(|| format!("requesting history for thread {thread_id}"))?;
+                Ok(())
+            });
+        }
+        state.write().switch_thread(thread_id);
     };
 
     let on_rename_thread = move |(thread_id, new_label): (u64, String)| {
@@ -1402,73 +1269,6 @@ pub fn App() -> Element {
         }
     });
 
-    // ── Editor plugin ───────────────────────────────────────────────────
-    //
-    // The editor is a native plugin; these translate its requests into the
-    // workspace file frames, which the gateway confines to the thread's
-    // effective working directory.
-    let on_editor_action = move |action: crate::components::EditorAction| {
-        use crate::components::EditorAction as A;
-        // Opening a file adds its tab and focuses it before the contents
-        // arrive, so the pane can show "Loading…" rather than nothing.
-        if let A::OpenFile(ref path) = action {
-            state.write().workspace.open_file(path.clone());
-        }
-        let command = match action {
-            A::OpenFile(path) => GatewayCommand::WorkspaceReadFile { path },
-            A::Save { path, content } => {
-                // Remember what is being written: the result frame carries
-                // only path/ok/error, and the buffer cannot be reconciled
-                // without knowing which text actually reached disk. The root
-                // travels too, so the gateway refuses a buffer captured
-                // before the workspace moved.
-                let expected_root = {
-                    let mut s = state.write();
-                    s.workspace.begin_save(path.clone(), content.clone());
-                    s.workspace
-                        .root()
-                        .map(|r| r.to_path_buf())
-                        .unwrap_or_default()
-                };
-                GatewayCommand::WorkspaceWriteFile {
-                    path,
-                    content,
-                    expected_root,
-                }
-            }
-        };
-        let gw = gateway.read().clone();
-        if let Some(client) = gw {
-            spawn(async move {
-                if let Err(e) = client.send(command).await {
-                    tracing::error!(error = %e, "Editor request failed to send");
-                }
-            });
-        }
-    };
-
-    let on_editor_toggle_dir = move |path: std::path::PathBuf| {
-        // Fetch on first expand only; a collapsed-then-reopened directory
-        // keeps what it already has.
-        let needs_listing = state.write().workspace.toggle_dir(path.clone());
-        if needs_listing {
-            let gw = gateway.read().clone();
-            if let Some(client) = gw {
-                spawn(async move {
-                    if let Err(e) = client.send(GatewayCommand::WorkspaceListDir { path }).await {
-                        tracing::error!(error = %e, "Editor directory listing failed to send");
-                    }
-                });
-            }
-        }
-    };
-
-    let on_editor_close_tab = move |path: std::path::PathBuf| {
-        // Unsaved text is kept: closing a tab should not be a silent way to
-        // throw work away. Reopening the file shows it again.
-        state.write().workspace.close_file(&path);
-    };
-
     // Top-bar title: "Project — Thread" for the active project / foreground thread.
     let topbar_title = {
         let s = state.read();
@@ -1486,6 +1286,42 @@ pub fn App() -> Element {
             (Some(p), None) => p,
             (None, Some(t)) => t,
             (None, None) => "RustyClaw".to_string(),
+        }
+    };
+
+    // Apply a picked directory both locally and on the gateway, so the
+    // thread's effective working directory follows the picker. Shared by the
+    // recent-favourites list and the "other…" file dialog.
+    let mut apply_directory = move |path: String| match std::env::set_current_dir(&path) {
+        Ok(()) => {
+            let options = build_directory_options(&path);
+            {
+                let mut s = state.write();
+                s.working_directory = Some(path.clone());
+                s.available_directories = options;
+                s.directory_selector_expanded = false;
+                s.directory_selector_error = None;
+                s.push_notice(
+                    MessageRole::Info,
+                    format!("Working directory set to {}", display_path(&path)),
+                );
+            }
+            let gw = gateway.read().clone();
+            if let Some(client) = gw {
+                let p = std::path::PathBuf::from(path);
+                spawn(async move {
+                    if let Err(e) = client
+                        .send(GatewayCommand::SetWorkingDirectory { path: p })
+                        .await
+                    {
+                        tracing::error!(error = %e, "SetWorkingDirectory send failed");
+                    }
+                });
+            }
+        }
+        Err(e) => {
+            state.write().directory_selector_error =
+                Some(format!("Failed to change directory: {}", e));
         }
     };
 
@@ -1669,6 +1505,10 @@ pub fn App() -> Element {
                     }
                 }
 
+                // Apply a picked directory both locally and on the gateway,
+                // so the thread's effective working directory follows the
+                // picker. Shared by the recent-favourites list and the
+                // "other…" file dialog.
                 Chat {
                     messages: state.read().messages.iter().cloned().collect::<Vec<_>>(),
                     surface: rustyclaw_view::ChatSurfaceData {
@@ -1749,57 +1589,27 @@ pub fn App() -> Element {
                                     .pick_folder()
                                     .await
                                 {
-                                    Some(folder) => guard_workspace_change(
-                                        PendingWorkspaceChange::Directory(
-                                            folder.path().display().to_string(),
-                                        ),
+                                    Some(folder) => apply_directory(
+                                        folder.path().display().to_string(),
                                     ),
                                     None => state.write().directory_selector_expanded = false,
                                 }
                             });
                             return;
                         }
-                        guard_workspace_change(PendingWorkspaceChange::Directory(path));
+                        apply_directory(path);
                     },
                 }
             }
 
-                // Plugin dock. Replaces the old right sidebar, which hard-coded a
-                // Files/Plugins tab pair. It only renders when at least one
-                // plugin is loaded, so an install with no plugins gets the full
-                // width for chat instead of an empty panel.
+                // Plugin dock. It only renders when the user has opened it or a
+                // plugin is actually loaded — an install with no plugins keeps
+                // the full width for chat instead of an empty panel.
                 if state.read().plugin_dock_visible {
                     aside { class: "sidebar plugin-dock",
                         crate::components::PluginPanel {
                             plugins: state.read().plugins.clone(),
-                            native: vec![crate::components::NativePluginTab {
-                                name: crate::components::EDITOR_PLUGIN.to_string(),
-                                emoji: "📝".to_string(),
-                                body: rsx! {
-                                    crate::components::Editor {
-                                        listings: state.read().workspace.listings().clone(),
-                                        files: state.read().workspace.files().clone(),
-                                        edits: state.read().workspace.edits().clone(),
-                                        expanded: state.read().workspace.expanded().clone(),
-                                        open: state.read().workspace.open().to_vec(),
-                                        active: state.read().workspace.active().map(|p| p.to_path_buf()),
-                                        root_label: state
-                                            .read()
-                                            .working_directory
-                                            .clone()
-                                            .unwrap_or_else(|| "workspace".to_string()),
-                                        on_action: on_editor_action,
-                                        on_toggle_dir: on_editor_toggle_dir,
-                                        on_select_tab: move |path: std::path::PathBuf| {
-                                            state.write().workspace.focus(path);
-                                        },
-                                        on_close_tab: on_editor_close_tab,
-                                        on_edit: move |(path, text): (std::path::PathBuf, String)| {
-                                            state.write().workspace.set_edit(path, text);
-                                        },
-                                    }
-                                },
-                            }],
+                            native: Vec::new(),
                             active_plugin: state.read().active_plugin.clone(),
                             on_select_plugin: move |name: String| {
                                 state.write().active_plugin = Some(name);
@@ -1921,84 +1731,6 @@ pub fn App() -> Element {
                             }
                         }
                     })
-            }
-
-            // Unsaved-changes prompt, gating any workspace change.
-            {
-                state.read().pending_workspace_change.clone().map(|change| {
-                    let files = state.read().workspace.unsaved();
-                    let destination = match &change {
-                        PendingWorkspaceChange::Directory(path) => display_path(path),
-                        PendingWorkspaceChange::Project(_) => "another project".to_string(),
-                        PendingWorkspaceChange::Thread(_) => "another thread".to_string(),
-                    };
-                    rsx! {
-                        crate::components::UnsavedChangesDialog {
-                            files,
-                            destination,
-                            on_choose: move |choice: crate::components::UnsavedChoice| {
-                                use crate::components::UnsavedChoice as C;
-                                let change = change.clone();
-                                state.write().pending_workspace_change = None;
-                                match choice {
-                                    // Nothing moves, so nothing is lost.
-                                    C::Cancel => {}
-                                    C::Discard => apply_workspace_change(change),
-                                    C::Save => {
-                                        // The gateway handles a connection's frames in
-                                        // order, so writes queued before the repoint
-                                        // resolve against the directory they were
-                                        // written in. Failures still surface as error
-                                        // notices from WorkspaceWriteResult.
-                                        let (pending, expected_root) = {
-                                            let s = state.read();
-                                            let root = s
-                                                .workspace
-                                                .root()
-                                                .map(|r| r.to_path_buf())
-                                                .unwrap_or_default();
-                                            let files: Vec<(std::path::PathBuf, String)> = s
-                                                .workspace
-                                                .unsaved()
-                                                .into_iter()
-                                                .filter_map(|p| {
-                                                    s.workspace.edits().get(&p).map(|c| (p, c.clone()))
-                                                })
-                                                .collect();
-                                            (files, root)
-                                        };
-                                        let gw = gateway.read().clone();
-                                        if let Some(client) = gw {
-                                            spawn(async move {
-                                                for (path, content) in pending {
-                                                    if let Err(e) = client
-                                                        .send(GatewayCommand::WorkspaceWriteFile {
-                                                            path,
-                                                            content,
-                                                            expected_root: expected_root.clone(),
-                                                        })
-                                                        .await
-                                                    {
-                                                        tracing::error!(
-                                                            error = %e,
-                                                            "Save-before-switch write failed to send"
-                                                        );
-                                                    }
-                                                }
-                                            });
-                                        }
-                                        // The writes are queued; treat them as
-                                        // landed so the rebase does not warn
-                                        // about work the user just chose to
-                                        // save. Failures still report.
-                                        state.write().workspace.assume_saved();
-                                        apply_workspace_change(change);
-                                    }
-                                }
-                            },
-                        }
-                    }
-                })
             }
 
             // Modals
