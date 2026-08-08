@@ -18,7 +18,7 @@ use std::sync::mpsc as sync_mpsc;
 
 use rustyclaw_core::commands::{CommandContext, CommandResponse, handle_command};
 use rustyclaw_core::config::Config;
-use rustyclaw_core::gateway::{EngineActionKind, GatewayClient, GatewayCommand};
+use rustyclaw_core::gateway::{EngineActionKind, GatewayClient, GatewayCommand, SessionOrigin};
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
 use rustyclaw_core::soul::SoulManager;
@@ -389,6 +389,7 @@ impl App {
                         .send(GatewayCommand::Chat {
                             message: prompt,
                             thread_id,
+                            client_kind: Some(SessionOrigin::Tui),
                         })
                         .await
                         .context("sending Chat")

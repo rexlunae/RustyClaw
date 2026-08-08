@@ -14,11 +14,17 @@ pub type JobId = String;
 
 /// Generate a unique job ID.
 fn generate_job_id() -> JobId {
+    // A millisecond timestamp alone collides when two jobs are created in the
+    // same millisecond (the scheduler creates them back-to-back), so a
+    // per-process counter disambiguates.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    format!("job-{:x}", timestamp)
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("job-{:x}-{:x}", timestamp, seq)
 }
 
 /// Schedule kinds for cron jobs.

@@ -289,9 +289,18 @@ async fn run_agent_turn(
     // thread marked streaming forever is a bug this codebase has paid for
     // before.
     let result = async {
-        let system_prompt =
-            crate::system_prompt::build_system_prompt(config, &deps.task_mgr, &deps.skill_mgr)
-                .await;
+        let system_prompt = crate::system_prompt::build_system_prompt_full(
+            config,
+            &deps.task_mgr,
+            None,
+            &deps.skill_mgr,
+            crate::system_prompt::SessionContext {
+                platform: Some("cron"),
+                origin: Some(rustyclaw_core::gateway::SessionOrigin::Trigger),
+                ..Default::default()
+            },
+        )
+        .await;
 
         let mut messages =
             providers::thread_history_to_chat_messages(&model_ctx.provider, &history);

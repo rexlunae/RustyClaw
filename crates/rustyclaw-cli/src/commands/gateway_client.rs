@@ -459,6 +459,8 @@ pub(crate) async fn handle_ask(config: &Config, args: AskArgs) -> Result<()> {
             // Headless one-shot: it has no thread of its own to name, so the
             // gateway picks as it always has.
             thread_id: None,
+            // The agent should know it is being spoken to from a headless CLI.
+            client_kind: Some(rustyclaw_core::gateway::SessionOrigin::Cli),
         },
     };
     let bytes = serialize_frame(&frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;

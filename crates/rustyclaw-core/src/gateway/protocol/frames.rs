@@ -530,6 +530,39 @@ pub enum ModelActionKind {
     Remove,
 }
 
+/// Where a session's messages come from.
+///
+/// Clients declare their kind on the wire (`desktop`, `tui`, `cli`); the
+/// gateway resolves the rest from context: non-loopback peers are
+/// [`SessionOrigin::Remote`], messenger and trigger sessions identify
+/// themselves, and older clients that declare nothing fall back to
+/// [`SessionOrigin::Local`].
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::AsRefStr, strum::Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum SessionOrigin {
+    /// The dioxus desktop client.
+    Desktop,
+    /// The terminal UI.
+    Tui,
+    /// The headless `rustyclaw` command-line client.
+    Cli,
+    /// A connection from another machine (SSH or a remote client).
+    Remote,
+    /// A local connection whose client did not declare a kind.
+    Local,
+    /// A messenger channel (Telegram, Discord, …).
+    Messenger,
+    /// An external trigger fired this session.
+    Trigger,
+    /// An unrecognized kind sent by a future client. Kept so an unknown wire
+    /// value deserializes instead of failing the whole frame.
+    #[serde(other)]
+    Unknown,
+}
+
 /// Payload variants for client frames.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientPayload {
@@ -561,6 +594,11 @@ pub enum ClientPayload {
         /// the old behaviour, kept for clients that do not track threads.
         #[serde(default)]
         thread_id: Option<u64>,
+        /// Which client UI sent this message. Lets the gateway tell the
+        /// agent where it is being spoken to from. `None` from older
+        /// clients — the gateway then falls back to its best guess.
+        #[serde(default)]
+        client_kind: Option<SessionOrigin>,
     },
     SecretsList,
     SecretsGet {

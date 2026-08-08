@@ -469,6 +469,11 @@ pub enum GatewayCommand {
         message: String,
         #[serde(default)]
         thread_id: Option<u64>,
+        /// The client's own kind ([`SessionOrigin::Desktop`],
+        /// [`SessionOrigin::Tui`], …). Sent so the gateway can tell the agent
+        /// where the message comes from.
+        #[serde(default)]
+        client_kind: Option<SessionOrigin>,
     },
 
     /// Authenticate with TOTP code
@@ -914,7 +919,8 @@ pub enum GatewayCommand {
 
 use crate::gateway::{
     ChannelPairActionKind, ChatMessage, ClientFrame, ClientFrameType, ClientPayload,
-    CronActionKind, EngineActionKind, ModelActionKind, ServerFrame, ServerPayload, StatusType,
+    CronActionKind, EngineActionKind, ModelActionKind, ServerFrame, ServerPayload, SessionOrigin,
+    StatusType,
 };
 
 impl GatewayCommand {
@@ -944,11 +950,16 @@ impl GatewayCommand {
     /// Convert this command into the wire frame the gateway expects.
     pub fn into_frame(self) -> ClientFrame {
         match self {
-            GatewayCommand::Chat { message, thread_id } => ClientFrame {
+            GatewayCommand::Chat {
+                message,
+                thread_id,
+                client_kind,
+            } => ClientFrame {
                 frame_type: ClientFrameType::Chat,
                 payload: ClientPayload::Chat {
                     messages: vec![ChatMessage::text("user", &message)],
                     thread_id,
+                    client_kind,
                 },
             },
             GatewayCommand::Auth { code } => ClientFrame {

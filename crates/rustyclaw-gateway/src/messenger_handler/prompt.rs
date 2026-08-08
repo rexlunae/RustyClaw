@@ -146,9 +146,10 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     parts.push(format!(
         "## Messaging Context\n\
+        - Origin: {}\n\
+        - Messenger: {}\n\
         - Channel: {}\n\
         - Sender: {}\n\
-        - Platform: {}\n\
         \n\
         When responding:\n\
         - Be concise and appropriate for chat\n\
@@ -156,9 +157,10 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         - For proactive sends, use the `message` tool\n\
         \n\
         {}",
+        rustyclaw_core::gateway::SessionOrigin::Messenger,
+        messenger_type,
         msg.channel.as_deref().unwrap_or("direct"),
         msg.sender,
-        messenger_type,
         get_platform_formatting_guide(messenger_type)
     ));
 

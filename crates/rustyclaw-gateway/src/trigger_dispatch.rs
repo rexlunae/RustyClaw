@@ -125,8 +125,18 @@ async fn run_inner(
         .map(|d| d.name)
         .unwrap_or_else(|| fire.trigger_id.clone());
 
-    let system_prompt =
-        crate::system_prompt::build_system_prompt(&config, task_mgr, skill_mgr).await;
+    let system_prompt = crate::system_prompt::build_system_prompt_full(
+        &config,
+        task_mgr,
+        None,
+        skill_mgr,
+        crate::system_prompt::SessionContext {
+            platform: Some("trigger"),
+            origin: Some(rustyclaw_core::gateway::SessionOrigin::Trigger),
+            ..Default::default()
+        },
+    )
+    .await;
     let context_json =
         serde_json::to_string_pretty(&fire.context).unwrap_or_else(|_| "{}".to_string());
     let user_message = format!(
