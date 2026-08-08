@@ -859,6 +859,19 @@ pub fn App() -> Element {
 
     let on_edit_project = move |project_id: u64| edit_project.set(Some(project_id));
 
+    let on_toggle_pin_project = move |(project_id, pinned): (u64, bool)| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn_reporting("pin project", async move {
+                client
+                    .send(GatewayCommand::ProjectPin { project_id, pinned })
+                    .await
+                    .context("sending ProjectPin")?;
+                Ok(())
+            });
+        }
+    };
+
     let on_delete_project = move |project_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
@@ -916,6 +929,19 @@ pub fn App() -> Element {
     };
 
     let on_edit_thread = move |thread_id: u64| edit_thread.set(Some(thread_id));
+
+    let on_toggle_pin_thread = move |(thread_id, pinned): (u64, bool)| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn_reporting("pin thread", async move {
+                client
+                    .send(GatewayCommand::ThreadPin { thread_id, pinned })
+                    .await
+                    .context("sending ThreadPin")?;
+                Ok(())
+            });
+        }
+    };
 
     let on_delete_thread = move |thread_id: u64| {
         let gw = gateway.read().clone();
@@ -1426,12 +1452,14 @@ pub fn App() -> Element {
                         on_rename_thread: on_rename_thread,
                         on_edit_thread: on_edit_thread,
                         on_delete_thread: on_delete_thread,
+                        on_toggle_pin_thread: on_toggle_pin_thread,
                         on_new_thread_in: on_new_thread_in,
                         on_new_project: on_new_project,
                         on_switch_project: on_switch_project,
                         on_rename_project: on_rename_project,
                         on_edit_project: on_edit_project,
                         on_delete_project: on_delete_project,
+                        on_toggle_pin_project: on_toggle_pin_project,
                         tree: sidebar_tree,
                         foreground_id: state.read().foreground_thread_id,
                         on_pair: move |_| show_pairing.set(true),

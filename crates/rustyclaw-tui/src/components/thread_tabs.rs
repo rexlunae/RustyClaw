@@ -31,12 +31,16 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
         Header {
             name: String,
             active: bool,
+            pinned: bool,
+            needs_input: bool,
         },
         Thread {
             label: String,
             icon: &'static str,
             active: bool,
             selected: bool,
+            pinned: bool,
+            needs_input: bool,
         },
     }
 
@@ -56,6 +60,15 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
             rows.push(Row::Header {
                 name: project_name(t.project_id),
                 active: t.project_id == props.active_project_id,
+                pinned: props
+                    .projects
+                    .iter()
+                    .any(|p| p.id == t.project_id && p.pinned),
+                needs_input: props
+                    .threads
+                    .iter()
+                    .filter(|s| s.project_id == t.project_id)
+                    .any(SidebarItemData::needs_input),
             });
             last_project = Some(t.project_id);
         }
@@ -64,6 +77,8 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
             icon: t.state.icon(),
             active: t.is_foreground,
             selected: props.focused && idx == props.selected,
+            pinned: t.pinned,
+            needs_input: t.needs_input(),
         });
     }
 
@@ -81,23 +96,47 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
             Text(content: " Projects", color: theme::ACCENT_BRIGHT, weight: Weight::Bold)
             #(if has_threads {
                 rows.into_iter().map(|row| match row {
-                    Row::Header { name, active } => element! {
+                    Row::Header { name, active, pinned, needs_input } => element! {
                         View(margin_top: 1) {
                             Text(
-                                content: format!("{} {}", if active { "▾" } else { "▸" }, name),
-                                color: if active { theme::ACCENT } else { theme::TEXT_DIM },
+                                content: format!(
+                                    "{} {}{}",
+                                    if active { "▾" } else { "▸" },
+                                    if pinned { "📌 " } else { "" },
+                                    name,
+                                ),
+                                color: if needs_input {
+                                    theme::WARN
+                                } else if active {
+                                    theme::ACCENT
+                                } else {
+                                    theme::TEXT_DIM
+                                },
                                 weight: Weight::Bold,
                             )
                         }
                     }.into_any(),
-                    Row::Thread { label, icon, active, selected } => {
+                    Row::Thread { label, icon, active, selected, pinned, needs_input } => {
                         // The state icon leads (▶ working, ❓ asking, ○ ready,
-                        // …); the row colour still marks the foreground.
-                        let color = if active || selected { theme::ACCENT } else { theme::TEXT_DIM };
+                        // …); the row colour still marks the foreground. A
+                        // thread parked on the user goes warning-coloured; a
+                        // pinned one gets the pin marker.
+                        let color = if needs_input {
+                            theme::WARN
+                        } else if active || selected {
+                            theme::ACCENT
+                        } else {
+                            theme::TEXT_DIM
+                        };
                         element! {
                             View(padding_left: 2) {
                                 Text(
-                                    content: format!("{} {}", icon, label),
+                                    content: format!(
+                                        "{} {}{}",
+                                        icon,
+                                        if pinned { "📌 " } else { "" },
+                                        label,
+                                    ),
                                     color: color,
                                     weight: if active || selected { Weight::Bold } else { Weight::Normal },
                                 )

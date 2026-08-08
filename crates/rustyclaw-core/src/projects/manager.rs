@@ -107,6 +107,17 @@ impl ProjectManager {
         }
     }
 
+    /// Pin or unpin a project. Pinned projects sort to the top of the
+    /// sidebar. Returns false if the project is unknown.
+    pub fn set_pinned(&mut self, id: ProjectId, pinned: bool) -> bool {
+        if let Some(p) = self.projects.get_mut(&id) {
+            p.pinned = pinned;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Repoint a project at a different working directory.
     ///
     /// Callers are responsible for making sure the directory exists and for

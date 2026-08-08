@@ -167,6 +167,10 @@ pub struct ThreadInfoDto {
     /// silently mangles a path that isn't valid UTF-8 — at every hop.
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
+    /// Whether the thread is pinned to the top of its project's list in the
+    /// sidebar. Appended last, as above.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// DTO for project info in `ProjectsUpdate`.
@@ -177,6 +181,9 @@ pub struct ProjectInfoDto {
     /// The project's working directory. See [`ThreadInfoDto::working_dir`]
     /// for why this is a `PathBuf`.
     pub path: PathBuf,
+    /// Whether the project is pinned to the top of the sidebar.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// DTO for one plugin in `PluginsUpdate`.

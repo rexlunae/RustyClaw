@@ -670,6 +670,43 @@ pub(crate) async fn handle_thread_rename(
     Ok(())
 }
 
+/// Handle a `ThreadPin`: pin or unpin a thread and broadcast the new list.
+pub(crate) async fn handle_thread_pin(
+    writer: &mut dyn transport::TransportWriter,
+    thread_mgr: &crate::SharedThreadMgr,
+    task_mgr: &SharedTaskManager,
+    threads_path: &std::path::Path,
+    thread_id: u64,
+    pinned: bool,
+    foreground: Option<ThreadId>,
+) -> Result<()> {
+    debug!("Thread pin request: {} -> {}", thread_id, pinned);
+    let task_id = ThreadId(thread_id);
+    let changed = {
+        let mut tm = thread_mgr.lock().await;
+        let changed = tm.set_pinned(task_id, pinned);
+        if changed {
+            // Persist thread state
+            crate::helpers::persist_threads(&mut tm, threads_path);
+        }
+        changed
+    };
+    if changed {
+        // Send updated thread list
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None, foreground).await?;
+    } else {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: format!("Thread {} not found", thread_id),
+            },
+        };
+        send_frame(writer, &frame).await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,6 +863,96 @@ mod tests {
 
         assert!(writer.errors().is_empty());
         assert_eq!(threads.lock().await.get(id).unwrap().working_dir, None);
+    }
+
+    /// Pinning flips the flag, persists it, and broadcasts the new list; an
+    /// unknown thread is refused with an error that names it.
+    #[tokio::test]
+    async fn thread_pin_flips_persists_and_broadcasts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, _, threads, id) = fixture(tmp.path());
+        let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let threads_path = tmp.path().join("threads.json");
+        let mut writer = CapturingWriter { frames: Vec::new() };
+
+        handle_thread_pin(
+            &mut writer,
+            &threads,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            true,
+            Some(id),
+        )
+        .await
+        .unwrap();
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert!(
+            threads.lock().await.get(id).unwrap().pinned,
+            "the flag is flipped"
+        );
+        assert!(
+            threads_path
+                .parent()
+                .unwrap()
+                .join("threads")
+                .join("state.json")
+                .is_file(),
+            "the pin is persisted to the per-thread store"
+        );
+
+        // The broadcast carries the new flag.
+        let update = writer
+            .frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadsUpdate { threads, .. } => Some(threads.clone()),
+                _ => None,
+            })
+            .expect("a ThreadsUpdate was sent");
+        assert!(
+            update
+                .iter()
+                .find(|t| t.id == id.0)
+                .expect("in list")
+                .pinned,
+            "the broadcast carries the flag"
+        );
+
+        // A fresh manager loads the pinned flag back.
+        let store = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
+        assert!(store.get(id).expect("reloaded").pinned);
+
+        // Unpin round-trips too, and an unknown id is refused.
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_pin(
+            &mut writer,
+            &threads,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            false,
+            Some(id),
+        )
+        .await
+        .unwrap();
+        assert!(!threads.lock().await.get(id).unwrap().pinned);
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_pin(
+            &mut writer,
+            &threads,
+            &task_mgr,
+            &threads_path,
+            999,
+            true,
+            Some(id),
+        )
+        .await
+        .unwrap();
+        let errors = writer.errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("999"), "{errors:?}");
     }
 
     /// A path that isn't valid UTF-8 is refused at the edit, naming the path,

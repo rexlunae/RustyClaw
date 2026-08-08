@@ -43,6 +43,8 @@ pub struct SidebarProps {
     /// Open the thread edit dialog (caption + working directory).
     pub on_edit_thread: EventHandler<u64>,
     pub on_delete_thread: EventHandler<u64>,
+    /// Pin or unpin a thread (id, pinned).
+    pub on_toggle_pin_thread: EventHandler<(u64, bool)>,
     /// Create a new thread in the given project.
     pub on_new_thread_in: EventHandler<u64>,
     // Project actions.
@@ -52,6 +54,8 @@ pub struct SidebarProps {
     /// Open the project edit dialog (name + working directory).
     pub on_edit_project: EventHandler<u64>,
     pub on_delete_project: EventHandler<u64>,
+    /// Pin or unpin a project (id, pinned).
+    pub on_toggle_pin_project: EventHandler<(u64, bool)>,
     // Footer.
     pub on_pair: EventHandler<()>,
     pub on_secrets: EventHandler<()>,
@@ -96,11 +100,13 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 on_rename_thread: props.on_rename_thread,
                 on_edit_thread: props.on_edit_thread,
                 on_delete_thread: props.on_delete_thread,
+                on_toggle_pin_thread: props.on_toggle_pin_thread,
                 on_new_project: props.on_new_project,
                 on_switch_project: props.on_switch_project,
                 on_rename_project: props.on_rename_project,
                 on_edit_project: props.on_edit_project,
                 on_delete_project: props.on_delete_project,
+                on_toggle_pin_project: props.on_toggle_pin_project,
             }
 
             FooterActions {
@@ -251,11 +257,13 @@ struct ProjectsListProps {
     on_rename_thread: EventHandler<(u64, String)>,
     on_edit_thread: EventHandler<u64>,
     on_delete_thread: EventHandler<u64>,
+    on_toggle_pin_thread: EventHandler<(u64, bool)>,
     on_new_project: EventHandler<()>,
     on_switch_project: EventHandler<u64>,
     on_rename_project: EventHandler<(u64, String)>,
     on_edit_project: EventHandler<u64>,
     on_delete_project: EventHandler<u64>,
+    on_toggle_pin_project: EventHandler<(u64, bool)>,
 }
 
 /// "New project" affordance and the scrollable list of project groups.
@@ -300,10 +308,12 @@ fn ProjectsList(props: ProjectsListProps) -> Element {
                         on_rename_thread: props.on_rename_thread,
                         on_edit_thread: props.on_edit_thread,
                         on_delete_thread: props.on_delete_thread,
+                        on_toggle_pin_thread: props.on_toggle_pin_thread,
                         on_switch_project: props.on_switch_project,
                         on_rename_project: props.on_rename_project,
                         on_edit_project: props.on_edit_project,
                         on_delete_project: props.on_delete_project,
+                        on_toggle_pin_project: props.on_toggle_pin_project,
                     }
                 }
                 if is_empty && !props.collapsed {
@@ -332,10 +342,12 @@ struct ProjectGroupProps {
     on_rename_thread: EventHandler<(u64, String)>,
     on_edit_thread: EventHandler<u64>,
     on_delete_thread: EventHandler<u64>,
+    on_toggle_pin_thread: EventHandler<(u64, bool)>,
     on_switch_project: EventHandler<u64>,
     on_rename_project: EventHandler<(u64, String)>,
     on_edit_project: EventHandler<u64>,
     on_delete_project: EventHandler<u64>,
+    on_toggle_pin_project: EventHandler<(u64, bool)>,
 }
 
 #[component]
@@ -357,6 +369,12 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
     let mut header_class = String::from("project-header");
     if props.group.is_active {
         header_class.push_str(" is-active");
+    }
+    if props.group.pinned {
+        header_class.push_str(" is-pinned");
+    }
+    if props.group.needs_input() {
+        header_class.push_str(" needs-input");
     }
     if props.group_collapsed {
         header_class.push_str(" is-folded");
@@ -443,6 +461,17 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
                     }
                     div { class: "row-actions",
                         button {
+                            class: if props.group.pinned { "row-action is-pinned" } else { "row-action" },
+                            title: if props.group.pinned { "Unpin project" } else { "Pin project" },
+                            "aria-label": if props.group.pinned { "Unpin project" } else { "Pin project" },
+                            "aria-pressed": if props.group.pinned { "true" } else { "false" },
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                props.on_toggle_pin_project.call((project_id, !props.group.pinned));
+                            },
+                            "📌"
+                        }
+                        button {
                             class: "row-action",
                             title: "New thread in this project",
                             "aria-label": "New thread in this project",
@@ -506,6 +535,12 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
                                     let cb = props.on_delete_thread;
                                     move |_| cb.call(id)
                                 },
+                                on_toggle_pin: {
+                                    let id = thread.id;
+                                    let pinned = thread.pinned;
+                                    let cb = props.on_toggle_pin_thread;
+                                    move |_| cb.call((id, !pinned))
+                                },
                             }
                         }
                     }
@@ -526,17 +561,25 @@ struct SessionRowProps {
     on_rename: EventHandler<(u64, String)>,
     on_edit: EventHandler<()>,
     on_delete: EventHandler<()>,
+    /// Toggle pin state; the target state is baked in by the caller.
+    on_toggle_pin: EventHandler<()>,
 }
 
 /// A single thread entry: icon, label, optional description, message count,
 /// with double-click-to-rename and a delete button on hover.
 #[component]
 fn SessionRow(props: SessionRowProps) -> Element {
-    let class = if props.active {
-        "session-row is-active"
+    let mut class = if props.active {
+        "session-row is-active".to_string()
     } else {
-        "session-row"
+        "session-row".to_string()
     };
+    if props.thread.pinned {
+        class.push_str(" is-pinned");
+    }
+    if props.thread.needs_input() {
+        class.push_str(" needs-input");
+    }
     let label = props.thread.display_label().into_owned();
     let count = props.thread.message_count;
     let description = props.thread.description.clone();
@@ -618,6 +661,17 @@ fn SessionRow(props: SessionRowProps) -> Element {
                         }
                     }
                     div { class: "row-actions",
+                        button {
+                            class: if props.thread.pinned { "row-action is-pinned" } else { "row-action" },
+                            title: if props.thread.pinned { "Unpin thread" } else { "Pin thread" },
+                            "aria-label": if props.thread.pinned { "Unpin thread" } else { "Pin thread" },
+                            "aria-pressed": if props.thread.pinned { "true" } else { "false" },
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                props.on_toggle_pin.call(());
+                            },
+                            "📌"
+                        }
                         button {
                             class: "row-action",
                             title: "Edit thread",

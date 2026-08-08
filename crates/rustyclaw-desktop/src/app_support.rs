@@ -375,6 +375,7 @@ pub(crate) fn handle_gateway_event(
                     is_foreground: t.is_foreground,
                     message_count: t.message_count,
                     working_dir: t.working_dir,
+                    pinned: t.pinned,
                 })
                 .collect();
             let mut s = state.write();
@@ -468,6 +469,7 @@ pub(crate) fn handle_gateway_event(
                     id: p.id,
                     name: p.name,
                     path: p.path,
+                    pinned: p.pinned,
                 })
                 .collect();
             state.write().active_project_id = active_id;

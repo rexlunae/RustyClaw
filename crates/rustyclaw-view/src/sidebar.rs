@@ -135,6 +135,9 @@ pub struct SidebarItemData {
     /// Working-directory override, or `None` when the thread inherits its
     /// project's directory.
     pub working_dir: Option<PathBuf>,
+
+    /// Whether the thread is pinned to the top of its project's list.
+    pub pinned: bool,
 }
 
 impl SidebarItemData {
@@ -204,6 +207,13 @@ impl SidebarItemData {
             _ => "·",
         }
     }
+
+    /// Whether the thread is parked waiting on the user — the sidebar's
+    /// "needs input" signal. Renderers flash these rows so they're visible at
+    /// a glance even when the window isn't focused.
+    pub fn needs_input(&self) -> bool {
+        self.state == ThreadState::Asking
+    }
 }
 
 impl From<&rustyclaw_core::ui::ThreadInfo> for SidebarItemData {
@@ -218,6 +228,7 @@ impl From<&rustyclaw_core::ui::ThreadInfo> for SidebarItemData {
             is_foreground: t.is_foreground,
             message_count: t.message_count,
             working_dir: t.working_dir.clone(),
+            pinned: t.pinned,
         }
     }
 }
@@ -234,6 +245,8 @@ pub struct ProjectGroupData {
     pub path: PathBuf,
     /// Whether this is the active project.
     pub is_active: bool,
+    /// Whether the project is pinned to the top of the sidebar.
+    pub pinned: bool,
     /// Threads belonging to this project, in display order.
     pub threads: Vec<SidebarItemData>,
 }
@@ -297,6 +310,13 @@ fn pretty_path_str<'a>(path: &'a str, home: Option<&str>, max_chars: usize) -> C
 }
 
 impl ProjectGroupData {
+    /// Whether any thread in this project is parked waiting on the user —
+    /// the header's "needs input" signal. Renderers flash such headers so a
+    /// project with a waiting thread is visible at a glance.
+    pub fn needs_input(&self) -> bool {
+        self.threads.iter().any(SidebarItemData::needs_input)
+    }
+
     /// The resolved display name, never empty.
     ///
     /// Projects can carry a blank name (an empty rename, or a group
@@ -394,9 +414,11 @@ impl SidebarTree {
 
     /// Bucket already-converted [`SidebarItemData`] into project groups.
     ///
-    /// Project order follows `projects`; threads keep their incoming order
-    /// within a group. Orphan/ephemeral threads (see [`effective_project_id`])
-    /// land under the active project so they're never dropped.
+    /// Project order follows `projects` — pinned projects first, then the rest
+    /// in their original order. Threads keep their incoming order within a
+    /// group, except that pinned threads sort to the top of their group.
+    /// Orphan/ephemeral threads (see [`effective_project_id`]) land under the
+    /// active project so they're never dropped.
     ///
     /// When `projects` is empty — the window between connecting and the
     /// gateway's first `ProjectsUpdate` — a single fallback group is
@@ -411,13 +433,20 @@ impl SidebarTree {
         use std::collections::HashSet;
         let known: HashSet<u64> = projects.iter().map(|p| p.id).collect();
 
-        let mut groups: Vec<ProjectGroupData> = projects
-            .iter()
+        // Pinned projects first, otherwise original order. Stable sort keeps
+        // the id ordering the manager gives us (Default first) within each
+        // class.
+        let mut project_order: Vec<&rustyclaw_core::ui::ProjectInfo> = projects.iter().collect();
+        project_order.sort_by_key(|p| std::cmp::Reverse(p.pinned));
+
+        let mut groups: Vec<ProjectGroupData> = project_order
+            .into_iter()
             .map(|p| ProjectGroupData {
                 id: p.id,
                 name: p.name.clone(),
                 path: p.path.clone(),
                 is_active: p.id == active_project_id,
+                pinned: p.pinned,
                 threads: Vec::new(),
             })
             .collect();
@@ -430,6 +459,7 @@ impl SidebarTree {
                 name: FALLBACK_PROJECT_NAME.to_string(),
                 path: PathBuf::new(),
                 is_active: true,
+                pinned: false,
                 threads: Vec::new(),
             });
         }
@@ -444,7 +474,12 @@ impl SidebarTree {
                 .position(|g| g.id == target)
                 .or(if groups.is_empty() { None } else { Some(0) });
             if let Some(idx) = slot {
-                groups[idx].threads.push(item);
+                // Pinned threads sort to the top of their group; stable sort
+                // preserves their incoming order within the pinned class.
+                let mut group_threads = std::mem::take(&mut groups[idx].threads);
+                group_threads.push(item);
+                group_threads.sort_by_key(|t| std::cmp::Reverse(t.pinned));
+                groups[idx].threads = group_threads;
             }
         }
 
@@ -496,6 +531,7 @@ mod tests {
             is_foreground: false,
             message_count: 0,
             working_dir: None,
+            pinned: false,
         }
     }
 
@@ -547,6 +583,40 @@ mod tests {
         assert_eq!(SidebarItemData::from(&t).state, ThreadState::Ready);
     }
 
+    /// The flash signal: a thread parked on the user marks itself and its
+    /// project header, and a working thread does not.
+    #[test]
+    fn needs_input_flags_asking_threads_and_their_project() {
+        let projects = vec![ProjectInfo {
+            id: 1,
+            name: "Default".into(),
+            path: "/ws".into(),
+            pinned: false,
+        }];
+        let mut asking = thread(10, 1);
+        asking.status = "Waiting: approve the plan".into();
+        let mut busy = thread(11, 1);
+        busy.status = "Streaming".into();
+        let tree = SidebarTree::build(&projects, &[busy.clone(), asking.clone()], 1);
+
+        let asking_item = tree.groups[0]
+            .threads
+            .iter()
+            .find(|t| t.id == 10)
+            .expect("asking thread is in the tree");
+        assert!(asking_item.needs_input(), "asking thread flashes");
+        let busy_item = tree.groups[0]
+            .threads
+            .iter()
+            .find(|t| t.id == 11)
+            .expect("busy thread is in the tree");
+        assert!(!busy_item.needs_input(), "working thread does not");
+        assert!(
+            tree.groups[0].needs_input(),
+            "the project header flashes for its waiting thread"
+        );
+    }
+
     #[test]
     fn title_text_appends_the_state_label() {
         let mut t = thread(1, 0);
@@ -566,11 +636,13 @@ mod tests {
                 id: 1,
                 name: "Default".into(),
                 path: "/ws".into(),
+                pinned: false,
             },
             ProjectInfo {
                 id: 2,
                 name: "Side".into(),
                 path: "/side".into(),
+                pinned: false,
             },
         ];
         // t10 → project 2, t11 → project 1, t12 → unknown (0) → active (2).
@@ -673,5 +745,145 @@ mod tests {
 
         // Empty path stays empty rather than becoming a bare ellipsis.
         assert_eq!(g("").pretty_path(Some("/home/user"), 20), "");
+    }
+
+    #[test]
+    fn pinned_projects_sort_to_the_top_keeping_relative_order() {
+        let projects = vec![
+            ProjectInfo {
+                id: 1,
+                name: "Default".into(),
+                path: "/ws".into(),
+                pinned: false,
+            },
+            ProjectInfo {
+                id: 2,
+                name: "Pinned Two".into(),
+                path: "/two".into(),
+                pinned: true,
+            },
+            ProjectInfo {
+                id: 3,
+                name: "Pinned Three".into(),
+                path: "/three".into(),
+                pinned: true,
+            },
+            ProjectInfo {
+                id: 4,
+                name: "Plain".into(),
+                path: "/plain".into(),
+                pinned: false,
+            },
+        ];
+        let tree = SidebarTree::build(&projects, &[], 1);
+
+        let ids: Vec<u64> = tree.groups.iter().map(|g| g.id).collect();
+        assert_eq!(
+            ids,
+            vec![2, 3, 1, 4],
+            "pinned projects first, original order within each class"
+        );
+        assert!(tree.groups[0].pinned);
+        assert!(!tree.groups[2].pinned);
+    }
+
+    #[test]
+    fn pinned_threads_sort_to_the_top_of_their_group() {
+        let projects = vec![ProjectInfo {
+            id: 1,
+            name: "Default".into(),
+            path: "/ws".into(),
+            pinned: false,
+        }];
+        let t10 = thread(10, 1);
+        let mut t11 = thread(11, 1);
+        let mut t12 = thread(12, 1);
+        t11.pinned = true;
+        t12.pinned = true;
+
+        // Incoming order: 10 (plain), 11 (pinned), 12 (pinned).
+        let tree = SidebarTree::build(&projects, &[t10, t11, t12], 1);
+
+        let ids: Vec<u64> = tree.groups[0].threads.iter().map(|t| t.id).collect();
+        assert_eq!(
+            ids,
+            vec![11, 12, 10],
+            "pinned threads first, original order within the pinned class"
+        );
+        assert!(tree.groups[0].threads[0].pinned);
+        assert!(!tree.groups[0].threads[2].pinned);
+    }
+
+    #[test]
+    fn pinned_survives_flattening_for_flat_renderers() {
+        let projects = vec![
+            ProjectInfo {
+                id: 1,
+                name: "Default".into(),
+                path: "/ws".into(),
+                pinned: false,
+            },
+            ProjectInfo {
+                id: 2,
+                name: "Side".into(),
+                path: "/side".into(),
+                pinned: true,
+            },
+        ];
+        let mut t10 = thread(10, 2);
+        t10.pinned = true;
+        let flat = SidebarTree::build(&projects, &[thread(11, 2), t10], 1).into_flat_items();
+        assert_eq!(
+            flat.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![10, 11],
+            "the pinned thread comes first in the flat list"
+        );
+        assert!(flat[0].pinned);
+    }
+
+    #[test]
+    fn needs_input_tracks_the_asking_state() {
+        let mut asking = thread(1, 0);
+        asking.status = "Waiting: pick a tool".into();
+        let item = SidebarItemData::from(&asking);
+        assert!(item.needs_input(), "a waiting thread needs input");
+        assert!(
+            item.state == ThreadState::Asking,
+            "waiting maps to the Asking state"
+        );
+
+        let mut working = thread(2, 0);
+        working.status = "Streaming".into();
+        assert!(!SidebarItemData::from(&working).needs_input());
+
+        let mut plain = thread(3, 0);
+        plain.status = "Ready".into();
+        assert!(!SidebarItemData::from(&plain).needs_input());
+    }
+
+    #[test]
+    fn a_project_needs_input_when_any_thread_in_it_asks() {
+        let projects = vec![ProjectInfo {
+            id: 1,
+            name: "Default".into(),
+            path: "/ws".into(),
+            pinned: false,
+        }];
+        let mut t10 = thread(10, 1);
+        t10.status = "Waiting: approve".into();
+        let mut t11 = thread(11, 1);
+        t11.status = "Streaming".into();
+
+        let tree = SidebarTree::build(&projects, &[t11, t10], 1);
+        let group = &tree.groups[0];
+        assert!(
+            group.needs_input(),
+            "a waiting thread makes its project flash"
+        );
+
+        let mut only_working = thread(12, 1);
+        only_working.status = "Streaming".into();
+        let tree = SidebarTree::build(&projects, &[only_working], 1);
+        assert!(!tree.groups[0].needs_input());
     }
 }

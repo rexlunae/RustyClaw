@@ -302,6 +302,12 @@ pub struct AgentThread {
     /// Result value (for task/sub-agent threads)
     pub result: Option<String>,
 
+    /// Whether the thread is pinned to the top of its project's list in the
+    /// sidebar. Appended with `serde(default)` so threads persisted before
+    /// pinning existed load as unpinned.
+    #[serde(default)]
+    pub pinned: bool,
+
     /// Should this thread's context be shared with parent?
     pub share_context: bool,
 
@@ -364,6 +370,7 @@ impl AgentThread {
             compacted_up_to: 0,
             working_dir: None,
             result: None,
+            pinned: false,
             share_context: true,
             memory_flushed: false,
             open_turn: None,
@@ -402,6 +409,7 @@ impl AgentThread {
             compacted_up_to: 0,
             working_dir: None,
             result: None,
+            pinned: false,
             share_context: true,
             memory_flushed: false,
             open_turn: None,
@@ -438,6 +446,7 @@ impl AgentThread {
             compacted_up_to: 0,
             working_dir: None,
             result: None,
+            pinned: false,
             share_context: false,
             memory_flushed: false,
             open_turn: None,
@@ -474,6 +483,7 @@ impl AgentThread {
             compacted_up_to: 0,
             working_dir: None,
             result: None,
+            pinned: false,
             share_context: true,
             memory_flushed: false,
             open_turn: None,
@@ -707,6 +717,7 @@ impl From<&AgentThread> for ThreadInfo {
             has_summary: t.compact_summary.is_some(),
             has_result: t.result.is_some(),
             working_dir: t.working_dir.clone(),
+            pinned: t.pinned,
         }
     }
 }
@@ -732,4 +743,8 @@ pub struct ThreadInfo {
     /// project's directory.
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
+    /// Whether the thread is pinned to the top of its project's list in the
+    /// sidebar.
+    #[serde(default)]
+    pub pinned: bool,
 }

@@ -552,6 +552,14 @@ pub enum GatewayCommand {
     #[serde(rename = "project_switch")]
     ProjectSwitch { project_id: u64 },
 
+    /// Pin or unpin a project in the sidebar
+    #[serde(rename = "project_pin")]
+    ProjectPin { project_id: u64, pinned: bool },
+
+    /// Pin or unpin a thread in the sidebar
+    #[serde(rename = "thread_pin")]
+    ThreadPin { thread_id: u64, pinned: bool },
+
     /// List secrets
     #[serde(rename = "secrets_list")]
     SecretsList,
@@ -1063,6 +1071,14 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::ProjectSwitch,
                 payload: ClientPayload::ProjectSwitch { project_id },
             },
+            GatewayCommand::ProjectPin { project_id, pinned } => ClientFrame {
+                frame_type: ClientFrameType::ProjectPin,
+                payload: ClientPayload::ProjectPin { project_id, pinned },
+            },
+            GatewayCommand::ThreadPin { thread_id, pinned } => ClientFrame {
+                frame_type: ClientFrameType::ThreadPin,
+                payload: ClientPayload::ThreadPin { thread_id, pinned },
+            },
             GatewayCommand::ThreadList => ClientFrame {
                 frame_type: ClientFrameType::ThreadList,
                 payload: ClientPayload::ThreadList,
@@ -1548,6 +1564,7 @@ impl GatewayEvent {
                         is_foreground: t.is_foreground,
                         message_count: t.message_count,
                         working_dir: t.working_dir,
+                        pinned: t.pinned,
                     })
                     .collect(),
                 foreground_id,
@@ -1595,6 +1612,7 @@ impl GatewayEvent {
                         id: p.id,
                         name: p.name,
                         path: p.path,
+                        pinned: p.pinned,
                     })
                     .collect(),
                 active_id,
@@ -1970,6 +1988,9 @@ pub struct ThreadInfoDto {
     /// project's directory. The edit dialog needs to tell those apart.
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
+    /// Whether the thread is pinned to the top of its project's list.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Project info from gateway (client-facing).
@@ -1979,6 +2000,9 @@ pub struct ProjectInfoDto {
     pub name: String,
     /// The project's working directory.
     pub path: PathBuf,
+    /// Whether the project is pinned to the top of the sidebar.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Agent info from gateway (client-facing).

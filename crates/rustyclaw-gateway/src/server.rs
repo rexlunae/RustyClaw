@@ -1868,6 +1868,18 @@ pub(crate) async fn handle_connection(
                                     )
                                     .await?;
                                 }
+                                ClientPayload::ThreadPin { thread_id, pinned } => {
+                                    thread_handler::handle_thread_pin(
+                                        &mut *writer,
+                                        &agent_session.thread_mgr,
+                                        &task_mgr,
+                                        &agent_session.threads_path,
+                                        thread_id,
+                                        pinned,
+                                        agent_session.foreground_id(),
+                                    )
+                                    .await?;
+                                }
                                 ClientPayload::ThreadUpdate { thread_id, label, working_dir } => {
                                     thread_handler::handle_thread_update(
                                         &mut *writer,
@@ -1931,6 +1943,16 @@ pub(crate) async fn handle_connection(
                                         &agent_session.projects_path,
                                         project_id,
                                         new_name,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ProjectPin { project_id, pinned } => {
+                                    project_handler::handle_project_pin(
+                                        &mut *writer,
+                                        &mut agent_session.project_mgr,
+                                        &agent_session.projects_path,
+                                        project_id,
+                                        pinned,
                                     )
                                     .await?;
                                 }

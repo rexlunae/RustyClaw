@@ -36,6 +36,11 @@ pub struct Project {
     pub created_at: SystemTime,
     /// When a thread in this project was last brought to the foreground.
     pub last_active: SystemTime,
+    /// Whether the project is pinned to the top of the sidebar. Appended with
+    /// `serde(default)` so projects persisted before pinning existed load as
+    /// unpinned.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl Project {
@@ -47,6 +52,7 @@ impl Project {
             path: path.into(),
             created_at: now,
             last_active: now,
+            pinned: false,
         }
     }
 }
@@ -58,6 +64,7 @@ impl From<&Project> for ProjectInfo {
             id: p.id,
             name: p.name.clone(),
             path: p.path.clone(),
+            pinned: p.pinned,
         }
     }
 }
@@ -68,4 +75,7 @@ pub struct ProjectInfo {
     pub id: ProjectId,
     pub name: String,
     pub path: PathBuf,
+    /// Whether the project is pinned to the top of the sidebar.
+    #[serde(default)]
+    pub pinned: bool,
 }

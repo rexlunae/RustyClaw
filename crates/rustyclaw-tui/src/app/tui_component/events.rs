@@ -1971,5 +1971,6 @@ fn item_from_thread(t: &crate::action::ThreadInfo) -> rustyclaw_view::SidebarIte
         is_foreground: t.is_foreground,
         message_count: t.message_count,
         working_dir: t.working_dir.clone(),
+        pinned: t.pinned,
     }
 }
