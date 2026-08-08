@@ -520,6 +520,57 @@ pub(crate) fn handle_gateway_event(
         } => {
             state.write().hydrate_thread_messages(thread_id, messages);
         }
+        GatewayEvent::ThreadExportResult {
+            thread_id,
+            ok,
+            filename,
+            content,
+            error,
+        } => {
+            if ok {
+                // The user picked where the copy goes; write it there from
+                // the client. The dialog that asked stays open until they
+                // save or cancel, and the notice confirms the result.
+                spawn(async move {
+                    let Some(handle) = rfd::AsyncFileDialog::new()
+                        .set_title("Save thread copy")
+                        .set_file_name(&filename)
+                        .save_file()
+                        .await
+                    else {
+                        // User cancelled the save dialog — nothing to report.
+                        return;
+                    };
+                    match handle.write(content.as_bytes()).await {
+                        Ok(_) => {
+                            state.write().push_notice(
+                                MessageRole::Success,
+                                format!(
+                                    "Saved thread copy ({} bytes) to {}",
+                                    content.len(),
+                                    handle.path().display()
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            state.write().push_notice(
+                                MessageRole::Error,
+                                format!(
+                                    "Could not save thread copy to {}: {}",
+                                    handle.path().display(),
+                                    e
+                                ),
+                            );
+                        }
+                    }
+                });
+            } else {
+                state.write().push_notice(
+                    MessageRole::Error,
+                    error.unwrap_or_else(|| format!("Failed to export thread {thread_id}")),
+                );
+            }
+        }
         GatewayEvent::UserPromptRequest { id: _, prompt } => {
             // Tagged with the turn that asked it, so a question from a
             // conversation the user is not looking at waits there rather

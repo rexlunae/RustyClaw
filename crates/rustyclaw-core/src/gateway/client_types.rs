@@ -216,6 +216,15 @@ pub enum GatewayEvent {
         messages: Vec<crate::gateway::protocol::types::ChatMessage>,
     },
 
+    /// The transcript export for a thread, ready to be saved by the client.
+    ThreadExportResult {
+        thread_id: u64,
+        ok: bool,
+        filename: String,
+        content: String,
+        error: Option<String>,
+    },
+
     /// Thread switch confirmed — clear the live view and optionally show a
     /// context summary for the thread being switched to.
     ThreadSwitched {
@@ -559,6 +568,14 @@ pub enum GatewayCommand {
     /// Pin or unpin a thread in the sidebar
     #[serde(rename = "thread_pin")]
     ThreadPin { thread_id: u64, pinned: bool },
+
+    /// Move a thread to a different project
+    #[serde(rename = "thread_move")]
+    ThreadMove { thread_id: u64, project_id: u64 },
+
+    /// Export a thread's transcript as a Markdown file
+    #[serde(rename = "thread_export")]
+    ThreadExport { thread_id: u64 },
 
     /// List secrets
     #[serde(rename = "secrets_list")]
@@ -1078,6 +1095,20 @@ impl GatewayCommand {
             GatewayCommand::ThreadPin { thread_id, pinned } => ClientFrame {
                 frame_type: ClientFrameType::ThreadPin,
                 payload: ClientPayload::ThreadPin { thread_id, pinned },
+            },
+            GatewayCommand::ThreadMove {
+                thread_id,
+                project_id,
+            } => ClientFrame {
+                frame_type: ClientFrameType::ThreadMove,
+                payload: ClientPayload::ThreadMove {
+                    thread_id,
+                    project_id,
+                },
+            },
+            GatewayCommand::ThreadExport { thread_id } => ClientFrame {
+                frame_type: ClientFrameType::ThreadExport,
+                payload: ClientPayload::ThreadExport { thread_id },
             },
             GatewayCommand::ThreadList => ClientFrame {
                 frame_type: ClientFrameType::ThreadList,
@@ -1655,6 +1686,19 @@ impl GatewayEvent {
             } => Some(GatewayEvent::ThreadMessages {
                 thread_id,
                 messages,
+            }),
+            ServerPayload::ThreadExportResult {
+                thread_id,
+                ok,
+                filename,
+                content,
+                error,
+            } => Some(GatewayEvent::ThreadExportResult {
+                thread_id,
+                ok,
+                filename,
+                content,
+                error,
             }),
             ServerPayload::SecretsListResult { ok, entries } => {
                 Some(GatewayEvent::SecretsListResult {

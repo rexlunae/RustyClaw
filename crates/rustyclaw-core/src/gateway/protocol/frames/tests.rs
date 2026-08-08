@@ -49,6 +49,7 @@ mod serialization {
         assert_eq!(ServerFrameType::DomQuery as u8, 38);
         assert_eq!(ServerFrameType::ThreadHistoryReply as u8, 39);
         assert_eq!(ServerFrameType::DownloadsUpdate as u8, 93);
+        assert_eq!(ServerFrameType::ThreadExportResult as u8, 94);
         assert_eq!(ServerFrameType::ThreadMessages as u8, 40);
         assert_eq!(ServerFrameType::ProjectsUpdate as u8, 41);
     }
@@ -98,6 +99,8 @@ mod serialization {
         assert_eq!(ClientFrameType::DownloadsClearFinished as u8, 93);
         assert_eq!(ClientFrameType::ProjectPin as u8, 94);
         assert_eq!(ClientFrameType::ThreadPin as u8, 95);
+        assert_eq!(ClientFrameType::ThreadMove as u8, 96);
+        assert_eq!(ClientFrameType::ThreadExport as u8, 97);
     }
 
     /// Typing the path fields as `PathBuf` did not change the wire format.

@@ -195,6 +195,10 @@ pub enum ClientFrameType {
     ProjectPin = 94,
     /// Pin or unpin a thread in the sidebar.
     ThreadPin = 95,
+    /// Move a thread to a different project.
+    ThreadMove = 96,
+    /// Export a thread's transcript as a Markdown file.
+    ThreadExport = 97,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -387,6 +391,9 @@ pub enum ServerFrameType {
     /// unprompted whenever one changes, so the panel is a view of the
     /// gateway's state rather than something the client has to poll.
     DownloadsUpdate = 93,
+    /// Reply to a `ThreadExport`: the thread's transcript as Markdown,
+    /// ready to be written wherever the user chooses.
+    ThreadExportResult = 94,
 }
 
 /// Status frame sub-types.
@@ -1057,6 +1064,17 @@ pub enum ClientPayload {
         thread_id: u64,
         pinned: bool,
     },
+    /// Move a thread to a different project. The thread keeps its caption,
+    /// working-directory override, and history; only its project changes.
+    ThreadMove {
+        thread_id: u64,
+        project_id: u64,
+    },
+    /// Export a thread's transcript as Markdown, saved outside the app by
+    /// the client. Answered with a `ThreadExportResult`.
+    ThreadExport {
+        thread_id: u64,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1264,6 +1282,17 @@ pub enum ServerPayload {
         thread_id: u64,
         ok: bool,
         messages: Vec<super::types::ChatMessage>,
+        error: Option<String>,
+    },
+
+    /// Reply to a `ThreadExport`. On success `filename` is a sensible
+    /// default for a save dialog and `content` is the transcript as
+    /// Markdown; on failure `error` says why and the other two are empty.
+    ThreadExportResult {
+        thread_id: u64,
+        ok: bool,
+        filename: String,
+        content: String,
         error: Option<String>,
     },
 

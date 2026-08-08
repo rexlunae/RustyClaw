@@ -565,6 +565,9 @@ pub(crate) fn gateway_event_to_gw_event(
         E::MessengerRouteResult { ok, message } => GwEvent::MessengerActionResult { ok, message },
         // The TUI edits tool permissions through its local dialog.
         E::ToolConfigResult { .. } | E::ToolToggleResult { .. } => return None,
+        // The desktop's thread property dialog drives exports; the TUI has no
+        // property dialog, so there is nothing to do with the transcript here.
+        E::ThreadExportResult { .. } => return None,
         E::UsageStatsResult {
             totals,
             per_model,

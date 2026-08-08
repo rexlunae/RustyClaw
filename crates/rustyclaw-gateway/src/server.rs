@@ -1880,6 +1880,29 @@ pub(crate) async fn handle_connection(
                                     )
                                     .await?;
                                 }
+                                ClientPayload::ThreadMove { thread_id, project_id } => {
+                                    thread_handler::handle_thread_move(
+                                        &mut *writer,
+                                        &mut config,
+                                        &agent_session.thread_mgr,
+                                        &agent_session.project_mgr,
+                                        &task_mgr,
+                                        &agent_session.threads_path,
+                                        thread_id,
+                                        project_id,
+                                        agent_session.foreground_id(),
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ThreadExport { thread_id } => {
+                                    thread_handler::handle_thread_export(
+                                        &mut *writer,
+                                        &agent_session.thread_mgr,
+                                        &agent_session.project_mgr,
+                                        thread_id,
+                                    )
+                                    .await?;
+                                }
                                 ClientPayload::ThreadUpdate { thread_id, label, working_dir } => {
                                     thread_handler::handle_thread_update(
                                         &mut *writer,
