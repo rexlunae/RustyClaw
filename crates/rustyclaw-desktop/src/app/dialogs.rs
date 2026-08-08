@@ -941,6 +941,26 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                 },
                                 "Verify"
                             }
+                            Button {
+                                color: BulmaColor::Danger,
+                                onclick: move |_| {
+                                    // Give up on this gateway: close the
+                                    // connection and return to the connection
+                                    // dialog so a different one can be picked.
+                                    let gw = gateway.read().clone();
+                                    if let Some(client) = gw {
+                                        spawn(async move {
+                                            client.close().await;
+                                        });
+                                    }
+                                    gateway.set(None);
+                                    active_event_client.set(None);
+                                    auth_code.set(String::new());
+                                    state.write().connection = ConnectionStatus::Disconnected;
+                                    show_connection.set(true);
+                                },
+                                "Cancel"
+                            }
                         }
                     },
                     p { class: "rc-dialog-lead",
