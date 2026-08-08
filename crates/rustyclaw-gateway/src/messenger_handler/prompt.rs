@@ -36,10 +36,14 @@ pub(crate) async fn build_messenger_system_prompt(
 ) -> String {
     use rustyclaw_core::workspace_context::{SessionType, WorkspaceContext};
 
-    let base_prompt = config
-        .system_prompt
-        .clone()
-        .unwrap_or_else(|| "You are a helpful AI assistant running inside RustyClaw.".to_string());
+    let base_prompt = config.system_prompt.clone().unwrap_or_else(|| {
+        let name = config.agent_name.trim();
+        if name.is_empty() {
+            "You are a helpful AI assistant running inside RustyClaw.".to_string()
+        } else {
+            format!("You are {name}, a helpful AI assistant running inside RustyClaw.")
+        }
+    });
 
     // Safety guardrails (inspired by Anthropic's constitution)
     let safety_section = "\

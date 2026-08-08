@@ -153,6 +153,8 @@ river-core = { version = "0.1.18", optional = true }
 ciborium = { version = "0.2.2", optional = true }
 ed25519-dalek = { version = "2.1", features = ["serde"], optional = true }
 tokio-tungstenite = { version = "0.27", optional = true }
+croner = "2"
+chrono-tz = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -3,7 +3,7 @@
 //!
 //! Wired panels operate on the same backends the AI tools use:
 //!
-//! * **Cron** — the persistent [`CronStore`] under `<workspace>/.cron`.
+//! * **Cron** — the central [`CronStore`] under `<settings_dir>/cron`.
 //! * **Memory** — `MEMORY.md` / `HISTORY.md` via [`MemoryConsolidation`].
 //! * **MCP** — the shared [`McpManager`] registered in `runtime_ctx` at
 //!   startup (requires the `mcp` feature).
@@ -37,7 +37,22 @@ pub async fn handle_panel_request(
             expr,
             payload,
             paused,
-        } => cron_upsert(config, id, name, expr, payload, paused),
+            agent_turn,
+            model,
+            thread_id,
+        } => cron_upsert(
+            config,
+            CronUpsert {
+                id,
+                name,
+                expr,
+                payload,
+                paused,
+                agent_turn,
+                model,
+                thread_id,
+            },
+        ),
         ClientPayload::CronActionRequest { id, action } => cron_action(config, id, action),
 
         // ── Memory ───────────────────────────────────────────────────────
@@ -198,11 +213,35 @@ async fn logs(source: String, tail: Option<usize>) -> ServerFrame {
                 Some("Telemetry observer not initialised".to_string()),
             ),
         },
-        "cron" => (
-            false,
-            Vec::new(),
-            Some("Cron has no runtime yet, so there are no run logs".to_string()),
-        ),
+        // `logs` has no Config in scope; the settings dir published at
+        // startup names the same central store the handlers use.
+        "cron" => match rustyclaw_core::runtime_ctx::get_settings_dir()
+            .ok_or_else(|| "No settings directory".to_string())
+            .and_then(|dir| {
+                CronStore::new(&rustyclaw_core::cron::central_cron_dir(&dir))
+                    .map_err(|e| e.to_string())
+            }) {
+            Ok(store) => {
+                let mut lines: Vec<String> = Vec::new();
+                for job in store.list(true) {
+                    let name = job.name.as_deref().unwrap_or("(unnamed)");
+                    for run in store.get_runs(&job.job_id, 20).unwrap_or_default() {
+                        let when = ms_to_rfc3339(run.started_ms).unwrap_or_default();
+                        let status = format!("{:?}", run.status).to_lowercase();
+                        let err = run.error.as_deref().unwrap_or("");
+                        lines.push(
+                            format!("{when} [{name}] {status} {err}")
+                                .trim_end()
+                                .to_string(),
+                        );
+                    }
+                }
+                lines.sort();
+                let start = lines.len().saturating_sub(tail);
+                (true, lines.split_off(start), None)
+            }
+            Err(e) => (false, Vec::new(), Some(e)),
+        },
         // Anything else is a managed-service name.
         service => match rustyclaw_core::runtime_ctx::get_service_manager() {
             Some(mgr) => {
@@ -236,7 +275,15 @@ async fn logs(source: String, tail: Option<usize>) -> ServerFrame {
 // ═════════════════════════════════════════════════════════════════════════
 
 fn open_cron_store(config: &Config) -> Result<CronStore, String> {
-    let cron_dir = config.workspace_dir().join(".cron");
+    // The central store, shared with the agent tool and the scheduler.
+    // This handler used to open `.cron` under the gateway workspace while
+    // the tool opened the agent's — two half-stores; jobs from the old
+    // location are adopted on first touch.
+    rustyclaw_core::cron::adopt_legacy_store(
+        &config.settings_dir,
+        &config.workspace_dir().join(".cron"),
+    );
+    let cron_dir = rustyclaw_core::cron::central_cron_dir(&config.settings_dir);
     CronStore::new(&cron_dir).map_err(|e| e.to_string())
 }
 
@@ -318,6 +365,13 @@ fn job_to_dto(store: &CronStore, job: &CronJob) -> CronJobDto {
         last_run: job.last_run_ms.and_then(ms_to_rfc3339),
         last_status: last.map(|r| format!("{:?}", r.status).to_lowercase()),
         run_count: runs.len() as u64,
+        agent_turn: matches!(job.payload, Payload::AgentTurn { .. }),
+        model: match &job.payload {
+            Payload::AgentTurn { model, .. } => model.clone(),
+            Payload::SystemEvent { .. } => None,
+        },
+        thread_id: job.thread_id,
+        agent_id: job.agent_id.clone(),
     }
 }
 
@@ -340,48 +394,84 @@ fn cron_list(config: &Config) -> ServerFrame {
     }
 }
 
-fn cron_upsert(
-    config: &Config,
+/// The fields of a `CronUpsertRequest`, bundled.
+struct CronUpsert {
     id: Option<String>,
     name: String,
     expr: String,
     payload: String,
     paused: bool,
-) -> ServerFrame {
+    agent_turn: bool,
+    model: Option<String>,
+    thread_id: Option<u64>,
+}
+
+fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
     let result = (|| -> Result<CronJobDto, String> {
         let mut store = open_cron_store(config)?;
-        let schedule = parse_schedule(&expr)?;
-        let job_id = match id {
+        let schedule = parse_schedule(&req.expr)?;
+        let job_id = match req.id {
             Some(id) => {
+                // Preserve the payload kind an old client cannot express:
+                // a rename from a pre-wake client must not flatten an
+                // agent-turn job back into a plain system note — that was
+                // a silent data-loss bug (the model went with it).
+                let existing = store
+                    .get(&id)
+                    .ok_or_else(|| format!("Job not found: {id}"))?;
+                let was_agent_turn = matches!(existing.payload, Payload::AgentTurn { .. });
+                let existing_model = match &existing.payload {
+                    Payload::AgentTurn { model, .. } => model.clone(),
+                    Payload::SystemEvent { .. } => None,
+                };
+                let payload = if req.agent_turn || was_agent_turn {
+                    Payload::AgentTurn {
+                        message: req.payload,
+                        model: req.model.or(existing_model),
+                        thinking: None,
+                        timeout_seconds: None,
+                    }
+                } else {
+                    Payload::SystemEvent { text: req.payload }
+                };
                 store
                     .update(
                         &id,
                         CronJobPatch {
-                            name: Some(name),
-                            enabled: Some(!paused),
+                            name: Some(req.name),
+                            enabled: Some(!req.paused),
                             schedule: Some(schedule),
-                            payload: Some(Payload::SystemEvent { text: payload }),
-                            delivery: None,
+                            payload: Some(payload),
+                            thread_id: req.thread_id,
+                            ..Default::default()
                         },
                     )
                     .map_err(|e| e.to_string())?;
                 id
             }
             None => {
-                let mut job = CronJob::new(
-                    Some(name),
-                    schedule,
-                    SessionTarget::Main,
-                    Payload::SystemEvent { text: payload },
-                );
-                job.enabled = !paused;
+                let payload = if req.agent_turn {
+                    Payload::AgentTurn {
+                        message: req.payload,
+                        model: req.model,
+                        thinking: None,
+                        timeout_seconds: None,
+                    }
+                } else {
+                    Payload::SystemEvent { text: req.payload }
+                };
+                let mut job = CronJob::new(Some(req.name), schedule, SessionTarget::Main, payload);
+                job.enabled = !req.paused;
+                job.thread_id = req.thread_id;
                 store.add(job).map_err(|e| e.to_string())?
             }
         };
         let job = store
             .get(&job_id)
             .ok_or_else(|| format!("Job not found after save: {}", job_id))?;
-        Ok(job_to_dto(&store, job))
+        let dto = job_to_dto(&store, job);
+        rustyclaw_core::runtime_ctx::notify_cron_changed();
+        Ok(dto)
     })();
 
     let (ok, job, message) = match result {
@@ -427,11 +517,14 @@ fn cron_action(config: &Config, id: String, action: CronActionKind) -> ServerFra
                 Ok(None)
             }
             CronActionKind::Run => {
-                // No scheduler runtime exists yet to execute a job on demand.
-                Err("Run-now is not available: the cron runtime is not yet wired".into())
+                store.request_run_now(&id).map_err(|e| e.to_string())?;
+                Ok(Some(
+                    "Run requested; the scheduler fires it momentarily".into(),
+                ))
             }
         }
     })();
+    rustyclaw_core::runtime_ctx::notify_cron_changed();
 
     let (ok, message) = match result {
         Ok(msg) => (true, msg),
@@ -1177,5 +1270,111 @@ mod tests {
                 def.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod cron_panel_tests {
+    use super::*;
+
+    fn test_config(dir: &std::path::Path) -> Config {
+        Config {
+            settings_dir: dir.to_path_buf(),
+            ..Default::default()
+        }
+    }
+
+    fn upsert(config: &Config, req: CronUpsert) -> Option<CronJobDto> {
+        match cron_upsert(config, req).payload {
+            ServerPayload::CronUpsertResult { ok, job, message } => {
+                assert!(ok, "upsert failed: {message:?}");
+                job
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+
+    /// A rename through the panel must not flatten an agent-turn wake back
+    /// into a plain note — that silently discarded the model and the turn
+    /// kind (latent data loss while nothing executed payloads; fatal now
+    /// that the scheduler does).
+    #[test]
+    fn an_edit_preserves_the_agent_turn_and_its_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+
+        let created = upsert(
+            &config,
+            CronUpsert {
+                id: None,
+                name: "wake".into(),
+                expr: "every 1h".into(),
+                payload: "check the queue".into(),
+                paused: false,
+                agent_turn: true,
+                model: Some("deepseek-v4".into()),
+                thread_id: Some(7),
+            },
+        )
+        .unwrap();
+        assert!(created.agent_turn);
+        assert_eq!(created.model.as_deref(), Some("deepseek-v4"));
+        assert_eq!(created.thread_id, Some(7));
+
+        // An old client edits the name: agent_turn=false, no model — the
+        // kind and model must survive.
+        let renamed = upsert(
+            &config,
+            CronUpsert {
+                id: Some(created.id.clone()),
+                name: "renamed".into(),
+                expr: "every 1h".into(),
+                payload: "check the queue".into(),
+                paused: false,
+                agent_turn: false,
+                model: None,
+                thread_id: None,
+            },
+        )
+        .unwrap();
+        assert!(renamed.agent_turn, "kind flattened by the edit");
+        assert_eq!(renamed.model.as_deref(), Some("deepseek-v4"));
+        assert_eq!(renamed.thread_id, Some(7), "thread target survived");
+    }
+
+    /// Run-now arms the job for an immediate fire instead of erroring.
+    #[test]
+    fn run_now_arms_an_immediate_fire() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+        let created = upsert(
+            &config,
+            CronUpsert {
+                id: None,
+                name: "wake".into(),
+                expr: "every 24h".into(),
+                payload: "ping".into(),
+                paused: false,
+                agent_turn: true,
+                model: None,
+                thread_id: None,
+            },
+        )
+        .unwrap();
+
+        match cron_action(&config, created.id.clone(), CronActionKind::Run).payload {
+            ServerPayload::CronActionResult { ok, message } => {
+                assert!(ok, "run-now failed: {message:?}");
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+
+        let store = open_cron_store(&config).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let armed = store.get(&created.id).unwrap().next_run_ms.unwrap();
+        assert!(armed <= now, "run-now should be due immediately");
     }
 }

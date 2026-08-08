@@ -747,12 +747,24 @@ pub enum ClientPayload {
     /// Request cron job list.
     CronListRequest,
     /// Create or update a cron job.
+    ///
+    /// Appended fields carry the wake-schedule surface: `agent_turn` makes
+    /// the payload a scheduled agent turn (prompt + optional model) instead
+    /// of a plain system note, and `thread_id` names the thread whose
+    /// history is the turn's context and where the exchange lands. All
+    /// defaulted, appended last — the wire format is positional bincode.
     CronUpsertRequest {
         id: Option<String>,
         name: String,
         expr: String,
         payload: String,
         paused: bool,
+        #[serde(default)]
+        agent_turn: bool,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        thread_id: Option<u64>,
     },
     /// Perform an action on a cron job.
     CronActionRequest {

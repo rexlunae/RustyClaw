@@ -744,6 +744,15 @@ pub enum GatewayCommand {
         expr: String,
         payload: String,
         paused: bool,
+        /// The payload is a scheduled agent turn (prompt), not a note.
+        #[serde(default)]
+        agent_turn: bool,
+        /// Model override for the scheduled turn.
+        #[serde(default)]
+        model: Option<String>,
+        /// Thread the wake uses for context and lands its response in.
+        #[serde(default)]
+        thread_id: Option<u64>,
     },
 
     /// Pause/resume/run/remove a cron job.
@@ -1329,6 +1338,9 @@ impl GatewayCommand {
                 expr,
                 payload,
                 paused,
+                agent_turn,
+                model,
+                thread_id,
             } => ClientFrame {
                 frame_type: ClientFrameType::CronUpsertRequest,
                 payload: ClientPayload::CronUpsertRequest {
@@ -1337,6 +1349,9 @@ impl GatewayCommand {
                     expr,
                     payload,
                     paused,
+                    agent_turn,
+                    model,
+                    thread_id,
                 },
             },
             GatewayCommand::CronAction { id, action } => ClientFrame {

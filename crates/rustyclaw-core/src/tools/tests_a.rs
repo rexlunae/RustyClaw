@@ -536,9 +536,16 @@ async fn a_backgrounded_command_keeps_its_closing_lines() {
     // finish inside the instant the supervisor takes to record the exit.
     // A handful of lines is drained faster than the status is observed,
     // which made an earlier version of this test pass on the bug.
+    //
+    // The timeout is deliberately far beyond the command's real runtime
+    // (~1s). This test's claim is about which status and which closing lines
+    // arrive when the session reports finishing — not about wall-clock speed —
+    // and a loaded CI runner starved the 60s budget once (Some(TimedOut)
+    // instead of Some(Exited(3))), which is a slow runner, not the bug. A
+    // longer timeout takes nothing away from the check.
     let args = json!({
         "command": "sleep 0.4; awk 'BEGIN{for(i=0;i<20000;i++) print \"closing-line-\" i}'; echo END-MARKER; exit 3",
-        "timeout_secs": 60,
+        "timeout_secs": 300,
         "yieldMs": 200,
     });
     let result = exec_execute_command_streaming(&args, ws(), None)
@@ -555,9 +562,16 @@ async fn a_backgrounded_command_keeps_its_closing_lines() {
     // Polled as tightly as possible: the window this guards is the instant
     // between the exit being recorded and the readers catching up, and
     // sleeping between polls hands them the time to close it.
+    //
+    // Bounded by TIME, not iterations: an iteration cap is a race against
+    // the child — on a loaded CI runner a hot yield loop spins through any
+    // count before a busy child exits, and the test fails without testing
+    // anything. The child takes ~1s; a generous wall clock changes nothing
+    // when it passes and only matters when it would have lied.
     let mut seen = String::new();
     let mut status = None;
-    for _ in 0..200_000 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
         {
             let mgr = process_manager();
             let mut mgr = mgr.lock().expect("process manager lock");
