@@ -119,7 +119,9 @@ pub use message::{
     MessageBubbleData, StreamingIndicatorData, ToolCallData, format_bytes, format_duration_ms,
 };
 pub use services::{ServiceInfoData, ServiceListData};
-pub use sidebar::{FALLBACK_PROJECT_NAME, ProjectGroupData, SidebarItemData, SidebarTree};
+pub use sidebar::{
+    FALLBACK_PROJECT_NAME, ProjectGroupData, SidebarItemData, SidebarTree, ThreadState,
+};
 pub use status::StatusBarData;
 pub use swarm::{SwarmAgentData, SwarmData};
 pub use tone::Tone;

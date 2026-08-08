@@ -541,6 +541,9 @@ fn SessionRow(props: SessionRowProps) -> Element {
     let count = props.thread.message_count;
     let description = props.thread.description.clone();
     let title_text = props.thread.title_text();
+    let state_icon = props.thread.state.icon();
+    let state_class = props.thread.state.css_class();
+    let state_label = props.thread.state.label();
 
     let mut editing = use_signal(|| false);
     let mut edit_value = use_signal(String::new);
@@ -563,10 +566,16 @@ fn SessionRow(props: SessionRowProps) -> Element {
                         editing.set(true);
                     }
                 },
-                span { class: "session-dot" }
+                span {
+                    class: "session-state is-{state_class}",
+                    title: "Agent state: {state_label}",
+                    "aria-label": "Agent state: {state_label}",
+                    "{state_icon}"
+                }
                 if props.collapsed {
-                    // Nothing else fits in the rail; the tooltip carries the
-                    // label and the dot still marks the active thread.
+                    // Nothing else fits in the rail; the state icon still
+                    // marks what the thread is doing, and the tooltip carries
+                    // the label.
                 } else if *editing.read() {
                     input {
                         class: "input is-small rename-input",

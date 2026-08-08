@@ -832,25 +832,55 @@ body,
     font-size: 12.5px;
 }
 
-.session-dot {
-    width: 5px;
-    height: 5px;
+.session-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
     flex-shrink: 0;
     border-radius: 50%;
-    background: var(--rc-text-muted);
+    color: var(--rc-text-muted);
+    font-size: 9.5px;
+    line-height: 1;
+    transition: color 0.14s var(--rc-ease), opacity 0.14s var(--rc-ease);
+}
+
+.session-row:hover .session-state {
+    opacity: 0.9;
+}
+
+/* State colours: the icon doubles as a health light, so colour is the first
+   signal and the glyph the second. Working/asking pulse until they clear. */
+.session-state.is-working {
+    color: var(--rc-primary);
+    animation: rc-pulse 1.4s ease-in-out infinite;
+}
+
+.session-state.is-asking {
+    color: hsl(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l));
+    animation: rc-pulse 1.4s ease-in-out infinite;
+}
+
+.session-state.is-ready {
+    color: var(--rc-text-muted);
+    opacity: 0.75;
+}
+
+.session-state.is-completed {
+    color: hsl(var(--bulma-success-h), var(--bulma-success-s), var(--bulma-success-l));
+}
+
+.session-state.is-error {
+    color: hsl(var(--bulma-danger-h), var(--bulma-danger-s), var(--bulma-danger-l));
+}
+
+.session-state.is-cancelled {
     opacity: 0.45;
-    transition: background 0.14s var(--rc-ease), opacity 0.14s var(--rc-ease),
-        box-shadow 0.14s var(--rc-ease);
 }
 
-.session-row:hover .session-dot {
-    opacity: 0.8;
-}
-
-.session-row.is-active .session-dot {
-    background: var(--rc-primary);
+.session-row.is-active .session-state {
     opacity: 1;
-    box-shadow: 0 0 0 3px var(--rc-primary-soft);
 }
 
 .session-text {
