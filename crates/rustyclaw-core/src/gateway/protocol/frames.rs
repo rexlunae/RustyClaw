@@ -532,10 +532,11 @@ pub enum ModelActionKind {
 
 /// Where a session's messages come from.
 ///
-/// Clients declare their kind on the wire (`desktop`, `tui`); the gateway
-/// resolves the rest from context: non-loopback peers are [`SessionOrigin::Remote`],
-/// messenger and trigger sessions identify themselves, and older clients that
-/// declare nothing fall back to [`SessionOrigin::Local`].
+/// Clients declare their kind on the wire (`desktop`, `tui`, `cli`); the
+/// gateway resolves the rest from context: non-loopback peers are
+/// [`SessionOrigin::Remote`], messenger and trigger sessions identify
+/// themselves, and older clients that declare nothing fall back to
+/// [`SessionOrigin::Local`].
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::AsRefStr, strum::Display,
 )]
@@ -546,6 +547,8 @@ pub enum SessionOrigin {
     Desktop,
     /// The terminal UI.
     Tui,
+    /// The headless `rustyclaw` command-line client.
+    Cli,
     /// A connection from another machine (SSH or a remote client).
     Remote,
     /// A local connection whose client did not declare a kind.

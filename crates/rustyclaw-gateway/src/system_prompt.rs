@@ -302,6 +302,7 @@ mod tests {
         for origin in [
             SessionOrigin::Desktop,
             SessionOrigin::Tui,
+            SessionOrigin::Cli,
             SessionOrigin::Remote,
             SessionOrigin::Local,
             SessionOrigin::Messenger,

@@ -995,6 +995,7 @@ mod serialization {
         for (origin, expected) in [
             (crate::gateway::SessionOrigin::Desktop, "desktop"),
             (crate::gateway::SessionOrigin::Tui, "tui"),
+            (crate::gateway::SessionOrigin::Cli, "cli"),
             (crate::gateway::SessionOrigin::Remote, "remote"),
             (crate::gateway::SessionOrigin::Local, "local"),
             (crate::gateway::SessionOrigin::Messenger, "messenger"),
