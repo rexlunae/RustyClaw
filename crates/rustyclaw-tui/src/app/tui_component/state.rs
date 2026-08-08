@@ -28,6 +28,12 @@ pub(super) struct Ui {
     pub messages: State<Vec<DisplayMessage>>,
     pub input_value: State<String>,
     pub input_cursor_offset: State<usize>,
+    /// Submitted prompts, oldest first, for bash-style up/down recall.
+    pub input_history: State<Vec<String>>,
+    /// Position while browsing history (`None` = not browsing).
+    pub history_index: State<Option<usize>>,
+    /// The in-progress draft stashed when history browsing begins.
+    pub history_draft: State<String>,
     pub gw_status: State<rustyclaw_core::types::GatewayStatus>,
     pub streaming: State<bool>,
     pub stream_start: State<Option<Instant>>,

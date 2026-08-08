@@ -342,6 +342,10 @@ impl App {
         *tui_component::CHANNEL_RX.lock().unwrap() = Some(gw_rx);
         *tui_component::CHANNEL_TX.lock().unwrap() = Some(user_tx);
 
+        // Point prompt-history persistence at this profile's settings dir
+        // before the component's first render loads it.
+        crate::input_history::init(self.config.settings_dir.join("input_history"));
+
         let render_handle = tokio::task::spawn_blocking(move || {
             use iocraft::prelude::*;
             smol::block_on(

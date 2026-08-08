@@ -46,7 +46,9 @@ enum Commands {
     Setup(SetupArgs),
 
     /// Interactive onboarding wizard — set up gateway, workspace, and skills
-    Onboard(OnboardArgs),
+    // Boxed: OnboardArgs carries a dozen Option<String> flags and dwarfs
+    // every other variant (clippy::large_enum_variant).
+    Onboard(Box<OnboardArgs>),
 
     /// Import an existing OpenClaw installation into RustyClaw
     Import(commands::import::ImportArgs),
@@ -185,6 +187,10 @@ struct OnboardArgs {
     /// Auth provider choice (e.g. apiKey, openai-api-key, anthropic-api-key, …)
     #[arg(long, value_name = "CHOICE")]
     auth_choice: Option<String>,
+    /// Default model id (e.g. anthropic/claude-sonnet-4). Skips the
+    /// interactive model picker — required for fully scripted setup.
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
     /// Output JSON summary
     #[arg(long)]
     json: bool,
@@ -484,6 +490,7 @@ async fn main() -> Result<()> {
                     deepseek_api_key: None,
                     reset: false,
                     non_interactive: args.non_interactive,
+                    model: None,
                 };
                 run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
                 // Optional agent setup step
@@ -539,6 +546,7 @@ async fn main() -> Result<()> {
                 deepseek_api_key: args.deepseek_api_key.clone(),
                 reset: args.reset,
                 non_interactive: args.non_interactive,
+                model: args.model.clone(),
             };
             run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
         }

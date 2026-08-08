@@ -27,7 +27,7 @@ pub use types::{
     AccessContext, AccessPolicy, BrowserStore, Cookie, CredentialValue, Secret, SecretEntry,
     SecretKind, SecretString, WebStorage,
 };
-pub use vault_ext::{SERVICE_CREDENTIAL_NAMESPACES, is_reserved_service_name};
+pub use vault_ext::{SERVICE_CREDENTIAL_NAMESPACES, TotpOutcome, is_reserved_service_name};
 
 /// Secrets manager backed by an encrypted SecureStore vault.
 pub struct SecretsManager {

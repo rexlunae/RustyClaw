@@ -1,6 +1,6 @@
-//! Skill Security Auditing via oxidized-skills
+//! Skill Security Auditing via oxidized-agentic-audit
 //!
-//! Integrates the `oxidized-skills` crate to scan skill directories for:
+//! Integrates the `oxidized-agentic-audit` crate to scan skill directories for:
 //! - Dangerous bash patterns (RCE, credential exfiltration, reverse shells)
 //! - Prompt injection attempts
 //! - Exposed secrets
@@ -64,7 +64,7 @@ impl SkillAuditResult {
     }
 }
 
-/// Skill security auditor using oxidized-skills.
+/// Skill security auditor using oxidized-agentic-audit.
 pub struct SkillAuditor {
     config: Config,
     /// Minimum score required to pass (0-100)

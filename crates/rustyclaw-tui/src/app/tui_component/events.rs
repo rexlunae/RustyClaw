@@ -383,6 +383,7 @@ pub(super) fn apply_gw_event(
         mut analytics_data,
         mut show_logs_dialog,
         mut logs_data,
+        ..
     } = ui;
     drain_queued_dialogs(&ui_for_drain);
     match ev {

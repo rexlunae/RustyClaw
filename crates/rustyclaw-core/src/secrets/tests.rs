@@ -343,6 +343,55 @@ fn test_totp_setup_and_verify() {
     assert!(!manager.has_totp());
 }
 
+#[test]
+fn test_totp_clock_drift_detection() {
+    use super::TotpOutcome;
+
+    let dir = temp_dir();
+    let mut manager = SecretsManager::new(&dir);
+    manager.set_agent_access(true);
+    manager.setup_totp("testuser").unwrap();
+
+    let encoded = manager
+        .get_secret(SecretsManager::TOTP_SECRET_KEY, true)
+        .unwrap()
+        .unwrap();
+    let secret_bytes = TotpSecret::Encoded(encoded).to_bytes().unwrap();
+    let totp = TOTP::new(
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret_bytes,
+        Some("RustyClaw".to_string()),
+        "testuser".to_string(),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // A current code is Valid.
+    assert_eq!(
+        manager.verify_totp_detailed(&totp.generate(now)).unwrap(),
+        TotpOutcome::Valid
+    );
+
+    // A code from a clock ~2.5 minutes ahead fails the real check but is
+    // reported as drift, not a plain mismatch. (Step 5 is outside the ±1
+    // accepted window and inside the diagnostic scan.)
+    let outcome = manager
+        .verify_totp_detailed(&totp.generate(now + 5 * 30))
+        .unwrap();
+    assert!(
+        matches!(outcome, TotpOutcome::ClockDrift { steps } if steps.unsigned_abs() >= 2),
+        "expected ClockDrift, got {outcome:?}"
+    );
+    // Drift is diagnostic only — verify_totp still rejects.
+    assert!(!manager.verify_totp(&totp.generate(now + 5 * 30)).unwrap());
+}
+
 // ── Typed credential tests ──────────────────────────────────────
 
 #[test]
