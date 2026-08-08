@@ -10,6 +10,7 @@ mod app;
 mod components;
 mod connection_dialog;
 mod gateway_client;
+mod input_history;
 mod markdown;
 mod pairing;
 mod theme;

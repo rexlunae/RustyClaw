@@ -34,6 +34,9 @@ pub(super) fn handle_normal_key(
         mut messages,
         mut input_value,
         mut input_cursor_offset,
+        mut input_history,
+        mut history_index,
+        mut history_draft,
         mut gw_status,
         mut streaming,
         mut stream_start,
@@ -1142,6 +1145,9 @@ pub(super) fn handle_normal_key(
             }
         }
         KeyCode::Backspace if !tab_focused.get() => {
+            // Editing a recalled entry ends history browsing so Down can't
+            // overwrite the edit.
+            history_index.set(None);
             let cursor = input_cursor_offset.get();
             if cursor > 0 {
                 let mut text = input_value.read().clone();
@@ -1171,6 +1177,7 @@ pub(super) fn handle_normal_key(
             }
         }
         KeyCode::Delete if !tab_focused.get() => {
+            history_index.set(None);
             let cursor = input_cursor_offset.get();
             let mut text = input_value.read().clone();
             if cursor < text.len() && text.is_char_boundary(cursor) {
@@ -1205,6 +1212,7 @@ pub(super) fn handle_normal_key(
             } else {
                 c
             };
+            history_index.set(None);
             let mut text = input_value.read().clone();
             let cursor = input_cursor_offset.get().min(text.len());
             text.insert(cursor, c);
@@ -1243,6 +1251,11 @@ pub(super) fn handle_normal_key(
         KeyCode::Enter => {
             let val = input_value.to_string();
             if !val.is_empty() {
+                let mut history = input_history.read().clone();
+                crate::input_history::push_and_save(&mut history, &val);
+                input_history.set(history);
+                history_index.set(None);
+                history_draft.set(String::new());
                 input_value.set(String::new());
                 input_cursor_offset.set(0);
                 let mut menu = rustyclaw_view::CommandMenuData {
@@ -1314,11 +1327,50 @@ pub(super) fn handle_normal_key(
             // Escape returns focus to input
             tab_focused.set(false);
         }
+        // Bash-style history recall: Up on an empty input (or while already
+        // browsing) walks back through submitted prompts; Down walks forward
+        // and finally restores the stashed draft. With text in the input and
+        // no browse in progress, Up/Down keep their scroll behaviour.
         KeyCode::Up => {
-            scroll_offset.set(scroll_offset.get() + 1);
+            let history = input_history.read().clone();
+            match history_index.get() {
+                None if input_value.read().is_empty() && !history.is_empty() => {
+                    history_draft.set(String::new());
+                    let idx = history.len() - 1;
+                    let entry = history[idx].clone();
+                    input_cursor_offset.set(entry.len());
+                    input_value.set(entry);
+                    history_index.set(Some(idx));
+                }
+                Some(idx) if idx > 0 => {
+                    let entry = history[idx - 1].clone();
+                    input_cursor_offset.set(entry.len());
+                    input_value.set(entry);
+                    history_index.set(Some(idx - 1));
+                }
+                Some(_) => {} // Already at the oldest entry.
+                None => scroll_offset.set(scroll_offset.get() + 1),
+            }
         }
         KeyCode::Down => {
-            scroll_offset.set((scroll_offset.get() - 1).max(0));
+            match history_index.get() {
+                Some(idx) => {
+                    let history = input_history.read().clone();
+                    if idx + 1 < history.len() {
+                        let entry = history[idx + 1].clone();
+                        input_cursor_offset.set(entry.len());
+                        input_value.set(entry);
+                        history_index.set(Some(idx + 1));
+                    } else {
+                        // Past the newest entry: back to the saved draft.
+                        let draft = history_draft.read().clone();
+                        input_cursor_offset.set(draft.len());
+                        input_value.set(draft);
+                        history_index.set(None);
+                    }
+                }
+                None => scroll_offset.set((scroll_offset.get() - 1).max(0)),
+            }
         }
         // Ctrl+D opens the details dialog for the most recent
         // warning/error message that carries extended

@@ -176,6 +176,9 @@ pub(super) fn apply_key_event(
         analytics_data: _,
         show_logs_dialog: _,
         logs_data: _,
+        input_history: _,
+        history_index: _,
+        history_draft: _,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {
