@@ -30,6 +30,12 @@ pub struct DockerRuntimeConfig {
     /// Mount the workspace directory into the container.
     #[serde(default = "default_true")]
     pub mount_workspace: bool,
+    /// Mount the workspace read-only. A compromised container then cannot
+    /// modify host files through the bind mount; commands that need to write
+    /// must use container-local paths (e.g. /tmp). Off by default because
+    /// most agent workflows write build artifacts into the workspace.
+    #[serde(default)]
+    pub workspace_readonly: bool,
     /// Allowed workspace root paths (if empty, any path is allowed).
     #[serde(default)]
     pub allowed_workspace_roots: Vec<String>,
@@ -52,6 +58,7 @@ impl Default for DockerRuntimeConfig {
             cpu_limit: None,
             read_only_rootfs: false,
             mount_workspace: true,
+            workspace_readonly: false,
             allowed_workspace_roots: Vec::new(),
         }
     }
@@ -120,7 +127,8 @@ impl RuntimeAdapter for DockerRuntime {
     }
 
     fn storage_path(&self) -> PathBuf {
-        if self.config.mount_workspace {
+        // A read-only workspace mount can't host scratch storage.
+        if self.config.mount_workspace && !self.config.workspace_readonly {
             PathBuf::from("/workspace/.rustyclaw")
         } else {
             PathBuf::from("/tmp/.rustyclaw")
@@ -174,9 +182,14 @@ impl RuntimeAdapter for DockerRuntime {
                 )
             })?;
 
+            let mode = if self.config.workspace_readonly {
+                "ro"
+            } else {
+                "rw"
+            };
             process
                 .arg("--volume")
-                .arg(format!("{}:/workspace:rw", host_workspace.display()))
+                .arg(format!("{}:/workspace:{mode}", host_workspace.display()))
                 .arg("--workdir")
                 .arg("/workspace");
         }
@@ -220,6 +233,7 @@ mod tests {
             cpu_limit: Some(1.5),
             read_only_rootfs: true,
             mount_workspace: true,
+            workspace_readonly: false,
             allowed_workspace_roots: Vec::new(),
         };
         let runtime = DockerRuntime::new(cfg);
@@ -306,6 +320,43 @@ mod tests {
         assert!(
             error_chain.contains("root"),
             "expected root-mount error chain, got: {error_chain}"
+        );
+    }
+
+    #[test]
+    fn docker_workspace_readonly_mounts_ro() {
+        let cfg = DockerRuntimeConfig {
+            workspace_readonly: true,
+            ..DockerRuntimeConfig::default()
+        };
+        let runtime = DockerRuntime::new(cfg);
+        let workspace = std::env::temp_dir();
+        let cmd = runtime
+            .build_shell_command("echo hello", &workspace)
+            .unwrap();
+        let debug = format!("{cmd:?}");
+        assert!(
+            debug.contains(":/workspace:ro"),
+            "workspace_readonly must bind-mount the workspace as ro"
+        );
+        assert_eq!(
+            runtime.storage_path(),
+            PathBuf::from("/tmp/.rustyclaw"),
+            "scratch storage must move off a read-only workspace mount"
+        );
+    }
+
+    #[test]
+    fn docker_workspace_default_mounts_rw() {
+        let runtime = DockerRuntime::new(DockerRuntimeConfig::default());
+        let workspace = std::env::temp_dir();
+        let cmd = runtime
+            .build_shell_command("echo hello", &workspace)
+            .unwrap();
+        let debug = format!("{cmd:?}");
+        assert!(
+            debug.contains(":/workspace:rw"),
+            "default workspace mount stays read-write"
         );
     }
 
