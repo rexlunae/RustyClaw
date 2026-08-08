@@ -1222,7 +1222,7 @@ pub static PLUGIN_STATE_SET: ToolDef = ToolDef {
 
 pub static PLUGIN_STATE_PATCH: ToolDef = ToolDef {
     name: "plugin_state_patch",
-    description: "Merge a partial update into a plugin's state (JSON Merge Patch). Only the \
+    description: "Merge a partial update into a plugin's state (merge patch). Only the \
                   keys you provide are changed — all other keys stay as-is.",
     parameters: vec![],
     execute: exec_plugin_state_patch,
@@ -1231,7 +1231,7 @@ pub static PLUGIN_STATE_PATCH: ToolDef = ToolDef {
 pub static PLUGIN_CREATE: ToolDef = ToolDef {
     name: "plugin_create",
     description: "Create a new plugin that renders an interactive panel beside the chat. \
-                  Plugins combine agent instructions, JSON state, and UI rendering — ideal \
+                  Plugins combine agent instructions, state, and UI rendering — ideal \
                   for charts, dashboards, live data, and interactive widgets. \
                   After creation, use plugin_state_set to populate its data.",
     parameters: vec![],

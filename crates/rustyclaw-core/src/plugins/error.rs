@@ -5,10 +5,10 @@ use std::path::PathBuf;
 pub enum PluginError {
     /// I/O error during plugin load or state persistence.
     Io(std::io::Error, PathBuf),
-    /// JSON parse error in a plugin manifest.
-    Parse(serde_json::Error, PathBuf),
+    /// TOML parse error in a plugin manifest or state file.
+    Parse(toml::de::Error, PathBuf),
     /// Serialization error.
-    Serialize(serde_json::Error, String),
+    Serialize(toml::ser::Error, String),
     /// Plugin not found.
     NotFound(String),
     /// Plugin already exists (on create).
@@ -23,7 +23,7 @@ impl fmt::Display for PluginError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(e, path) => write!(f, "plugin I/O error at {}: {e}", path.display()),
-            Self::Parse(e, path) => write!(f, "plugin JSON error in {}: {e}", path.display()),
+            Self::Parse(e, path) => write!(f, "plugin TOML error in {}: {e}", path.display()),
             Self::Serialize(e, name) => write!(f, "plugin serialization error ({name}): {e}"),
             Self::NotFound(name) => write!(f, "plugin not found: {name}"),
             Self::AlreadyExists(name) => write!(f, "plugin already exists: {name}"),
