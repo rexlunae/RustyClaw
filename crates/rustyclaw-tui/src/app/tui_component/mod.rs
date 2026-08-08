@@ -56,6 +56,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let messages: State<Vec<DisplayMessage>> = hooks.use_state(Vec::new);
     let input_value = hooks.use_state(String::new);
     let input_cursor_offset = hooks.use_state(|| 0usize);
+    let input_history = hooks.use_state(crate::input_history::load);
+    let history_index = hooks.use_state(|| None::<usize>);
+    let history_draft = hooks.use_state(String::new);
     let gw_status = hooks.use_state(|| rustyclaw_core::types::GatewayStatus::Connecting);
     let streaming = hooks.use_state(|| false);
     let stream_start: State<Option<Instant>> = hooks.use_state(|| None);
@@ -281,6 +284,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         messages,
         input_value,
         input_cursor_offset,
+        input_history,
+        history_index,
+        history_draft,
         gw_status,
         streaming,
         stream_start,
