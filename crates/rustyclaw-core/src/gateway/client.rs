@@ -56,8 +56,10 @@ pub struct GatewayClient {
     /// Whether we're connected.
     connected: Arc<std::sync::atomic::AtomicBool>,
     /// The underlying SSH connection, held to keep the transport alive for the
-    /// lifetime of the client.
-    _connection: SshConnection,
+    /// lifetime of the client. Wrapped so [`Self::close`] can drop it on
+    /// demand: dropping the `SshConnection` kills the ssh child
+    /// (`kill_on_drop`), which closes the pipes and ends the event stream.
+    _connection: Mutex<Option<SshConnection>>,
 }
 
 impl GatewayClient {
@@ -409,7 +411,7 @@ impl GatewayClient {
             cmd_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             connected,
-            _connection: connection,
+            _connection: Mutex::new(Some(connection)),
         }
     }
 
@@ -470,6 +472,19 @@ impl GatewayClient {
     /// Check if connected.
     pub fn is_connected(&self) -> bool {
         self.connected.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Close the connection on demand.
+    ///
+    /// Drops the SSH transport, which kills the ssh child (`kill_on_drop`);
+    /// the reader task then sees EOF and tears the event stream down exactly
+    /// as it would for a dead link — `Disconnected` is emitted and the
+    /// channel closes once both internal tasks end. Clients that only drop
+    /// their `Arc` cannot do this alone: the worker task that drains
+    /// [`Self::recv`] holds one, so the transport would otherwise stay alive
+    /// until the process exits. Idempotent.
+    pub async fn close(&self) {
+        *self._connection.lock().await = None;
     }
 
     /// Send a chat message on the gateway's current thread.
@@ -712,6 +727,40 @@ mod tests {
             ended.is_ok(),
             "a client whose reader has died must end its event stream, \
              not park its consumers on it forever"
+        );
+    }
+
+    /// A caller that wants out must be able to take the connection down, not
+    /// just forget its handle.
+    ///
+    /// Dropping every `Arc` alone cannot do this: the task draining events
+    /// holds one, and the reader only ends on EOF, so the transport would
+    /// outlive the connection until the process exits. `close` kills the ssh
+    /// child, and the event stream then ends exactly as it does for a dead
+    /// link.
+    #[tokio::test]
+    async fn close_ends_the_connection_on_demand() {
+        let (conn, writer, reader) =
+            SshConnection::from_child(deaf_child()).expect("splitting the child");
+        let client = GatewayClient::from_transport(conn, writer, reader, None);
+        assert!(client.is_connected(), "a fresh client starts connected");
+
+        client.close().await;
+
+        // The reader announces the disconnect before it goes, so drain
+        // rather than expecting `None` first.
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while client.recv().await.is_some() {}
+        })
+        .await;
+
+        assert!(
+            ended.is_ok(),
+            "a closed connection must end its event stream, not park consumers on it"
+        );
+        assert!(
+            !client.is_connected(),
+            "a closed connection must not report itself connected"
         );
     }
 }
