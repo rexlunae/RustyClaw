@@ -33,6 +33,16 @@ pub enum ProcessError {
     Io(#[from] std::io::Error),
 }
 
+/// Monotonic sequence that makes session IDs unique within the process.
+///
+/// The adjective-noun prefix alone is only 8×8 = 64 IDs cycling every 64 ms,
+/// and `sessions.insert` overwrites on collision — two commands spawned in
+/// the same window would silently lose one from the registry, and a poller
+/// handed the shared ID would see the other command's output and exit. The
+/// sequence suffix makes the ID unique no matter how many spawns land in the
+/// same millisecond.
+static SESSION_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Generate a short human-readable session ID.
 fn generate_session_id() -> SessionId {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,8 +59,9 @@ fn generate_session_id() -> SessionId {
 
     let adj_idx = (timestamp % adjectives.len() as u128) as usize;
     let noun_idx = ((timestamp / 8) % nouns.len() as u128) as usize;
+    let seq = SESSION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    format!("{}-{}", adjectives[adj_idx], nouns[noun_idx])
+    format!("{}-{}-{seq}", adjectives[adj_idx], nouns[noun_idx])
 }
 
 /// Status of a background session.
@@ -1230,5 +1241,21 @@ mod tests {
 
         let session = manager.get(&id).unwrap();
         assert!(session.full_output().contains("hello"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn session_ids_are_unique_under_rapid_spawns() {
+        let mut manager = ProcessManager::new();
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..50 {
+            let id = manager.spawn("sleep 5", "/tmp", Some(60)).unwrap();
+            assert!(
+                ids.insert(id.clone()),
+                "duplicate session id {id}: a later session would overwrite \
+                 an earlier one in the registry, and pollers of either would \
+                 see the wrong process"
+            );
+        }
     }
 }
