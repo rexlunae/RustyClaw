@@ -536,9 +536,16 @@ async fn a_backgrounded_command_keeps_its_closing_lines() {
     // finish inside the instant the supervisor takes to record the exit.
     // A handful of lines is drained faster than the status is observed,
     // which made an earlier version of this test pass on the bug.
+    //
+    // The timeout is deliberately far beyond the command's real runtime
+    // (~1s). This test's claim is about which status and which closing lines
+    // arrive when the session reports finishing — not about wall-clock speed —
+    // and a loaded CI runner starved the 60s budget once (Some(TimedOut)
+    // instead of Some(Exited(3))), which is a slow runner, not the bug. A
+    // longer timeout takes nothing away from the check.
     let args = json!({
         "command": "sleep 0.4; awk 'BEGIN{for(i=0;i<20000;i++) print \"closing-line-\" i}'; echo END-MARKER; exit 3",
-        "timeout_secs": 60,
+        "timeout_secs": 300,
         "yieldMs": 200,
     });
     let result = exec_execute_command_streaming(&args, ws(), None)
