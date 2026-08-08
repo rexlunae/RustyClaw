@@ -19,6 +19,13 @@ use rustyclaw_view::{SecretsDialogData, SwarmAgentData, SwarmData};
 /// An entry in the ordered event buffer.  Consecutive Chunk events
 /// are coalesced into a single `Chunks` entry to reduce signal writes,
 /// while preserving the ordering of non-chunk events relative to chunks.
+//
+// The size gap the lint sees is `GatewayEvent`'s largest variant, and its
+// suggestion — boxing — is the wrong trade here: entries live in a Vec
+// that is pushed once by the worker and drained once per UI tick, so the
+// move cost the lint prices in is paid once per event either way, while a
+// Box would add an allocation per event on the bridge's hot path.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum BufferEntry {
     Event {
         /// The thread whose turn produced this, when it is turn-scoped.
