@@ -809,7 +809,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     .read()
                     .threads
                     .iter()
-                    .map(|t| (t.id.0, t.label.clone()))
+                    .map(|t| (t.id, t.label.clone().unwrap_or_else(|| format!("Thread {}", t.id))))
                     .collect::<Vec<_>>(),
                 on_close: move |_| state.write().show_cron_dialog = false,
                 on_command: move |cmd: crate::components::CronCommand| {
