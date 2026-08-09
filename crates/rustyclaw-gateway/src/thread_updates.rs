@@ -48,6 +48,7 @@ pub(crate) fn session_transcript(id: u64) -> Option<(String, Vec<protocol::types
         .map(|m| protocol::types::ChatMessage {
             role: m.role.clone(),
             content: m.content.clone(),
+            id: None,
             tool_calls: None,
             tool_call_id: None,
             media: None,
@@ -64,6 +65,7 @@ pub(crate) fn session_transcript(id: u64) -> Option<(String, Vec<protocol::types
             "'{label}' is a background session — this transcript is read-only. \
              Select one of your threads in the sidebar to continue chatting."
         ),
+        id: None,
         tool_calls: None,
         tool_call_id: None,
         media: None,
@@ -311,6 +313,7 @@ pub(crate) fn thread_history_messages(
             protocol::types::ChatMessage {
                 role: role.to_string(),
                 content: message.content.clone(),
+                id: message.id.clone(),
                 // Decoded here rather than passed through: see
                 // `ToolCallRecord`. A `Value` on the bincode wire encodes and
                 // then cannot be decoded, and this is the other frame that

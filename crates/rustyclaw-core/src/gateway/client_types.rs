@@ -462,7 +462,15 @@ pub enum GatewayCommand {
         /// where the message comes from.
         #[serde(default)]
         client_kind: Option<SessionOrigin>,
+        /// The client's id for this message, echoed back in history so the
+        /// bubble the user sees and the persisted record agree.
+        #[serde(default)]
+        message_id: Option<String>,
     },
+
+    /// Delete one message from a thread's history by its stable id.
+    #[serde(rename = "message_delete")]
+    MessageDelete { thread_id: u64, message_id: String },
 
     /// Authenticate with TOTP code
     #[serde(rename = "auth")]
@@ -967,10 +975,11 @@ impl GatewayCommand {
                 message,
                 thread_id,
                 client_kind,
+                message_id,
             } => ClientFrame {
                 frame_type: ClientFrameType::Chat,
                 payload: ClientPayload::Chat {
-                    messages: vec![ChatMessage::text("user", &message)],
+                    messages: vec![ChatMessage::text("user", &message).with_id(message_id)],
                     thread_id,
                     client_kind,
                 },
@@ -978,6 +987,16 @@ impl GatewayCommand {
             GatewayCommand::Auth { code } => ClientFrame {
                 frame_type: ClientFrameType::AuthResponse,
                 payload: ClientPayload::AuthResponse { code },
+            },
+            GatewayCommand::MessageDelete {
+                thread_id,
+                message_id,
+            } => ClientFrame {
+                frame_type: ClientFrameType::MessageDelete,
+                payload: ClientPayload::MessageDelete {
+                    thread_id,
+                    message_id,
+                },
             },
             GatewayCommand::VaultUnlock { password } => ClientFrame {
                 frame_type: ClientFrameType::UnlockVault,

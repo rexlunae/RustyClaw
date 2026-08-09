@@ -228,6 +228,38 @@ impl ThreadStore {
         Ok(())
     }
 
+    /// Rewrite a thread's whole log file from its in-memory state.
+    ///
+    /// The normal write path is append-only — one line per new record, so
+    /// history already on disk is never touched. Deleting a message can't
+    /// be expressed as an append, so this replaces the file: every
+    /// remaining message, plus the open-turn marker if the thread is still
+    /// streaming. The pending log is drained (its messages are all in
+    /// `thread.messages`, and its markers are re-derived), so the next
+    /// `persist` appends only genuinely new records.
+    pub fn rewrite_thread_log(&self, thread: &mut AgentThread) -> std::io::Result<()> {
+        let mut records: Vec<ThreadLogRecord> = thread
+            .messages
+            .iter()
+            .cloned()
+            .map(ThreadLogRecord::Message)
+            .collect();
+        if let Some(at) = thread.open_turn {
+            records.push(ThreadLogRecord::TurnStarted { at });
+        }
+        let mut content = String::new();
+        for record in &records {
+            content.push_str(
+                &serde_json::to_string(record)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+            );
+            content.push('\n');
+        }
+        write_atomically(&self.log_path(thread.id), content.as_bytes())?;
+        thread.pending_log.clear();
+        Ok(())
+    }
+
     /// Load the store into a manager. Threads whose log ends inside a turn
     /// — a `TurnStarted` with no stop indicator — come back open, exactly
     /// as they were left.
@@ -273,6 +305,14 @@ impl ThreadStore {
             // a truncated log must not make context building skip the
             // whole conversation.
             thread.compacted_up_to = thread.compacted_up_to.min(thread.messages.len());
+            // Messages persisted before stable ids existed load without
+            // one; assign them now so every message in a loaded thread is
+            // addressable (delete-by-id etc.) this session.
+            for message in thread.messages.iter_mut() {
+                if message.id.is_none() {
+                    message.id = Some(uuid::Uuid::new_v4().to_string());
+                }
+            }
             ThreadId::reserve_above(thread.id.0);
             threads.push(thread);
         }
@@ -768,6 +808,74 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
             .count();
         assert_eq!(quarantined, 1);
+
+        std::fs::remove_dir_all(&dir).ignore();
+    }
+
+    /// A deleted message must stay deleted across a reload: `remove_message`
+    /// drops it from memory and the pending log, and `rewrite_thread_log`
+    /// rewrites the append-only log without it.
+    #[test]
+    fn deleting_a_message_rewrites_the_log() {
+        let dir = temp_root("delete-rewrite");
+        let legacy = dir.join("threads.json");
+        let store = ThreadStore::at_legacy_path(&legacy);
+
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat("Trimmer");
+        {
+            let thread = mgr.get_mut(id).unwrap();
+            thread.add_message_with_id(Some("keep-1".into()), MessageRole::User, "keep me");
+            thread.add_message_with_id(Some("gone-1".into()), MessageRole::Assistant, "delete me");
+        }
+        store.persist(&mut mgr).unwrap();
+
+        let mut loaded = store.load().unwrap();
+        let thread = loaded.get_mut(id).unwrap();
+        let removed = thread.remove_message("gone-1").expect("the message exists");
+        assert_eq!(removed.content, "delete me");
+        store.rewrite_thread_log(thread).unwrap();
+
+        let reloaded = store.load().unwrap();
+        let thread = reloaded.get(id).unwrap();
+        assert_eq!(thread.messages.len(), 1, "only the kept message remains");
+        assert_eq!(thread.messages[0].id.as_deref(), Some("keep-1"));
+        assert_eq!(thread.messages[0].content, "keep me");
+
+        std::fs::remove_dir_all(&dir).ignore();
+    }
+
+    /// `rewrite_thread_log` must not drop an open-turn marker: a thread with
+    /// a live turn on screen has one, and deleting an older message while
+    /// the turn streams must leave the marker (and the thread) open.
+    #[test]
+    fn rewrite_thread_log_keeps_an_open_turn() {
+        let dir = temp_root("rewrite-open-turn");
+        let legacy = dir.join("threads.json");
+        let store = ThreadStore::at_legacy_path(&legacy);
+
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat("Open");
+        mgr.add_message(id, MessageRole::User, "prompt");
+        mgr.begin_turn(id); // open turn marker
+        mgr.add_message(id, MessageRole::Assistant, "partial");
+
+        store.persist(&mut mgr).unwrap();
+        let mut loaded = store.load().unwrap();
+        let thread = loaded.get_mut(id).unwrap();
+        assert!(
+            thread.open_turn.is_some(),
+            "the open turn survived the round trip"
+        );
+        store.rewrite_thread_log(thread).unwrap();
+
+        let reloaded = store.load().unwrap();
+        let thread = reloaded.get(id).unwrap();
+        assert_eq!(thread.messages.len(), 2);
+        assert!(
+            thread.open_turn.is_some(),
+            "rewrite preserved the open turn"
+        );
 
         std::fs::remove_dir_all(&dir).ignore();
     }

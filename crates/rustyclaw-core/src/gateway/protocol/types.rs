@@ -145,6 +145,16 @@ pub struct ChatMessage {
     pub role: String,
     #[serde(default)]
     pub content: String,
+    /// Stable message id, minted by the gateway and echoed in history so
+    /// clients can refer to a specific message (delete-by-id, …). Clients
+    /// may also send one (user messages) so the bubble they show and the
+    /// persisted record agree.
+    ///
+    /// NOTE: no `skip_serializing_if` here on purpose — frames are bincode,
+    /// which reads struct fields positionally, so a skipped field would
+    /// shift every byte after it.
+    #[serde(default)]
+    pub id: Option<String>,
     /// Tool calls requested by the assistant.
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCallRecord>>,
@@ -162,10 +172,17 @@ impl ChatMessage {
         Self {
             role: role.to_string(),
             content: content.to_string(),
+            id: None,
             tool_calls: None,
             tool_call_id: None,
             media: None,
         }
+    }
+
+    /// Set the message's stable id.
+    pub fn with_id(mut self, id: Option<String>) -> Self {
+        self.id = id;
+        self
     }
 
     /// Create a user message with media.
@@ -173,6 +190,7 @@ impl ChatMessage {
         Self {
             role: "user".to_string(),
             content: content.to_string(),
+            id: None,
             tool_calls: None,
             tool_call_id: None,
             media: if media.is_empty() { None } else { Some(media) },

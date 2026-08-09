@@ -8,8 +8,9 @@
 //! `rustyclaw-view` stays framework-agnostic for the TUI.
 
 use dioxus_genai_chat::{
-    ChatMessagePayload, ChatRole, ChatTranscript, ContextItem, ContextKind, Reasoning,
-    ReasoningStep, SearchMatch, StepStatus, ToolCall, ToolCallHint, ToolCallStatus, ToolResultHint,
+    ChatMessage as GcChatMessage, ChatMessagePayload, ChatRole, ChatTranscript, ContextItem,
+    ContextKind, MessageAction, Reasoning, ReasoningStep, SearchMatch, StepStatus, ToolCall,
+    ToolCallHint, ToolCallStatus, ToolResultHint,
 };
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ChatMessage;
@@ -35,7 +36,8 @@ pub fn to_transcript(
     // While a live reasoning block is on screen its own "Thinking…" header
     // is the indicator, so don't stack a typing row underneath it.
     if awaiting_user {
-        transcript.push(
+        push_auxiliary(
+            &mut transcript,
             ChatRole::Assistant,
             ChatMessagePayload::Status("Waiting for your answer…".to_string()),
         );
@@ -45,15 +47,24 @@ pub fn to_transcript(
             .map(|m| m.role == MessageRole::Thinking && m.is_streaming)
             .unwrap_or(false);
         if !live_reasoning {
-            transcript.push(ChatRole::Assistant, ChatMessagePayload::Typing);
+            push_auxiliary(
+                &mut transcript,
+                ChatRole::Assistant,
+                ChatMessagePayload::Typing,
+            );
         }
     } else if surface.is_streaming {
         let label = surface
             .progress_summary()
             .unwrap_or_else(|| "Streaming…".to_string());
-        transcript.push(ChatRole::Assistant, ChatMessagePayload::Status(label));
+        push_auxiliary(
+            &mut transcript,
+            ChatRole::Assistant,
+            ChatMessagePayload::Status(label),
+        );
     } else if surface.is_processing {
-        transcript.push(
+        push_auxiliary(
+            &mut transcript,
             ChatRole::Assistant,
             ChatMessagePayload::Status("Processing…".to_string()),
         );
@@ -62,12 +73,33 @@ pub fn to_transcript(
     transcript
 }
 
+/// Push an entry that is not backed by a thread message (busy rows, status
+/// lines): copyable, but never deletable — there is no record to delete.
+fn push_auxiliary(transcript: &mut ChatTranscript, role: ChatRole, payload: ChatMessagePayload) {
+    transcript.messages.push(GcChatMessage {
+        role,
+        payload,
+        id: None,
+        actions: copy_only_actions(),
+    });
+}
+
+/// Action set for entries with no deletable record: copy, nothing else.
+fn copy_only_actions() -> Vec<MessageAction> {
+    vec![MessageAction::copy()]
+}
+
 /// Push one core message (text bubble + any tool calls/results) onto the transcript.
 fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
-    let (role, payload) = match msg.role {
+    // Roles whose bubbles map to a record in the thread's history get the
+    // message's stable id attached, so the per-bubble actions (copy, delete)
+    // can address the right record. Notices and inline status have no record
+    // behind them — copy only.
+    let (role, payload, deletable) = match msg.role {
         MessageRole::User => (
             ChatRole::User,
             ChatMessagePayload::Text(msg.content.clone()),
+            true,
         ),
         // Assistant turns are markdown; an empty in-flight bubble that only
         // carries tool calls contributes no text payload.  Pre-sanitise the
@@ -75,6 +107,7 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         MessageRole::Assistant => (
             ChatRole::Assistant,
             ChatMessagePayload::Markdown(sanitize_markdown(&msg.content)),
+            true,
         ),
         // Reasoning renders as a collapsible timeline: a one-line
         // "Thought for 4.2s" header that expands to the full trace,
@@ -93,11 +126,13 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
                     steps: reasoning_steps(&msg.content, msg.is_streaming),
                     collapsed: !msg.is_streaming,
                 }),
+                true,
             )
         }
         MessageRole::Error => (
             ChatRole::Assistant,
             ChatMessagePayload::Error(msg.content.clone()),
+            false,
         ),
         // Inline notices keep their tone via an icon prefix; the crate
         // renders System rows as neutral lines, so the glyph carries the
@@ -105,20 +140,24 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         MessageRole::Info => (
             ChatRole::System,
             ChatMessagePayload::Text(format!("ℹ️ {}", msg.content)),
+            false,
         ),
         MessageRole::Success => (
             ChatRole::System,
             ChatMessagePayload::Text(format!("✅ {}", msg.content)),
+            false,
         ),
         MessageRole::Warning => (
             ChatRole::System,
             ChatMessagePayload::Text(format!("⚠️ {}", msg.content)),
+            false,
         ),
         // System and the (rare, usually folded) tool roles render as a
         // neutral system line.
         _ => (
             ChatRole::System,
             ChatMessagePayload::Text(msg.content.clone()),
+            false,
         ),
     };
 
@@ -127,7 +166,18 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         ChatMessagePayload::Text(s) | ChatMessagePayload::Markdown(s) if s.is_empty()
     );
     if !is_empty_text {
-        transcript.push(role, payload);
+        let mut gc = GcChatMessage {
+            role,
+            payload,
+            id: None,
+            actions: Vec::new(),
+        };
+        if deletable {
+            gc = gc.with_id(msg.id.clone());
+        } else {
+            gc.actions = copy_only_actions();
+        }
+        transcript.messages.push(gc);
     }
 
     for tc in &msg.tool_calls {
@@ -153,7 +203,17 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         // the stream shows the question; once a result exists the exchange
         // is rendered here as a question bubble plus the user's answer.
         if tc.name == "ask_user" {
-            push_ask_user(transcript, &arguments, tc.result.as_deref(), tc.is_error);
+            push_ask_user(
+                transcript,
+                &arguments,
+                tc.result.as_deref(),
+                tc.is_error,
+                if deletable {
+                    Some(msg.id.clone())
+                } else {
+                    None
+                },
+            );
             continue;
         }
 
@@ -187,21 +247,33 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             Some(ms) => format!("{} · {}", base, rustyclaw_view::format_duration_ms(ms)),
             None => base,
         };
-        transcript.push(
-            ChatRole::Assistant,
-            ChatMessagePayload::ToolCall(ToolCall {
+        transcript.messages.push(GcChatMessage {
+            role: ChatRole::Assistant,
+            payload: ChatMessagePayload::ToolCall(ToolCall {
                 name,
                 arguments,
                 status,
                 hint,
                 result_hint,
             }),
-        );
+            // The tool panel is part of its parent turn: actions address the
+            // whole core message, not the panel.
+            id: if deletable {
+                Some(msg.id.clone())
+            } else {
+                None
+            },
+            actions: if deletable {
+                Vec::new()
+            } else {
+                copy_only_actions()
+            },
+        });
         if tc.result.is_none() {
             // While the call runs, surface the gateway's live status
             // (elapsed, CPU, scheduler state) as a line under the panel.
             if let Some(line) = rustyclaw_view::ToolCallData::from(tc).live_status_line() {
-                transcript.push(ChatRole::System, ChatMessagePayload::Text(line));
+                push_auxiliary(transcript, ChatRole::System, ChatMessagePayload::Text(line));
             }
         }
     }
@@ -216,11 +288,15 @@ const PROMPT_DISMISSED_RESULT: &str = "User dismissed the prompt without answeri
 /// assistant bubble (title, description, options) and, when present, the
 /// answer as a user bubble. Nothing is emitted while the answer is still
 /// pending — the interactive inline card shows the question until then.
+///
+/// The bubbles carry their parent message's id, so deleting either removes
+/// the whole turn from the record.
 fn push_ask_user(
     transcript: &mut ChatTranscript,
     args: &serde_json::Value,
     result: Option<&str>,
     is_error: bool,
+    parent_id: Option<String>,
 ) {
     let Some(result) = result else {
         return;
@@ -246,25 +322,35 @@ fn push_ask_user(
             }
         }
     }
-    transcript.push(
-        ChatRole::Assistant,
-        ChatMessagePayload::Markdown(sanitize_markdown(&md)),
-    );
+    let question = GcChatMessage {
+        role: ChatRole::Assistant,
+        payload: ChatMessagePayload::Markdown(sanitize_markdown(&md)),
+        id: parent_id.clone(),
+        actions: Vec::new(),
+    };
+    transcript.messages.push(question);
 
-    if is_error {
-        transcript.push(
-            ChatRole::System,
-            ChatMessagePayload::Text(format!("⚠️ {}", result)),
-        );
+    let (role, text) = if is_error {
+        (ChatRole::System, format!("⚠️ {}", result))
     } else if result == PROMPT_DISMISSED_RESULT {
-        transcript.push(
-            ChatRole::System,
-            ChatMessagePayload::Text(format!("ℹ️ {}", result)),
-        );
+        (ChatRole::System, format!("ℹ️ {}", result))
     } else {
         // The structured answer is the user's reply in the conversation.
-        transcript.push(ChatRole::User, ChatMessagePayload::Text(result.to_string()));
+        (ChatRole::User, result.to_string())
+    };
+    let is_user_answer = role == ChatRole::User;
+    let mut answer = GcChatMessage {
+        role,
+        payload: ChatMessagePayload::Text(text),
+        id: parent_id,
+        actions: Vec::new(),
+    };
+    // A system note (dismissed/error) has no deletable record.
+    if !is_user_answer {
+        answer.id = None;
+        answer.actions = copy_only_actions();
     }
+    transcript.messages.push(answer);
 }
 
 /// Split accumulated reasoning text into timeline steps, one per paragraph:
@@ -495,6 +581,60 @@ pub fn to_context_items(attachments: &[PromptAttachment]) -> Vec<ContextItem> {
 mod ask_user_tests {
     use super::*;
     use rustyclaw_core::ui::ToolCallInfo;
+
+    /// Bubbles backed by a thread record carry their stable id and let the
+    /// surface defaults (copy + delete) apply; notices and auxiliary rows
+    /// carry no id and are explicitly copy-only, so delete cannot be fired
+    /// against a record that does not exist.
+    #[test]
+    fn deletable_bubbles_carry_ids_notices_are_copy_only() {
+        let mut messages = vec![
+            ChatMessage::user("hello"),
+            ChatMessage::start_assistant("a-1".to_string()),
+        ];
+        messages[0].id = "u-1".to_string();
+        messages[1].content = "hi".to_string();
+        messages.push(ChatMessage::notice(
+            rustyclaw_core::types::MessageRole::Warning,
+            "careful".to_string(),
+        ));
+        messages[0].is_streaming = false;
+        messages[1].is_streaming = false;
+
+        let mut transcript = ChatTranscript::default();
+        for msg in &messages {
+            push_message(&mut transcript, msg);
+        }
+        // A busy row (no record behind it) — copy only.
+        push_auxiliary(
+            &mut transcript,
+            ChatRole::Assistant,
+            ChatMessagePayload::Typing,
+        );
+
+        assert_eq!(transcript.messages.len(), 4);
+        let (user, assistant, notice, busy) = (
+            &transcript.messages[0],
+            &transcript.messages[1],
+            &transcript.messages[2],
+            &transcript.messages[3],
+        );
+        assert_eq!(user.id.as_deref(), Some("u-1"));
+        assert!(user.actions.is_empty(), "defaults (copy+delete) apply");
+        assert_eq!(assistant.id.as_deref(), Some("a-1"));
+        assert!(assistant.actions.is_empty());
+        assert_eq!(notice.id, None);
+        assert_eq!(
+            notice.actions.iter().map(|a| a.id()).collect::<Vec<_>>(),
+            vec!["copy"],
+            "notices are copy-only"
+        );
+        assert_eq!(busy.id, None);
+        assert_eq!(
+            busy.actions.iter().map(|a| a.id()).collect::<Vec<_>>(),
+            vec!["copy"]
+        );
+    }
 
     fn ask_user_message(result: Option<&str>, is_error: bool) -> ChatMessage {
         let mut msg = ChatMessage::start_assistant("m1".to_string());

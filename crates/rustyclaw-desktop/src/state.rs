@@ -412,9 +412,15 @@ impl Default for AppState {
 
 impl AppState {
     /// Add a user message to the conversation.
-    pub fn add_user_message(&mut self, content: String) {
+    /// Append the user's own message to the transcript. Returns the message's
+    /// stable id, which the caller should hand to the gateway so the bubble
+    /// the user sees and the persisted record agree (delete-by-id depends on
+    /// the match).
+    pub fn add_user_message(&mut self, content: String) -> String {
         let msg = ChatMessage::user(content);
+        let id = msg.id.clone();
         self.messages.push_back(msg);
+        id
     }
 
     /// Append an inline notice banner (Info/Success/Warning/Error) to the
@@ -1340,7 +1346,10 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
     }
 
     ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: message
+            .id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         role,
         content: message.display_content(),
         timestamp: chrono::Utc::now(),
