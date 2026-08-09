@@ -238,6 +238,41 @@ impl SessionManager {
             .count()
     }
 
+    /// Every session started, directly or indirectly, by the run at `key`.
+    ///
+    /// A run's children record it as their parent under the identity it ran
+    /// as — see [`crate::tool_caller`] — so the search is by identity string,
+    /// not by key. Needed because stopping a run has to reach its whole
+    /// subtree: once the parent's task is gone, nothing can present its
+    /// identity, and an orphaned descendant would be unstoppable forever.
+    pub fn descendants_of(&self, key: &str) -> Vec<SessionKey> {
+        let mut found = Vec::new();
+        let mut seen: std::collections::HashSet<SessionKey> =
+            std::collections::HashSet::from([key.to_string()]);
+        let mut frontier = vec![key.to_string()];
+
+        while let Some(parent) = frontier.pop() {
+            // The two identities a run can execute under. Both appear as a
+            // child's `parent_key`.
+            let owners = [format!("spawn:{parent}"), format!("subagent:{parent}")];
+            for session in self.sessions.values() {
+                let Some(child_parent) = session.parent_key.as_deref() else {
+                    continue;
+                };
+                if !owners.iter().any(|o| o == child_parent) {
+                    continue;
+                }
+                // `seen` guards against a cycle; keys are unique so one should
+                // not exist, but an unbounded walk here would hang the caller.
+                if seen.insert(session.key.clone()) {
+                    found.push(session.key.clone());
+                    frontier.push(session.key.clone());
+                }
+            }
+        }
+        found
+    }
+
     /// Get a session by key.
     pub fn get(&self, key: &str) -> Option<&Session> {
         self.sessions.get(key)

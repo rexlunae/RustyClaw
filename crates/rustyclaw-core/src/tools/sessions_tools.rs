@@ -212,32 +212,62 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
         }
     }
 
-    if session.status != SessionStatus::Active {
-        let status = session.status.clone();
+    let status = session.status.clone();
+
+    // The whole subtree, not just this run. A spawned run can spawn its own,
+    // and those children are owned by the identity *it* ran as — an identity
+    // nothing can present once its task is aborted. Left behind they would
+    // keep calling the model with no way for anyone to stop them, which is
+    // precisely what this tool exists to prevent.
+    let mut targets = vec![key.clone()];
+    targets.extend(mgr.descendants_of(&key));
+
+    let mut stopped = Vec::new();
+    let mut had_task = false;
+    for target in &targets {
+        if mgr.get(target).map(|s| s.status.clone()) != Some(SessionStatus::Active) {
+            continue;
+        }
+        // Stop the run first, then record it: if the abort landed and the
+        // record still said Active, the parent would poll a corpse forever.
+        //
+        // Taken while the session-manager lock is held. Safe because no path
+        // holds the running-session registry and then reaches for the session
+        // manager, so the two can never deadlock against each other.
+        if running_sessions()
+            .lock()
+            .map(|mut runs| runs.stop(target))
+            .unwrap_or(false)
+        {
+            had_task = true;
+        }
+        // Already looked up above, so the only failure mode is a race that
+        // removed it; either way the caller's answer is the same.
+        mgr.stop_session(target).ok();
+        if let Some(session) = mgr.get_mut(target) {
+            session.add_message("system", "stopped by sessions_kill");
+        }
+        stopped.push(target.clone());
+    }
+
+    if stopped.is_empty() {
         return Ok(format!(
             "Session {key} is already {status:?}; nothing to stop."
         ));
     }
 
-    // Stop the run first, then record it: if the abort landed and the record
-    // still said Active, the parent would poll a corpse forever.
-    let was_running = running_sessions()
-        .lock()
-        .map(|mut runs| runs.stop(&key))
-        .unwrap_or(false);
-    // Already looked up above, so the only failure mode is a race that
-    // removed it; either way the caller's answer is the same.
-    mgr.stop_session(&key).ok();
-    if let Some(session) = mgr.get_mut(&key) {
-        session.add_message("system", "stopped by sessions_kill");
-    }
-
-    Ok(if was_running {
-        format!("Stopped session {key}.")
-    } else {
+    let target_stopped = stopped.first() == Some(&key);
+    let descendants = stopped.len() - usize::from(target_stopped);
+    Ok(match (target_stopped, descendants, had_task) {
+        (true, 0, true) => format!("Stopped session {key}."),
         // The record was Active but no task was executing — a run that died
         // without recording its own end, or a record from an older gateway.
-        format!("Session {key} had no running task; marked stopped.")
+        (true, 0, false) => format!("Session {key} had no running task; marked stopped."),
+        (true, n, _) => format!("Stopped session {key} and {n} sub-agent(s) it had started."),
+        // The run itself had already ended, but it left children behind.
+        (false, n, _) => format!(
+            "Session {key} was already {status:?}; stopped {n} sub-agent(s) it had left running."
+        ),
     })
 }
 
