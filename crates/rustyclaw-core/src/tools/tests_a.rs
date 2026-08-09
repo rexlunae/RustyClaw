@@ -1138,6 +1138,28 @@ fn test_sessions_spawn_without_a_runner_refuses() {
 }
 
 #[test]
+fn test_sessions_spawn_refuses_an_unidentified_caller() {
+    // Unattributed, the fan-out ceiling has nothing to count against and the
+    // session belongs to nobody — so any conversation could stop it. Both
+    // guardrails are keyed on the caller, so a run without one is ungoverned.
+    let _guard = spawn_runner_guard();
+
+    struct Yes;
+    impl crate::sessions::SpawnRunner for Yes {
+        fn start(&self, _req: crate::sessions::SpawnRequest) -> Result<(), String> {
+            panic!("must not start an unattributable run");
+        }
+    }
+    crate::sessions::set_spawn_runner(std::sync::Arc::new(Yes));
+
+    let err = exec_sessions_spawn(&json!({"task": "unowned work"}), ws())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("unidentified session"), "{err}");
+    crate::sessions::clear_spawn_runner();
+}
+
+#[test]
 fn test_sessions_spawn_leaves_no_record_when_it_refuses() {
     let _guard = spawn_runner_guard();
     // Identified by task text rather than by counting: the session manager is
@@ -1173,10 +1195,12 @@ fn test_sessions_spawn_hands_the_run_to_the_installed_runner() {
     let recorder = Arc::new(Recorder::default());
     crate::sessions::set_spawn_runner(recorder.clone());
 
-    let out = exec_sessions_spawn(
-        &json!({"task": "summarize the log", "runTimeoutSeconds": 30, "model": "haiku"}),
-        ws(),
-    )
+    let out = crate::tool_caller::with_caller_blocking(Some("thread:42".into()), || {
+        exec_sessions_spawn(
+            &json!({"task": "summarize the log", "runTimeoutSeconds": 30, "model": "haiku"}),
+            ws(),
+        )
+    })
     .unwrap();
     assert!(out.contains("\"running\""), "{out}");
 
@@ -1195,6 +1219,13 @@ fn test_sessions_spawn_hands_the_run_to_the_installed_runner() {
     let session = mgr.get(&req.session_key).expect("session record");
     assert_eq!(session.status, crate::sessions::SessionStatus::Active);
     assert!(session.messages.iter().any(|m| m.role == "user"));
+    // Attributed to its caller, so the fan-out ceiling can count it and only
+    // that caller may stop it.
+    assert_eq!(session.parent_key.as_deref(), Some("thread:42"));
+    assert!(
+        session.background,
+        "a started run marks the record background"
+    );
     drop(mgr);
     drop(started);
     crate::sessions::clear_spawn_runner();

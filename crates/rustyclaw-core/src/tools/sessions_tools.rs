@@ -102,23 +102,38 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> ToolResult {
             .to_string()
     })?;
 
+    // A background run must be attributable, because two things that govern
+    // it are keyed on the caller. Unattributed, the fan-out ceiling has
+    // nothing to count against — so one turn could start unlimited runs — and
+    // the session belongs to nobody, leaving it stoppable by any other
+    // conversation that can see the key. Neither is acceptable for work that
+    // spends tokens on its own after the turn ends.
+    //
+    // Every headless context sets an identity (trigger, cron, messenger,
+    // sub-agent runs), and a client turn is unidentified only when it has no
+    // thread at all, which is already degenerate. Synchronous work is still
+    // available there.
+    let parent = crate::tool_caller::current().ok_or_else(|| {
+        "Cannot start a background sub-agent from an unidentified session: it \
+         could be neither attributed nor stopped. Use subagent_run for a \
+         synchronous run instead."
+            .to_string()
+    })?;
+
     let (session_key, run_id) = {
         let manager = session_manager();
         let mut mgr = manager
             .lock()
             .map_err(|_| "Failed to acquire session manager lock".to_string())?;
 
-        // Record who asked, both so the fan-out ceiling below has something to
-        // count and so a sub-agent's children are attributed to it rather than
-        // looking like top-level work.
-        let parent = crate::tool_caller::current();
-        if let Some(parent_key) = parent.as_deref() {
-            let running = mgr.active_subagents_of(parent_key);
-            crate::tool_limits::check_subagent(running)
-                .map_err(|e| crate::tools::error::ToolError::msg(e.to_string()))?;
-        }
+        // Bound this caller's fan-out. A sub-agent can spawn sub-agents, so
+        // this counts a caller's own children; the process-wide ceiling in the
+        // runner is what bounds the depth of the tree.
+        let running = mgr.active_subagents_of(&parent);
+        crate::tool_limits::check_subagent(running)
+            .map_err(|e| crate::tools::error::ToolError::msg(e.to_string()))?;
 
-        let key = mgr.spawn_subagent(agent_id, task, label.clone(), parent.clone());
+        let key = mgr.spawn_subagent(agent_id, task, label.clone(), Some(parent.clone()));
         debug!(session_key = %key, parent = ?parent, "Sub-agent spawned");
 
         let run_id = mgr
@@ -213,8 +228,13 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     // Same rule as backgrounded processes: a session belongs to whoever
     // spawned it, and another conversation must not be able to reach in and
-    // stop it. An unowned session predates ownership tracking and stays
-    // stoppable by anyone.
+    // stop it.
+    //
+    // A record with no owner is one `sessions_spawn` never made — a
+    // synchronous `subagent_run`, or a record from before ownership tracking.
+    // Those stay reachable by anyone, which costs nothing here because the
+    // kind and attachment checks below refuse them anyway. Every background
+    // run has an owner: `sessions_spawn` refuses to start one otherwise.
     if let Some(owner) = session.parent_key.clone() {
         let caller = crate::tool_caller::current();
         if caller.as_deref() != Some(owner.as_str()) {
