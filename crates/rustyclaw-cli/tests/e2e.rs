@@ -42,6 +42,33 @@ const DOCTOR_CHECKS: &[&str] = &[
     "Skills dir",
 ];
 
+/// The binary, pointed at a scratch HOME and nothing else.
+///
+/// Setting `HOME` alone is not enough to isolate a run. `--config`,
+/// `--settings-dir`, `--profile`, `--soul`, `--skills` and `--gateway` are
+/// all env-backed globals, so a developer who exports any of them has the
+/// CLI read their real installation instead of the empty directory the test
+/// just built — the assertions then describe their machine, and a test that
+/// creates and deletes directories is suddenly pointed at real data.
+///
+/// Cleared here rather than at each call site so a test added later cannot
+/// forget. A test that wants one of these set adds it back after.
+fn scratch_command(binary: &PathBuf, home: &PathBuf) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.env("HOME", home);
+    for leaked in [
+        "RUSTYCLAW_CONFIG",
+        "RUSTYCLAW_SETTINGS_DIR",
+        "RUSTYCLAW_PROFILE",
+        "RUSTYCLAW_SOUL",
+        "RUSTYCLAW_SKILLS",
+        "RUSTYCLAW_GATEWAY",
+    ] {
+        cmd.env_remove(leaked);
+    }
+    cmd
+}
+
 /// Run `doctor` against a given HOME and return its combined output.
 ///
 /// `--non-interactive` rather than the `--check-only` these tests used to
@@ -50,10 +77,9 @@ const DOCTOR_CHECKS: &[&str] = &[
 /// passed on the usage error — advertised as end-to-end coverage of the
 /// health check while never reaching it.
 fn run_doctor(binary: &PathBuf, home: &PathBuf) -> String {
-    let output = Command::new(binary)
+    let output = scratch_command(binary, home)
         .arg("doctor")
         .arg("--non-interactive")
-        .env("HOME", home)
         .output()
         .expect("Failed to run doctor");
     assert!(
@@ -137,9 +163,8 @@ fn test_e2e_status_no_gateway() {
     let binary = binary_path();
     let workspace = temp_workspace("status_no_gateway");
 
-    let output = Command::new(&binary)
+    let output = scratch_command(&binary, &workspace)
         .arg("status")
-        .env("HOME", &workspace)
         .output()
         .expect("Failed to run status");
 
@@ -190,9 +215,10 @@ fn test_e2e_skills_list() {
     let skills_dir = workspace.join("skills");
     fs::create_dir_all(&skills_dir).unwrap();
 
-    let output = Command::new(&binary)
+    // This one wants `RUSTYCLAW_SKILLS` — set after the scrub, so it is the
+    // test's value rather than whatever the developer exported.
+    let output = scratch_command(&binary, &workspace)
         .args(["skills", "list"])
-        .env("HOME", &workspace)
         .env("RUSTYCLAW_SKILLS", &skills_dir)
         .output()
         .expect("Failed to run skills list");
@@ -210,10 +236,10 @@ fn test_e2e_config_generation() {
     let workspace = temp_workspace("config_generation");
     let config_path = workspace.join("config.toml");
 
-    // Try to generate a default config (if such command exists)
-    // Or just verify we can read a config
-
-    // Create a minimal config
+    // A config that parses as TOML but is not a valid `Config`. This used to
+    // be written, passed to `doctor`, and the result discarded into `let _`
+    // with nothing asserted — so the test passed whatever happened, which is
+    // the pattern this PR exists to remove.
     fs::write(
         &config_path,
         r#"
@@ -223,12 +249,42 @@ kind = "mock"
     )
     .unwrap();
 
-    let _ = Command::new(&binary)
-        .args(["doctor", "--config"])
+    let output = scratch_command(&binary, &workspace)
+        .args(["doctor", "--non-interactive", "--config"])
         .arg(&config_path)
         .output()
         .expect("Failed to run doctor with config");
-    // Should be able to read the config
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        report.contains("Failed to parse config"),
+        "an unreadable config should be reported, not passed over\n{report}"
+    );
+    assert!(
+        report.contains("✗ Config file"),
+        "the config check should not pass on a config that failed to parse\n{report}"
+    );
+    // Quarantine is deliberate and the message says how to undo it, so the
+    // file must actually be moved rather than left to fail again next run.
+    assert!(
+        !config_path.exists(),
+        "the unreadable config should have been moved aside"
+    );
+    let quarantined: Vec<_> = fs::read_dir(&workspace)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".corrupt-"))
+        .collect();
+    assert_eq!(
+        quarantined.len(),
+        1,
+        "exactly one quarantined copy should be left behind"
+    );
+
     fs::remove_dir_all(&workspace).ok();
 }
 
