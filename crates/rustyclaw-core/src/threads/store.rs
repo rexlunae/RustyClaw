@@ -832,9 +832,7 @@ mod tests {
 
         let mut loaded = store.load().unwrap();
         let thread = loaded.get_mut(id).unwrap();
-        let removed = thread
-            .remove_message("gone-1")
-            .expect("the message exists");
+        let removed = thread.remove_message("gone-1").expect("the message exists");
         assert_eq!(removed.content, "delete me");
         store.rewrite_thread_log(thread).unwrap();
 

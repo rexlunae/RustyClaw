@@ -470,10 +470,7 @@ pub enum GatewayCommand {
 
     /// Delete one message from a thread's history by its stable id.
     #[serde(rename = "message_delete")]
-    MessageDelete {
-        thread_id: u64,
-        message_id: String,
-    },
+    MessageDelete { thread_id: u64, message_id: String },
 
     /// Authenticate with TOTP code
     #[serde(rename = "auth")]
@@ -986,9 +983,15 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::AuthResponse,
                 payload: ClientPayload::AuthResponse { code },
             },
-            GatewayCommand::MessageDelete { thread_id, message_id } => ClientFrame {
+            GatewayCommand::MessageDelete {
+                thread_id,
+                message_id,
+            } => ClientFrame {
                 frame_type: ClientFrameType::MessageDelete,
-                payload: ClientPayload::MessageDelete { thread_id, message_id },
+                payload: ClientPayload::MessageDelete {
+                    thread_id,
+                    message_id,
+                },
             },
             GatewayCommand::VaultUnlock { password } => ClientFrame {
                 frame_type: ClientFrameType::UnlockVault,

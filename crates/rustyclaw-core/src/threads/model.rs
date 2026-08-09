@@ -578,13 +578,20 @@ impl AgentThread {
     /// (append-only logs only add records, so the caller must call
     /// `ThreadStore::rewrite_thread_log` after this).
     pub fn remove_message(&mut self, message_id: &str) -> Option<ThreadMessage> {
-        let pos = self.messages.iter().position(|m| m.id.as_deref() == Some(message_id))?;
+        let pos = self
+            .messages
+            .iter()
+            .position(|m| m.id.as_deref() == Some(message_id))?;
         let removed = self.messages.remove(pos).unwrap();
-        self.pending_log
-            .retain(|r| !matches!(r, ThreadLogRecord::Message(m) if m.id.as_deref() == Some(message_id)));
+        self.pending_log.retain(
+            |r| !matches!(r, ThreadLogRecord::Message(m) if m.id.as_deref() == Some(message_id)),
+        );
         // A removed message that sat before the compaction boundary shifts
         // the boundary; never let it drift past the end.
-        self.compacted_up_to = self.compacted_up_to.saturating_sub(1).min(self.messages.len());
+        self.compacted_up_to = self
+            .compacted_up_to
+            .saturating_sub(1)
+            .min(self.messages.len());
         self.last_activity = SystemTime::now();
         Some(removed)
     }
