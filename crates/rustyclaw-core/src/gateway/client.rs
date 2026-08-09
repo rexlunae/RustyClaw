@@ -525,8 +525,11 @@ impl GatewayClient {
     /// gateway minted (or echoed) for it. The gateway rewrites the thread's
     /// log and pushes the updated history back.
     pub async fn delete_message(&self, thread_id: u64, message_id: String) -> Result<()> {
-        self.send(GatewayCommand::MessageDelete { thread_id, message_id })
-            .await
+        self.send(GatewayCommand::MessageDelete {
+            thread_id,
+            message_id,
+        })
+        .await
     }
 
     /// Authenticate with TOTP code.

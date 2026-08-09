@@ -47,7 +47,11 @@ pub fn to_transcript(
             .map(|m| m.role == MessageRole::Thinking && m.is_streaming)
             .unwrap_or(false);
         if !live_reasoning {
-            push_auxiliary(&mut transcript, ChatRole::Assistant, ChatMessagePayload::Typing);
+            push_auxiliary(
+                &mut transcript,
+                ChatRole::Assistant,
+                ChatMessagePayload::Typing,
+            );
         }
     } else if surface.is_streaming {
         let label = surface
@@ -204,7 +208,11 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
                 &arguments,
                 tc.result.as_deref(),
                 tc.is_error,
-                if deletable { Some(msg.id.clone()) } else { None },
+                if deletable {
+                    Some(msg.id.clone())
+                } else {
+                    None
+                },
             );
             continue;
         }
@@ -250,8 +258,16 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             }),
             // The tool panel is part of its parent turn: actions address the
             // whole core message, not the panel.
-            id: if deletable { Some(msg.id.clone()) } else { None },
-            actions: if deletable { Vec::new() } else { copy_only_actions() },
+            id: if deletable {
+                Some(msg.id.clone())
+            } else {
+                None
+            },
+            actions: if deletable {
+                Vec::new()
+            } else {
+                copy_only_actions()
+            },
         });
         if tc.result.is_none() {
             // While the call runs, surface the gateway's live status
@@ -614,7 +630,10 @@ mod ask_user_tests {
             "notices are copy-only"
         );
         assert_eq!(busy.id, None);
-        assert_eq!(busy.actions.iter().map(|a| a.id()).collect::<Vec<_>>(), vec!["copy"]);
+        assert_eq!(
+            busy.actions.iter().map(|a| a.id()).collect::<Vec<_>>(),
+            vec!["copy"]
+        );
     }
 
     fn ask_user_message(result: Option<&str>, is_error: bool) -> ChatMessage {
