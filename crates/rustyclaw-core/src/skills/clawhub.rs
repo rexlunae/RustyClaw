@@ -734,9 +734,20 @@ impl SkillManager {
             ));
         }
 
+        // The id is only mentioned when the registry sent one. Appending it
+        // unconditionally renders "(skill )" on a reply that omitted it —
+        // the same fabrication as the profile counts, in the message that
+        // tells someone their publish worked.
         Ok(format!(
-            "Published {} v{} to {} (skill {})",
-            manifest.name, manifest.version, self.registry_url, done.skill_id,
+            "Published {} v{} to {}{}",
+            manifest.name,
+            manifest.version,
+            self.registry_url,
+            if done.skill_id.is_empty() {
+                String::new()
+            } else {
+                format!(" (skill {})", done.skill_id)
+            },
         ))
     }
 
