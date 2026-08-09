@@ -1836,3 +1836,107 @@ pub fn App() -> Element {
         }
     }
 }
+
+#[cfg(test)]
+mod stylesheet_tests {
+    use super::{BULMA, STYLES};
+
+    /// Body of the first rule whose selector text ends with `selector`.
+    ///
+    /// Matching on the tail means Bulma's minified `.theme-dark,[data-theme=dark]`
+    /// is found by the same call as our own hand-written block; the
+    /// whitespace skip is what lets one helper read both the minified sheet
+    /// and the formatted one.
+    fn rule_body<'a>(css: &'a str, selector: &str) -> Option<&'a str> {
+        let mut from = 0;
+        loop {
+            let at = from + css[from..].find(selector)?;
+            from = at + selector.len();
+            let open = from + css[from..].find(|c: char| !c.is_whitespace())?;
+            if !css[open..].starts_with('{') {
+                continue; // part of a selector list, or a longer selector
+            }
+            let mut depth = 0usize;
+            for (i, c) in css[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(&css[open + 1..open + i]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return None;
+        }
+    }
+
+    /// The dark-mode fix for the `is-light` pills is an override of Bulma's
+    /// tokens, so it is only correct as long as Bulma itself leaves them at
+    /// their light-scheme values.
+    ///
+    /// Bulma 1.0.4 builds every light chip from `--bulma-light-l` (90%) and
+    /// declares it in the light scheme only — a `tag is-info is-light` keeps
+    /// a near-white background on a 7% shell. If a future Bulma starts
+    /// handling this, our override becomes a second opinion on a question
+    /// upstream has already answered, and this test says so rather than
+    /// leaving it to be discovered by eye.
+    #[test]
+    fn bulma_still_leaves_the_light_variants_to_the_light_scheme() {
+        let light = rule_body(BULMA, "[data-theme=light]").expect("bulma light theme block");
+        assert!(
+            light.contains("--bulma-light-l:"),
+            "bulma no longer scopes --bulma-light-l to a scheme; re-check the override"
+        );
+
+        let dark = rule_body(BULMA, "[data-theme=dark]").expect("bulma dark theme block");
+        assert!(
+            !dark.contains("--bulma-light-l:"),
+            "bulma now sets --bulma-light-l for dark; drop our override instead of fighting it"
+        );
+        for colour in ["primary", "link", "info", "success", "warning", "danger"] {
+            assert!(
+                !dark.contains(&format!("--bulma-{colour}-light-invert-l:")),
+                "bulma now inverts the {colour} light variant for dark; drop our override"
+            );
+        }
+    }
+
+    /// …and that the override is actually present, in the block that carries
+    /// the attribute. Declaring it on `:root` would not work: a custom
+    /// property is substituted where it is declared, so the light value
+    /// would be baked in and inherited straight past the themed element.
+    #[test]
+    fn the_dark_theme_inverts_the_light_variants() {
+        let dark = rule_body(STYLES, "[data-theme=\"dark\"]").expect("dark theme block");
+        assert!(dark.contains("--bulma-light-l: 22%"));
+        assert!(dark.contains("--bulma-light-invert-l: 80%"));
+        for colour in ["primary", "link", "info", "success", "warning", "danger"] {
+            assert!(
+                dark.contains(&format!(
+                    "--bulma-{colour}-light-invert-l: var(--bulma-{colour}-80-l)"
+                )),
+                "{colour} light variant is not inverted for dark"
+            );
+        }
+    }
+
+    /// Bulma writes the light background into the `.notification.is-*.is-light`
+    /// rules as a literal, where no token override can reach it — so those
+    /// need a rule of their own, at a specificity that outranks Bulma's.
+    #[test]
+    fn dark_mode_reaches_the_notification_rules_bulma_hard_codes() {
+        assert!(
+            rule_body(BULMA, ".notification.is-info.is-light")
+                .expect("bulma light notification rule")
+                .contains("--bulma-notification-background-l:90%"),
+            "bulma now reads a token here; the extra rule in styles.css may be redundant"
+        );
+        assert!(
+            STYLES.contains("[data-theme=\"dark\"] .notification.is-info.is-light"),
+            "dark mode does not override the hard-coded notification background"
+        );
+    }
+}
