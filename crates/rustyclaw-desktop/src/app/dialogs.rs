@@ -834,6 +834,32 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 // Same live lists the composer's model bar draws on, so the
                 // wake editor offers exactly the models the session can use.
                 provider_models: state.read().provider_models.clone(),
+                on_provider_pick: move |provider: String| {
+                    // The standing fetch in `App` only follows the session's
+                    // own provider, so a wake pinned to a different one would
+                    // see the static catalogue — empty, for every local
+                    // server. Ask for the real list on demand, sharing the
+                    // app's per-provider guard so re-opening the dialog does
+                    // not re-ask.
+                    if state.read().provider_models_requested.contains(&provider) {
+                        return;
+                    }
+                    let Some(client) = gateway.read().clone() else {
+                        return;
+                    };
+                    state
+                        .write()
+                        .provider_models_requested
+                        .insert(provider.clone());
+                    spawn(async move {
+                        if let Err(e) = client
+                            .send(GatewayCommand::ProviderModelList { provider })
+                            .await
+                        {
+                            tracing::warn!("Failed to request provider model list: {}", e);
+                        }
+                    });
+                },
                 on_close: move |_| state.write().show_cron_dialog = false,
                 on_command: move |cmd: crate::components::CronCommand| {
                     let gw = gateway.read().clone();

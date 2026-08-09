@@ -48,6 +48,37 @@ fn models_for(provider_models: &HashMap<String, Vec<String>>, provider: &str) ->
     }
 }
 
+/// The first field still standing between the author and a saveable wake,
+/// named as the hint under the Save button reads it. `None` means ready.
+///
+/// Save is refused rather than defaulted for provider, model and thread
+/// (#405, #406), which makes it possible to be stuck — so what is missing
+/// has to be sayable, not just checkable.
+fn missing_field(
+    name: &str,
+    expr: &str,
+    prompt: &str,
+    provider: &str,
+    model: &str,
+    thread_chosen: bool,
+) -> Option<&'static str> {
+    if name.trim().is_empty() {
+        Some("a name")
+    } else if expr.trim().is_empty() {
+        Some("a schedule")
+    } else if prompt.trim().is_empty() {
+        Some("a prompt")
+    } else if provider.trim().is_empty() {
+        Some("a provider")
+    } else if model.trim().is_empty() {
+        Some("a model")
+    } else if !thread_chosen {
+        Some("where it runs")
+    } else {
+        None
+    }
+}
+
 #[derive(Props, Clone, PartialEq)]
 pub struct CronDialogProps {
     pub visible: bool,
@@ -57,6 +88,11 @@ pub struct CronDialogProps {
     /// Live model lists per provider, as the composer's model bar uses.
     /// A provider missing here falls back to the static catalogue.
     pub provider_models: std::collections::HashMap<String, Vec<String>>,
+    /// A provider was chosen in the editor. The app answers by asking the
+    /// gateway for that provider's live model list — the standing fetch only
+    /// covers the session's own provider, so without this the dialog would
+    /// see nothing but the static catalogue for every other one.
+    pub on_provider_pick: EventHandler<String>,
     pub on_close: EventHandler<()>,
     pub on_command: EventHandler<CronCommand>,
 }
@@ -83,6 +119,7 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
     }
 
     let is_editing = editing.read().is_some();
+    let on_provider_pick = props.on_provider_pick;
     let threads = props.threads.clone();
     let provider_models = props.provider_models.clone();
 
@@ -110,6 +147,23 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
     let orphan_thread = current_thread.as_deref().filter(|choice| {
         !choice.is_empty() && !threads.iter().any(|(id, _)| id.to_string() == *choice)
     });
+
+    // Several providers ship no static catalogue at all — the local servers
+    // (LM Studio, exo, llama.cpp, Joshua), the Copilot proxy, and `custom`
+    // serve whatever the operator loaded, so there is nothing to enumerate
+    // until the gateway answers. A picker with no options and a mandatory
+    // model is a form that cannot be completed, so those get a text field:
+    // typing the name is the only thing that was ever going to work there.
+    let model_is_freeform = model_options.is_empty();
+
+    let incomplete = missing_field(
+        &form_name.read(),
+        &form_expr.read(),
+        &form_prompt.read(),
+        &current_provider,
+        &current_model,
+        current_thread.is_some(),
+    );
 
     let on_save = {
         let on_command = props.on_command;
@@ -235,6 +289,12 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                                 models.first().cloned().unwrap_or_default(),
                                             );
                                         }
+                                        // Ask for this provider's live list.
+                                        // For the ones with no catalogue it
+                                        // is the only way the picker ever
+                                        // fills in; for the rest it replaces
+                                        // a hardcoded list with the truth.
+                                        on_provider_pick.call(picked.clone());
                                         form_provider.set(picked);
                                     },
                                     option { value: "", disabled: true, "Select provider" }
@@ -250,17 +310,35 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                         }
                         div { class: "column",
                             label { class: "label is-small", "Model" }
-                            div { class: "select is-fullwidth",
-                                select {
+                            if model_is_freeform {
+                                input {
+                                    class: "input",
+                                    r#type: "text",
+                                    placeholder: "Model name as the server reports it",
+                                    disabled: current_provider.is_empty(),
                                     value: "{form_model}",
-                                    disabled: form_provider.read().is_empty(),
-                                    onchange: move |evt| form_model.set(evt.value()),
-                                    option { value: "", disabled: true, "Select model" }
-                                    for name in model_options.iter() {
-                                        option {
-                                            key: "{name}",
-                                            value: "{name}",
-                                            "{name}"
+                                    oninput: move |evt| form_model.set(evt.value()),
+                                }
+                                p { class: "help",
+                                    if current_provider.is_empty() {
+                                        "Choose a provider first."
+                                    } else {
+                                        "This provider has no model list yet — type the name it serves."
+                                    }
+                                }
+                            } else {
+                                div { class: "select is-fullwidth",
+                                    select {
+                                        value: "{form_model}",
+                                        disabled: current_provider.is_empty(),
+                                        onchange: move |evt| form_model.set(evt.value()),
+                                        option { value: "", disabled: true, "Select model" }
+                                        for name in model_options.iter() {
+                                            option {
+                                                key: "{name}",
+                                                value: "{name}",
+                                                "{name}"
+                                            }
                                         }
                                     }
                                 }
@@ -300,6 +378,7 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                     dioxus_bulma::prelude::Buttons {
                         dioxus_bulma::prelude::Button {
                             color: BulmaColor::Success,
+                            disabled: incomplete.is_some(),
                             onclick: on_save,
                             "Save"
                         }
@@ -307,6 +386,9 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                             onclick: move |_| editing.set(None),
                             "Cancel"
                         }
+                    }
+                    if let Some(missing) = incomplete {
+                        p { class: "help", "Still needs {missing}." }
                     }
                 }
             } else if let Some(ref data) = props.data {
@@ -371,7 +453,15 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                                             form_name.set(edit_seed.name.clone());
                                                             form_expr.set(edit_seed.expr.clone());
                                                             form_prompt.set(edit_seed.payload.clone());
-                                                            form_provider.set(edit_seed.provider.clone().unwrap_or_default());
+                                                            let seeded = edit_seed.provider.clone().unwrap_or_default();
+                                                            // Same request the picker makes, so
+                                                            // opening an existing wake fills its
+                                                            // model list too rather than only
+                                                            // after the provider is re-picked.
+                                                            if !seeded.is_empty() {
+                                                                on_provider_pick.call(seeded.clone());
+                                                            }
+                                                            form_provider.set(seeded);
                                                             form_model.set(edit_seed.model.clone().unwrap_or_default());
                                                             // An existing job already expresses a
                                                             // thread choice, including "foreground"
@@ -471,5 +561,83 @@ mod tests {
     #[test]
     fn an_unknown_provider_offers_nothing() {
         assert!(models_for(&HashMap::new(), "not-a-provider").is_empty());
+    }
+
+    /// Six providers ship no static catalogue, because there is nothing to
+    /// enumerate: the local servers and the proxies serve whatever the
+    /// operator loaded. Making the model mandatory turned that into a form
+    /// that could not be completed, which is why the editor falls back to a
+    /// text field — so this is the precondition worth pinning, not the
+    /// fallback itself.
+    #[test]
+    fn the_catalogue_less_providers_offer_nothing_to_pick() {
+        let none = HashMap::new();
+        for provider in [
+            "copilot-proxy",
+            "lmstudio",
+            "exo",
+            "llamacpp",
+            "joshua",
+            "custom",
+        ] {
+            assert!(
+                models_for(&none, provider).is_empty(),
+                "{provider} has a catalogue now — the freeform path may be unnecessary"
+            );
+        }
+    }
+
+    /// …and that a live list from the gateway does reach them, which is the
+    /// other half of the fix: the dialog asks for the picked provider's
+    /// models rather than only the session's own.
+    #[test]
+    fn a_live_list_fills_in_a_provider_with_no_catalogue() {
+        let mut live = HashMap::new();
+        live.insert(
+            "lmstudio".to_string(),
+            vec!["qwen3-coder-30b".to_string(), "gemma-3-27b".to_string()],
+        );
+        assert_eq!(models_for(&live, "lmstudio").len(), 2);
+        // An empty answer is not a list: fall back rather than showing a
+        // picker with nothing in it.
+        live.insert("exo".to_string(), vec![]);
+        assert!(models_for(&live, "exo").is_empty());
+    }
+
+    #[test]
+    fn the_missing_field_is_named_in_form_order() {
+        assert_eq!(
+            missing_field("", "", "", "", "", false),
+            Some("a name"),
+            "the first gap should be reported, not the last"
+        );
+        assert_eq!(
+            missing_field("wake", " ", "do it", "anthropic", "claude-opus", true),
+            Some("a schedule"),
+            "whitespace is not a schedule"
+        );
+        assert_eq!(
+            missing_field("wake", "every 1h", "", "anthropic", "claude-opus", true),
+            Some("a prompt")
+        );
+        assert_eq!(
+            missing_field("wake", "every 1h", "do it", "", "", true),
+            Some("a provider")
+        );
+        assert_eq!(
+            missing_field("wake", "every 1h", "do it", "lmstudio", "", true),
+            Some("a model"),
+            "a provider with no catalogue must still name the model as the gap"
+        );
+        // The thread is the one field where the empty string is a real
+        // answer ("foreground"), so it is tracked as chosen-or-not.
+        assert_eq!(
+            missing_field("wake", "every 1h", "do it", "lmstudio", "qwen3", false),
+            Some("where it runs")
+        );
+        assert_eq!(
+            missing_field("wake", "every 1h", "do it", "lmstudio", "qwen3", true),
+            None
+        );
     }
 }
