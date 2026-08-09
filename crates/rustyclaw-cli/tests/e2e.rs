@@ -16,9 +16,16 @@ fn binary_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rustyclaw"))
 }
 
-/// Create a temporary workspace
-fn temp_workspace() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rustyclaw-e2e-{}", std::process::id()));
+/// A workspace of this test's own.
+///
+/// Named per test, not just per process. Sharing one directory across the
+/// file made these mutually destructive: every test ends by removing it, so
+/// one finishing while another was mid-run deleted the directory out from
+/// under it — `current_dir` on a path that no longer existed, surfacing as a
+/// NotFound from the spawn rather than anything about the test. Harmless
+/// while nothing ran them; a flake the moment they did.
+fn temp_workspace(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("rustyclaw-e2e-{}-{test}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -27,7 +34,7 @@ fn temp_workspace() -> PathBuf {
 #[test]
 fn test_e2e_fresh_setup() {
     let binary = binary_path();
-    let workspace = temp_workspace();
+    let workspace = temp_workspace("fresh_setup");
 
     // Run onboard command (non-interactive mode if available)
     let output = Command::new(&binary)
@@ -83,7 +90,7 @@ fn test_e2e_version() {
 #[test]
 fn test_e2e_status_no_gateway() {
     let binary = binary_path();
-    let workspace = temp_workspace();
+    let workspace = temp_workspace("status_no_gateway");
 
     let output = Command::new(&binary)
         .arg("status")
@@ -132,7 +139,7 @@ fn test_e2e_gateway_help() {
 #[test]
 fn test_e2e_skills_list() {
     let binary = binary_path();
-    let workspace = temp_workspace();
+    let workspace = temp_workspace("skills_list");
 
     // Create minimal skills directory
     let skills_dir = workspace.join("skills");
@@ -155,7 +162,7 @@ fn test_e2e_skills_list() {
 #[test]
 fn test_e2e_config_generation() {
     let binary = binary_path();
-    let workspace = temp_workspace();
+    let workspace = temp_workspace("config_generation");
     let config_path = workspace.join("config.toml");
 
     // Try to generate a default config (if such command exists)
@@ -213,7 +220,7 @@ async fn test_e2e_error_recovery() -> Result<()> {
 #[test]
 fn test_e2e_workspace_operations() {
     let binary = binary_path();
-    let workspace = temp_workspace();
+    let workspace = temp_workspace("workspace_operations");
 
     // Create workspace structure
     fs::create_dir_all(workspace.join("memory")).unwrap();
