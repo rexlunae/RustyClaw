@@ -268,14 +268,55 @@ async fn provider_context(
         None => None,
     };
 
+    let base_url = {
+        let configured = deps.config.read().await.model.clone();
+        resolve_base_url(
+            provider,
+            configured.as_ref().map(|m| m.provider.as_str()),
+            configured.as_ref().and_then(|m| m.base_url.as_deref()),
+        )?
+    };
+
     Ok(rustyclaw_core::gateway::ModelContext {
         provider: provider.to_string(),
         model,
-        base_url: rustyclaw_core::providers::base_url_for_provider(provider)
-            .unwrap_or_default()
-            .to_string(),
+        base_url,
         api_key,
     })
+}
+
+/// The endpoint a job pinned to `provider` should be sent to.
+///
+/// `custom` and `copilot-proxy` ship no built-in address on purpose: the
+/// operator supplies it, and it lives in the config. Defaulting to the empty
+/// string sent them to `/`, so every fire failed with a connection error that
+/// named nothing.
+///
+/// The configured URL is only usable when the config is *on* the same
+/// provider. This runs precisely when a job pins something other than the
+/// gateway's active provider, so borrowing the URL unconditionally would aim
+/// a `custom` job at whatever endpoint the gateway happens to use — worse
+/// than not running, because it would run somewhere wrong. When there is no
+/// endpoint to be had, say so, the way the missing-model case does.
+fn resolve_base_url(
+    provider: &str,
+    configured_provider: Option<&str>,
+    configured_url: Option<&str>,
+) -> anyhow::Result<String> {
+    if let Some(known) = rustyclaw_core::providers::base_url_for_provider(provider) {
+        return Ok(known.to_string());
+    }
+    configured_url
+        .filter(|url| !url.trim().is_empty())
+        .filter(|_| configured_provider == Some(provider))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Job pins provider '{provider}', which has no built-in endpoint and none \
+                 configured for it. Set the endpoint for '{provider}' in the config, or pin \
+                 the job to a provider that has one."
+            )
+        })
 }
 
 /// The thread a job lands in. A named thread must exist — falling back
@@ -582,5 +623,66 @@ async fn run_agent_turn(
 fn warn_if_silent(response: &str, job_label: &str) {
     if response.trim().is_empty() {
         warn!(job = %job_label, "Scheduled turn produced no response text");
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::resolve_base_url;
+
+    /// A provider with a built-in endpoint uses it, whatever the config is
+    /// currently pointed at.
+    #[test]
+    fn a_known_provider_brings_its_own_endpoint() {
+        let url = resolve_base_url("anthropic", Some("openai"), Some("https://elsewhere"))
+            .expect("anthropic has a built-in endpoint");
+        assert!(url.starts_with("http"));
+        assert!(!url.contains("elsewhere"), "the config should not win here");
+    }
+
+    /// The case that was broken: the operator's endpoint is in the config,
+    /// and the config is on that provider.
+    #[test]
+    fn a_configured_endpoint_is_used_for_a_provider_that_has_none() {
+        let url = resolve_base_url("custom", Some("custom"), Some("https://my-llm.example/v1"))
+            .expect("the configured endpoint should be used");
+        assert_eq!(url, "https://my-llm.example/v1");
+    }
+
+    /// The trap in fixing it. This runs only when the job pins something
+    /// other than the active provider, so the configured URL usually belongs
+    /// to a *different* provider — using it would send a `custom` job to
+    /// whatever endpoint the gateway is on. Failing beats running somewhere
+    /// wrong.
+    #[test]
+    fn another_providers_endpoint_is_not_borrowed() {
+        let err = resolve_base_url(
+            "custom",
+            Some("anthropic"),
+            Some("https://api.anthropic.com"),
+        )
+        .expect_err("must not reuse another provider's endpoint")
+        .to_string();
+        assert!(err.contains("custom"), "the error should name the provider");
+        assert!(
+            !err.contains("anthropic.com"),
+            "and must not suggest the wrong endpoint was considered usable"
+        );
+    }
+
+    /// Nothing configured, and nothing built in: say why rather than sending
+    /// the request to `/`.
+    #[test]
+    fn no_endpoint_anywhere_is_an_error_that_names_the_cause() {
+        for configured in [None, Some("")] {
+            let err = resolve_base_url("copilot-proxy", Some("copilot-proxy"), configured)
+                .expect_err("no endpoint means no run")
+                .to_string();
+            assert!(err.contains("copilot-proxy"));
+            assert!(
+                err.contains("configured"),
+                "the message should point at the fix, got: {err}"
+            );
+        }
     }
 }
