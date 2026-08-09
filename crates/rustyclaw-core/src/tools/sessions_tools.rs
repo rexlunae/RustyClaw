@@ -154,6 +154,16 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> ToolResult {
         return Err(format!("Failed to start sub-agent: {e}").into());
     }
 
+    // Only now, with a run genuinely detached, is this a background session.
+    // `sessions_kill` needs the distinction: an Active record with no live
+    // task means a dead run to clear here, but ongoing work it cannot touch
+    // for a synchronous `subagent_run`.
+    if let Ok(mut mgr) = session_manager().lock() {
+        if let Some(session) = mgr.get_mut(&session_key) {
+            session.background = true;
+        }
+    }
+
     let result = SpawnResult {
         status: "running".to_string(),
         run_id,
@@ -227,11 +237,25 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
     }
 
     let status = session.status.clone();
+    let background = session.background;
     let attached = running_sessions()
         .lock()
         .map(|runs| runs.is_running(&key))
         .unwrap_or(false);
-    if status == SessionStatus::Active && !attached {
+
+    // Active with no live task means one of two very different things, and
+    // `background` is what tells them apart.
+    //
+    // For a synchronous `subagent_run` the work is still going inside its
+    // caller and nothing here can interrupt it, so refuse rather than claim a
+    // stop that did not happen.
+    //
+    // For a background run it means the task died without recording its
+    // ending — a panic, say. That record would otherwise sit Active forever,
+    // showing as a phantom running job and permanently consuming one of the
+    // caller's `max_subagents` slots, with no way to clear it. Clearing it is
+    // exactly what this tool should do; it falls through to the loop below.
+    if status == SessionStatus::Active && !attached && !background {
         return Err(format!(
             "No background run is attached to session {key}, so there is \
              nothing to stop. A synchronous subagent_run cannot be stopped \
@@ -239,6 +263,7 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
         )
         .into());
     }
+    let orphaned = status == SessionStatus::Active && !attached;
 
     // The whole subtree, not just this run. A spawned run can spawn its own,
     // and those children are owned by the identity *it* ran as — an identity
@@ -272,7 +297,12 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
         // removed it; either way the caller's answer is the same.
         mgr.stop_session(target).ok();
         if let Some(session) = mgr.get_mut(target) {
-            session.add_message("system", "stopped by sessions_kill");
+            let note = if orphaned && target == &key {
+                "cleared by sessions_kill: the run ended without recording an outcome"
+            } else {
+                "stopped by sessions_kill"
+            };
+            session.add_message("system", note);
         }
         stopped.push(target.clone());
     }
@@ -285,9 +315,19 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     let target_stopped = stopped.first() == Some(&key);
     let descendants = stopped.len() - usize::from(target_stopped);
+    // Say which of the two happened. "Stopped" would be a small lie for a run
+    // that had already died on its own.
+    let verb = if orphaned { "Cleared" } else { "Stopped" };
+    let tail = if orphaned {
+        " Its task had already ended without recording an outcome."
+    } else {
+        ""
+    };
     Ok(match (target_stopped, descendants) {
-        (true, 0) => format!("Stopped session {key}."),
-        (true, n) => format!("Stopped session {key} and {n} sub-agent(s) it had started."),
+        (true, 0) => format!("{verb} session {key}.{tail}"),
+        (true, n) => {
+            format!("{verb} session {key} and {n} sub-agent(s) it had started.{tail}")
+        }
         // The run itself had already ended, but it left children behind.
         (false, n) => format!(
             "Session {key} was already {status:?}; stopped {n} sub-agent(s) it had left running."

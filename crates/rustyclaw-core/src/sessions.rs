@@ -80,6 +80,16 @@ pub struct Session {
     /// Parent session key (for sub-agents).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_key: Option<SessionKey>,
+    /// Whether a detached background run was started for this session.
+    ///
+    /// Distinguishes a `sessions_spawn` run from a synchronous
+    /// `subagent_run`, which files a record here too. The difference matters
+    /// when a record is `Active` with no live task: for a background run that
+    /// means the run died without recording its ending and the record should
+    /// be cleared, while for a synchronous run it means the work is still
+    /// going and nothing here can stop it.
+    #[serde(default)]
+    pub background: bool,
 }
 
 impl Session {
@@ -98,6 +108,7 @@ impl Session {
             messages: Vec::new(),
             run_id: None,
             parent_key: None,
+            background: false,
         }
     }
 
@@ -122,6 +133,7 @@ impl Session {
             messages: Vec::new(),
             run_id: Some(run_id),
             parent_key,
+            background: false,
         }
     }
 

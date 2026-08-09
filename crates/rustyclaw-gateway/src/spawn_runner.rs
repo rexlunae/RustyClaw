@@ -24,6 +24,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use futures_util::FutureExt;
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{ChatMessage, ProviderRequest, ToolCallResult};
 use rustyclaw_core::sessions::{
@@ -176,17 +177,31 @@ impl SpawnRunner for GatewaySpawnRunner {
                 ),
             );
 
+            // A panic must not escape: it would take the task down before it
+            // could record an ending, leaving the record Active forever —
+            // a phantom running job that no one can clear and that keeps
+            // consuming one of the caller's sub-agent slots.
+            let run = std::panic::AssertUnwindSafe(run).catch_unwind();
+
             let outcome = match req.timeout_secs {
                 Some(secs) => {
                     match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
-                        Ok(outcome) => outcome,
-                        Err(_) => Err(anyhow::anyhow!(
+                        Ok(caught) => caught,
+                        Err(_) => Ok(Err(anyhow::anyhow!(
                             "run timed out after {secs}s (runTimeoutSeconds)"
-                        )),
+                        ))),
                     }
                 }
                 None => run.await,
             };
+            let outcome = outcome.unwrap_or_else(|panic| {
+                let detail = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                Err(anyhow::anyhow!("the sub-agent panicked: {detail}"))
+            });
 
             record_outcome(
                 &req.session_key,
@@ -666,6 +681,42 @@ mod tests {
             .map(|m| m.content.as_str())
             .collect();
         assert_eq!(recorded, ["ran secrets_get", "failed web_fetch"]);
+    }
+
+    #[tokio::test]
+    async fn a_panicking_run_still_records_an_ending() {
+        // Mirrors the task wrapper in `start`: without catch_unwind the panic
+        // takes the task down before `record_outcome`, and the record sits
+        // Active forever — a phantom job nobody can clear that keeps eating
+        // one of the caller's sub-agent slots.
+        let key = {
+            let mut mgr = session_manager().lock().unwrap();
+            mgr.spawn_subagent("main", "panics", None, None)
+        };
+
+        let run = async { panic!("boom inside the run") };
+        let caught = std::panic::AssertUnwindSafe(run).catch_unwind().await;
+        let outcome: anyhow::Result<String> = caught.unwrap_or_else(|panic| {
+            let detail = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            Err(anyhow::anyhow!("the sub-agent panicked: {detail}"))
+        });
+        record_outcome(&key, outcome, false);
+
+        let mgr = session_manager().lock().unwrap();
+        let session = mgr.get(&key).unwrap();
+        assert_eq!(session.status, SessionStatus::Error);
+        assert!(session.finished_ms.is_some());
+        assert!(
+            session
+                .messages
+                .iter()
+                .any(|m| m.content.contains("boom inside the run")),
+            "the panic message is the only clue to what went wrong"
+        );
     }
 
     #[test]
