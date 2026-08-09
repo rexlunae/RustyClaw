@@ -22,6 +22,12 @@ pub mod routes {
     pub const WHOAMI: &str = "/api/v1/whoami";
     /// `GET ?q=`.
     pub const SEARCH: &str = "/api/v1/search";
+    /// `GET ?q=`, the older search endpoint. Still served, and still what
+    /// this client uses: the response parsing here was written against it,
+    /// and the v1 shape has not been confirmed from a live call (see #411 —
+    /// clawhub.ai is unreachable from CI). Named so it reads as a deliberate
+    /// choice rather than another invented path.
+    pub const LEGACY_SEARCH: &str = "/api/search";
     /// `GET ?slug=&version=`.
     pub const DOWNLOAD: &str = "/api/v1/download";
     /// `GET`.
@@ -327,10 +333,10 @@ impl SkillManager {
 
     /// Internal: attempt a remote registry search.
     fn search_registry_remote(&self, query: &str) -> Result<Vec<RegistryEntry>, SkillError> {
-        // ClawHub API: /api/search?q=<query>
         let url = format!(
-            "{}/api/search?q={}",
+            "{}{}?q={}",
             self.registry_url,
+            routes::LEGACY_SEARCH,
             urlencoding::encode(query),
         );
 
@@ -623,7 +629,7 @@ impl SkillManager {
     pub fn auth_login(&self, _username: &str, _password: &str) -> Result<AuthResponse, SkillError> {
         Err(SkillError::msg(format!(
             "ClawHub has no password login. Create an API token at \
-             {}/settings/tokens and run `clawhub auth token <token>`.",
+             {}/settings/tokens and run `clawhub auth login <token>`.",
             self.registry_url
         )))
     }
@@ -1010,5 +1016,23 @@ mod route_tests {
             login.to_string().contains("/settings/tokens"),
             "the refusal should say how to authenticate instead: {login}"
         );
+        // The command it names has to be one that exists — `auth token` does
+        // not; the subcommand is `auth login <token>`.
+        assert!(
+            login.to_string().contains("auth login"),
+            "the refusal must point at a real command: {login}"
+        );
+    }
+
+    /// Search deliberately uses the legacy route, and says so.
+    ///
+    /// Both are real — `/api/search` is on the registry's `LegacyApiRoutes`
+    /// — so this is not the invented-path problem. It stays on the legacy one
+    /// because the response parsing was written against it and the v1 shape
+    /// could not be confirmed from a live call.
+    #[test]
+    fn search_uses_the_legacy_route_on_purpose() {
+        assert_eq!(routes::LEGACY_SEARCH, "/api/search");
+        assert_ne!(routes::LEGACY_SEARCH, routes::SEARCH);
     }
 }

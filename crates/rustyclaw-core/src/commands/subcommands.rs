@@ -130,11 +130,28 @@ pub(crate) fn handle_skill_subcommand(
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
                 return CommandResponse {
-                    messages: vec!["Usage: /skill publish <name>".to_string()],
+                    messages: vec!["Usage: /skill publish <name> accept-license-terms".to_string()],
                     action: CommandAction::None,
                 };
             }
-            match context.skill_manager.publish_to_registry(name, None, false) {
+            // Publishing licenses the skill to everyone under MIT-0, and the
+            // registry refuses a publish that does not say so. Checked here,
+            // before anything is uploaded: without it the command mints an
+            // upload URL, sends the file, and only then gets rejected.
+            let accepted = parts[2..].contains(&"accept-license-terms");
+            if !accepted {
+                return CommandResponse {
+                    messages: vec![
+                        "Publishing licenses the skill to everyone under MIT-0.".to_string(),
+                        format!("Re-run as `/skill publish {name} accept-license-terms` to agree."),
+                    ],
+                    action: CommandAction::None,
+                };
+            }
+            match context
+                .skill_manager
+                .publish_to_registry(name, None, accepted)
+            {
                 Ok(msg) => CommandResponse {
                     messages: vec![msg],
                     action: CommandAction::None,
@@ -778,11 +795,30 @@ pub(crate) fn handle_clawhub_subcommand(
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
                 return CommandResponse {
-                    messages: vec!["Usage: /clawhub publish <name>".to_string()],
+                    messages: vec![
+                        "Usage: /clawhub publish <name> accept-license-terms".to_string(),
+                    ],
                     action: CommandAction::None,
                 };
             }
-            match context.skill_manager.publish_to_registry(name, None, false) {
+            // Same gate as `/skill publish` and the CLI: refuse before the
+            // upload rather than after it.
+            let accepted = parts[2..].contains(&"accept-license-terms");
+            if !accepted {
+                return CommandResponse {
+                    messages: vec![
+                        "Publishing licenses the skill to everyone under MIT-0.".to_string(),
+                        format!(
+                            "Re-run as `/clawhub publish {name} accept-license-terms` to agree."
+                        ),
+                    ],
+                    action: CommandAction::None,
+                };
+            }
+            match context
+                .skill_manager
+                .publish_to_registry(name, None, accepted)
+            {
                 Ok(msg) => CommandResponse {
                     messages: vec![format!("✓ {}", msg)],
                     action: CommandAction::None,
