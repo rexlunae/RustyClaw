@@ -291,6 +291,10 @@ pub struct CronJobDto {
     pub run_count: u64,
     #[serde(default)]
     pub agent_turn: bool,
+    /// Provider the pinned model belongs to. `None` follows the gateway's
+    /// current provider, which is what pre-provider jobs and clients do.
+    #[serde(default)]
+    pub provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]

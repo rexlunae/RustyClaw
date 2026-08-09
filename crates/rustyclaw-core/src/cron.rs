@@ -56,6 +56,14 @@ pub enum Payload {
     /// Agent turn in an isolated session.
     AgentTurn {
         message: String,
+        /// Provider the model belongs to.
+        ///
+        /// Without this a pinned model is only half a choice: the run used
+        /// whatever provider the gateway happened to be on, so a job set to
+        /// one vendor's model silently ran against another's endpoint after a
+        /// model switch. `None` keeps the old behaviour — follow the gateway.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -301,6 +309,7 @@ fn merge_payload(current: &Payload, patch: Payload) -> Payload {
     match (current, patch) {
         (
             Payload::AgentTurn {
+                provider: old_provider,
                 model: old_model,
                 thinking: old_thinking,
                 timeout_seconds: old_timeout,
@@ -308,12 +317,14 @@ fn merge_payload(current: &Payload, patch: Payload) -> Payload {
             },
             Payload::AgentTurn {
                 message,
+                provider,
                 model,
                 thinking,
                 timeout_seconds,
             },
         ) => Payload::AgentTurn {
             message,
+            provider: provider.or_else(|| old_provider.clone()),
             model: model.or_else(|| old_model.clone()),
             thinking: thinking.or_else(|| old_thinking.clone()),
             timeout_seconds: timeout_seconds.or(*old_timeout),
@@ -684,6 +695,7 @@ mod tests {
             SessionTarget::Main,
             Payload::AgentTurn {
                 message: "summarize yesterday".to_string(),
+                provider: Some("anthropic".to_string()),
                 model: Some(model.to_string()),
                 thinking: Some("high".to_string()),
                 timeout_seconds: Some(600),
@@ -706,6 +718,7 @@ mod tests {
                 CronJobPatch {
                     payload: Some(Payload::AgentTurn {
                         message: "summarize the last 24h".to_string(),
+                        provider: None,
                         model: None,
                         thinking: None,
                         timeout_seconds: None,
@@ -718,11 +731,13 @@ mod tests {
         match &store.get(&id).unwrap().payload {
             Payload::AgentTurn {
                 message,
+                provider,
                 model,
                 thinking,
                 timeout_seconds,
             } => {
                 assert_eq!(message, "summarize the last 24h", "the prompt does change");
+                assert_eq!(provider.as_deref(), Some("anthropic"));
                 assert_eq!(model.as_deref(), Some("claude-haiku"));
                 assert_eq!(thinking.as_deref(), Some("high"));
                 assert_eq!(*timeout_seconds, Some(600));
@@ -744,6 +759,7 @@ mod tests {
                 CronJobPatch {
                     payload: Some(Payload::AgentTurn {
                         message: "summarize yesterday".to_string(),
+                        provider: None,
                         model: Some("claude-opus".to_string()),
                         thinking: None,
                         timeout_seconds: None,
@@ -782,6 +798,36 @@ mod tests {
             store.get(&id).unwrap().payload,
             Payload::SystemEvent { .. }
         ));
+    }
+
+    #[test]
+    fn a_job_saved_before_provider_existed_still_loads() {
+        // Jobs on disk predate the field. Without a serde default they would
+        // all fail to parse and the whole store would come back empty — every
+        // schedule silently gone.
+        let json = r#"{
+            "jobId": "job-1",
+            "schedule": { "kind": "cron", "expr": "0 3 * * *" },
+            "sessionTarget": "main",
+            "payload": {
+                "kind": "agentTurn",
+                "message": "summarize yesterday",
+                "model": "claude-haiku"
+            },
+            "enabled": true,
+            "createdMs": 0
+        }"#;
+
+        let job: CronJob = serde_json::from_str(json).expect("old job must still parse");
+        match job.payload {
+            Payload::AgentTurn {
+                provider, model, ..
+            } => {
+                assert_eq!(provider, None, "absent means follow the gateway");
+                assert_eq!(model.as_deref(), Some("claude-haiku"));
+            }
+            other => panic!("expected an agent turn, got {other:?}"),
+        }
     }
 
     #[test]
@@ -843,6 +889,7 @@ mod tests {
             SessionTarget::Isolated,
             Payload::AgentTurn {
                 message: "Do something".to_string(),
+                provider: None,
                 model: None,
                 thinking: None,
                 timeout_seconds: None,

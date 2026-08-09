@@ -205,7 +205,12 @@ async fn run_job_inner(deps: &CronDeps, job: &CronJob) -> anyhow::Result<()> {
             crate::helpers::persist_threads(&mut tm, &threads_path);
             Ok(())
         }
-        Payload::AgentTurn { message, model, .. } => {
+        Payload::AgentTurn {
+            message,
+            provider,
+            model,
+            ..
+        } => {
             run_agent_turn(
                 deps,
                 &config,
@@ -215,11 +220,62 @@ async fn run_job_inner(deps: &CronDeps, job: &CronJob) -> anyhow::Result<()> {
                 &threads_path,
                 &workspace_dir,
                 message,
+                provider.as_deref(),
                 model.as_deref(),
             )
             .await
         }
     }
+}
+
+/// Build a [`ModelContext`] for a provider the gateway is not currently on.
+///
+/// Resolved the same way a `ModelSwitch` resolves it — base URL from the
+/// provider table, key from the vault with an environment fallback — so a
+/// pinned job and an interactive switch reach the same endpoint with the same
+/// credential.
+///
+/// Fails rather than falling back to the active provider: quietly running a
+/// job against the wrong vendor is what this whole field exists to prevent,
+/// and a job that stops with "no API key" is one the user can fix.
+async fn provider_context(
+    deps: &CronDeps,
+    provider: &str,
+    model_override: Option<&str>,
+) -> anyhow::Result<rustyclaw_core::gateway::ModelContext> {
+    let model = model_override
+        .map(str::to_string)
+        .or_else(|| {
+            rustyclaw_core::providers::models_for_provider(provider)
+                .first()
+                .map(|m| (*m).to_string())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Job pins provider '{provider}' but names no model, and it has none known"
+            )
+        })?;
+
+    let api_key = match rustyclaw_core::providers::secret_key_for_provider(provider) {
+        Some(name) => {
+            let mut vault = deps.vault.lock().await;
+            vault
+                .get_secret(name, true)
+                .ok()
+                .flatten()
+                .or_else(|| std::env::var(name).ok())
+        }
+        None => None,
+    };
+
+    Ok(rustyclaw_core::gateway::ModelContext {
+        provider: provider.to_string(),
+        model,
+        base_url: rustyclaw_core::providers::base_url_for_provider(provider)
+            .unwrap_or_default()
+            .to_string(),
+        api_key,
+    })
 }
 
 /// The thread a job lands in. A named thread must exist — falling back
@@ -262,10 +318,30 @@ async fn run_agent_turn(
     threads_path: &std::path::Path,
     workspace_dir: &std::path::Path,
     message: &str,
+    provider_override: Option<&str>,
     model_override: Option<&str>,
 ) -> anyhow::Result<()> {
-    let Some(model_ctx) = deps.model_ctx.read().await.clone() else {
+    let Some(gateway_ctx) = deps.model_ctx.read().await.clone() else {
         anyhow::bail!("No model configured — cannot run scheduled agent turn");
+    };
+
+    // A job pinned to a provider runs against that provider, not whichever
+    // one the gateway happens to be on now. Without this the model override
+    // was only half a choice: switch the gateway from Anthropic to OpenAI and
+    // every job pinned to a Claude model started being sent to OpenAI's
+    // endpoint under a Claude model name.
+    let (model_ctx, copilot) = match provider_override {
+        Some(pinned) if pinned != gateway_ctx.provider => {
+            let ctx = provider_context(deps, pinned, model_override).await?;
+            // Copilot trades an OAuth token for a short-lived session token,
+            // and the gateway's session belongs to the *active* provider. A
+            // job on a different one needs its own.
+            let session =
+                crate::session::init_copilot_session(pinned, ctx.api_key.as_deref(), &deps.vault)
+                    .await;
+            (std::sync::Arc::new(ctx), session)
+        }
+        _ => (gateway_ctx, deps.copilot.read().await.clone()),
     };
 
     let prompt = format!("[Scheduled wake: {job_label}] {message}");
@@ -319,14 +395,12 @@ async fn run_agent_turn(
             &rustyclaw_core::providers::http_client(),
             &model_ctx.provider,
             model_ctx.api_key.as_deref(),
-            deps.copilot.read().await.clone().as_deref(),
+            copilot.as_deref(),
         )
         .await
         .ok()
         .flatten();
 
-        // The job's model rides the configured provider, exactly as a
-        // subagent's model override does.
         let mut resolved = ProviderRequest {
             provider: model_ctx.provider.clone(),
             model: model_override

@@ -531,6 +531,10 @@ pub(super) async fn handle_command_action(
                     // A /cron add is a wake: the prompt runs as an agent
                     // turn on schedule, not a passive note.
                     agent_turn: true,
+                    // `/cron add` names a model but not a provider, so the
+                    // job follows the gateway's — the behaviour this command
+                    // has always had.
+                    provider: None,
                     model,
                     thread_id,
                 })
