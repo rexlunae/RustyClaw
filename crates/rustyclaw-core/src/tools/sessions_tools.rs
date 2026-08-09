@@ -212,7 +212,33 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
         }
     }
 
+    // Only a background run can be stopped, and saying so beats a comfortable
+    // lie. A synchronous `subagent_run` files a record in this same manager
+    // and passes the ownership check above, but nothing here can interrupt it:
+    // marking the record Stopped would report success while the work carried
+    // on and later overwrote the status with Completed. A main session is not
+    // a task at all.
+    if session.kind != SessionKind::Subagent {
+        return Err(format!(
+            "Session {key} is not a background sub-agent. sessions_kill stops \
+             runs started by sessions_spawn."
+        )
+        .into());
+    }
+
     let status = session.status.clone();
+    let attached = running_sessions()
+        .lock()
+        .map(|runs| runs.is_running(&key))
+        .unwrap_or(false);
+    if status == SessionStatus::Active && !attached {
+        return Err(format!(
+            "No background run is attached to session {key}, so there is \
+             nothing to stop. A synchronous subagent_run cannot be stopped \
+             this way — it ends when it returns to the agent that called it."
+        )
+        .into());
+    }
 
     // The whole subtree, not just this run. A spawned run can spawn its own,
     // and those children are owned by the identity *it* ran as — an identity
@@ -223,7 +249,6 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
     targets.extend(mgr.descendants_of(&key));
 
     let mut stopped = Vec::new();
-    let mut had_task = false;
     for target in &targets {
         if mgr.get(target).map(|s| s.status.clone()) != Some(SessionStatus::Active) {
             continue;
@@ -231,16 +256,18 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
         // Stop the run first, then record it: if the abort landed and the
         // record still said Active, the parent would poll a corpse forever.
         //
-        // Taken while the session-manager lock is held. Safe because no path
-        // holds the running-session registry and then reaches for the session
-        // manager, so the two can never deadlock against each other.
-        if running_sessions()
+        // A descendant with no registered task is still marked. Unlike the
+        // target — which is refused above — it genuinely is finished: killing
+        // the ancestor tears down the task its synchronous children were
+        // running inside.
+        //
+        // The registry lock is taken while the session-manager lock is held.
+        // Safe because no path holds the registry and then reaches for the
+        // session manager, so the two cannot deadlock against each other.
+        running_sessions()
             .lock()
             .map(|mut runs| runs.stop(target))
-            .unwrap_or(false)
-        {
-            had_task = true;
-        }
+            .ok();
         // Already looked up above, so the only failure mode is a race that
         // removed it; either way the caller's answer is the same.
         mgr.stop_session(target).ok();
@@ -258,14 +285,11 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     let target_stopped = stopped.first() == Some(&key);
     let descendants = stopped.len() - usize::from(target_stopped);
-    Ok(match (target_stopped, descendants, had_task) {
-        (true, 0, true) => format!("Stopped session {key}."),
-        // The record was Active but no task was executing — a run that died
-        // without recording its own end, or a record from an older gateway.
-        (true, 0, false) => format!("Session {key} had no running task; marked stopped."),
-        (true, n, _) => format!("Stopped session {key} and {n} sub-agent(s) it had started."),
+    Ok(match (target_stopped, descendants) {
+        (true, 0) => format!("Stopped session {key}."),
+        (true, n) => format!("Stopped session {key} and {n} sub-agent(s) it had started."),
         // The run itself had already ended, but it left children behind.
-        (false, n, _) => format!(
+        (false, n) => format!(
             "Session {key} was already {status:?}; stopped {n} sub-agent(s) it had left running."
         ),
     })

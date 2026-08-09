@@ -1209,6 +1209,32 @@ fn test_sessions_kill_params_defined() {
     assert!(params.iter().all(|p| !p.required));
 }
 
+/// Register a real background run for `key` so the tool sees something to
+/// stop. It sleeps far longer than any test needs, so only the kill ends it.
+fn attach_run(key: &str) {
+    let handle = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+    });
+    crate::sessions::running_sessions()
+        .lock()
+        .unwrap()
+        .register(
+            key.to_string(),
+            handle,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+}
+
+/// A spawned sub-agent with a run attached, as `sessions_spawn` would leave it.
+fn spawned(task: &str, parent: Option<String>) -> String {
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        mgr.spawn_subagent("main", task, None, parent)
+    };
+    attach_run(&key);
+    key
+}
+
 #[test]
 fn test_sessions_kill_needs_a_target() {
     let err = exec_sessions_kill(&json!({}), ws())
@@ -1225,14 +1251,11 @@ fn test_sessions_kill_unknown_session() {
     assert!(err.contains("No session found"), "{err}");
 }
 
-#[test]
-fn test_sessions_kill_marks_the_record_stopped() {
-    let key = {
-        let mut mgr = crate::sessions::session_manager().lock().unwrap();
-        mgr.spawn_subagent("main", "long job", None, None)
-    };
+#[tokio::test]
+async fn test_sessions_kill_marks_the_record_stopped() {
+    let key = spawned("long job", None);
     let out = exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws()).unwrap();
-    assert!(out.contains("stopped"), "{out}");
+    assert!(out.contains("Stopped"), "{out}");
 
     let mgr = crate::sessions::session_manager().lock().unwrap();
     assert_eq!(
@@ -1243,12 +1266,9 @@ fn test_sessions_kill_marks_the_record_stopped() {
     );
 }
 
-#[test]
-fn test_sessions_kill_refuses_another_callers_session() {
-    let key = {
-        let mut mgr = crate::sessions::session_manager().lock().unwrap();
-        mgr.spawn_subagent("main", "someone else's job", None, Some("thread:1".into()))
-    };
+#[tokio::test]
+async fn test_sessions_kill_refuses_another_callers_session() {
+    let key = spawned("someone else's job", Some("thread:1".into()));
     // Unidentified here, so the caller is not `thread:1`. The refusal is
     // phrased as "not found" so one conversation cannot probe another's keys.
     let err = exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws())
@@ -1264,22 +1284,47 @@ fn test_sessions_kill_refuses_another_callers_session() {
 }
 
 #[test]
-fn test_sessions_kill_stops_the_whole_subtree() {
+fn test_sessions_kill_refuses_a_main_session() {
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        mgr.get_or_create_main("killable-main").key.clone()
+    };
+    let err = exec_sessions_kill(&json!({"sessionKey": key}), ws())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not a background sub-agent"), "{err}");
+}
+
+#[test]
+fn test_sessions_kill_refuses_a_synchronous_subagent() {
+    // `subagent_run` files a record here too, but nothing can interrupt it.
+    // Marking it Stopped would claim success while the work carried on and
+    // later overwrote the status.
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        mgr.spawn_subagent("main", "synchronous work", None, None)
+    };
+    let err = exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("No background run is attached"), "{err}");
+
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    assert_eq!(
+        mgr.get(&key).unwrap().status,
+        crate::sessions::SessionStatus::Active,
+        "the record must not be touched when nothing was stopped"
+    );
+}
+
+#[tokio::test]
+async fn test_sessions_kill_stops_the_whole_subtree() {
     // A spawned run's children are owned by the identity *it* ran under, which
     // nothing can present once its task is aborted. Left behind they would
     // keep calling the model with nobody able to stop them.
-    let (parent, child, grandchild) = {
-        let mut mgr = crate::sessions::session_manager().lock().unwrap();
-        let parent = mgr.spawn_subagent("main", "parent work", None, None);
-        let child = mgr.spawn_subagent("main", "child work", None, Some(format!("spawn:{parent}")));
-        let grandchild = mgr.spawn_subagent(
-            "main",
-            "grandchild work",
-            None,
-            Some(format!("spawn:{child}")),
-        );
-        (parent, child, grandchild)
-    };
+    let parent = spawned("parent work", None);
+    let child = spawned("child work", Some(format!("spawn:{parent}")));
+    let grandchild = spawned("grandchild work", Some(format!("spawn:{child}")));
 
     let out = exec_sessions_kill(&json!({"sessionKey": parent.clone()}), ws()).unwrap();
     assert!(out.contains("2 sub-agent(s)"), "{out}");
@@ -1296,20 +1341,11 @@ fn test_sessions_kill_stops_the_whole_subtree() {
     }
 }
 
-#[test]
-fn test_sessions_kill_leaves_a_siblings_subtree_alone() {
-    let (target, bystander) = {
-        let mut mgr = crate::sessions::session_manager().lock().unwrap();
-        let target = mgr.spawn_subagent("main", "target", None, None);
-        let other = mgr.spawn_subagent("main", "other", None, None);
-        let bystander = mgr.spawn_subagent(
-            "main",
-            "other's child",
-            None,
-            Some(format!("spawn:{other}")),
-        );
-        (target, bystander)
-    };
+#[tokio::test]
+async fn test_sessions_kill_leaves_a_siblings_subtree_alone() {
+    let target = spawned("target", None);
+    let other = spawned("other", None);
+    let bystander = spawned("other's child", Some(format!("spawn:{other}")));
 
     exec_sessions_kill(&json!({"sessionKey": target}), ws()).unwrap();
 
@@ -1321,12 +1357,9 @@ fn test_sessions_kill_leaves_a_siblings_subtree_alone() {
     );
 }
 
-#[test]
-fn test_sessions_kill_is_idempotent() {
-    let key = {
-        let mut mgr = crate::sessions::session_manager().lock().unwrap();
-        mgr.spawn_subagent("main", "short job", None, None)
-    };
+#[tokio::test]
+async fn test_sessions_kill_is_idempotent() {
+    let key = spawned("short job", None);
     exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws()).unwrap();
     let out = exec_sessions_kill(&json!({"sessionKey": key}), ws()).unwrap();
     assert!(out.contains("already"), "{out}");

@@ -86,23 +86,48 @@ impl GatewaySpawnRunner {
     }
 }
 
+/// How long to keep trying for a read guard before giving up.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+/// Gap between attempts within [`LOCK_WAIT`].
+const LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Clone the contents of a shared lock, waiting briefly for contention to
+/// clear.
+///
+/// A bare `try_read` fails not only when a writer holds the lock but also
+/// when one is merely *queued* behind existing readers — which happens on any
+/// config edit or reload while a turn is reading. That turned an ordinary
+/// spawn into "configuration is busy" and left the fresh session record marked
+/// errored, indistinguishable from a real failure.
+///
+/// Retried on the spot rather than awaited: this runs on the blocking pool
+/// (every synchronous tool does), where sleeping is fine and `block_on` would
+/// panic if the assumption about which pool we are on ever stopped holding.
+fn read_briefly<T: Clone>(
+    lock: &std::sync::Arc<tokio::sync::RwLock<T>>,
+    what: &str,
+) -> Result<T, String> {
+    let deadline = std::time::Instant::now() + LOCK_WAIT;
+    loop {
+        if let Ok(guard) = lock.try_read() {
+            return Ok(guard.clone());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("{what} is busy"));
+        }
+        std::thread::sleep(LOCK_RETRY);
+    }
+}
+
 impl SpawnRunner for GatewaySpawnRunner {
     fn start(&self, req: SpawnRequest) -> Result<(), String> {
         // Without a model there is nothing to run, and finding that out now
         // means the caller gets a refusal instead of a session that fails
         // silently a moment later.
-        let model_ctx = self
-            .model_ctx
-            .try_read()
-            .map_err(|_| "model context is busy".to_string())?
-            .clone()
+        let model_ctx = read_briefly(&self.model_ctx, "model context")?
             .ok_or_else(|| "no model is configured".to_string())?;
 
-        let config = self
-            .config
-            .try_read()
-            .map_err(|_| "configuration is busy".to_string())?
-            .clone();
+        let config = read_briefly(&self.config, "configuration")?;
 
         // Bound the whole tree, not just one caller's branch. A spawned run is
         // a caller in its own right with its own per-caller allowance, so
@@ -431,18 +456,32 @@ fn record_progress(key: &str, role: &str, content: &str) {
     }
 }
 
-/// Record one tool call in the session history, trimmed: the record is a
-/// progress view, and a full file read would crowd out everything else.
+/// Record one tool call in the session history.
+///
+/// Only the tool's name and whether it worked. Tool *output* is deliberately
+/// not mirrored: `secrets_get` returns a plaintext secret, and this record is
+/// readable through `sessions_history(includeTools=true)` by anyone who can
+/// see the key. A progress view is not worth a copy of the vault, and the name
+/// alone carries nearly all of the "what is it doing" value.
+///
+/// A failure keeps its message, which is the part worth reading — except from
+/// the secrets tools, whose errors can quote what they were handling.
 fn record_tool_call(key: &str, tool: &str, output: &str, is_error: bool) {
-    const PREVIEW_CHARS: usize = 400;
-    let preview: String = output.chars().take(PREVIEW_CHARS).collect();
-    let ellipsis = if output.chars().count() > PREVIEW_CHARS {
-        "…"
+    const REASON_CHARS: usize = 200;
+    let note = if !is_error {
+        format!("ran {tool}")
+    } else if tools::is_secrets_tool(tool) {
+        format!("failed {tool}")
     } else {
-        ""
+        let reason: String = output.chars().take(REASON_CHARS).collect();
+        let ellipsis = if output.chars().count() > REASON_CHARS {
+            "…"
+        } else {
+            ""
+        };
+        format!("failed {tool}: {reason}{ellipsis}")
     };
-    let verb = if is_error { "failed" } else { "ran" };
-    record_progress(key, "tool", &format!("{verb} {tool}: {preview}{ellipsis}"));
+    record_progress(key, "tool", &note);
 }
 
 #[cfg(test)]
@@ -599,16 +638,42 @@ mod tests {
     }
 
     #[test]
-    fn a_long_tool_output_is_trimmed_in_the_record() {
+    fn tool_output_is_never_mirrored_into_the_record() {
+        // `sessions_history(includeTools=true)` reads this back with no
+        // ownership check, and `secrets_get` returns a plaintext secret.
         let key = {
             let mut mgr = session_manager().lock().unwrap();
-            mgr.spawn_subagent("main", "trim test", None, None)
+            mgr.spawn_subagent("main", "output test", None, None)
         };
+        record_tool_call(&key, "secrets_get", "hunter2-the-actual-secret", false);
         record_tool_call(&key, "read_file", &"x".repeat(5_000), false);
 
         let mgr = session_manager().lock().unwrap();
-        let last = mgr.get(&key).unwrap().messages.last().unwrap();
-        assert!(last.content.ends_with('…'));
-        assert!(last.content.chars().count() < 500);
+        let history = &mgr.get(&key).unwrap().messages;
+        for message in history {
+            assert!(!message.content.contains("hunter2"), "{}", message.content);
+            assert!(!message.content.contains("xxxx"), "{}", message.content);
+        }
+        assert!(history.iter().any(|m| m.content == "ran secrets_get"));
+    }
+
+    #[test]
+    fn a_failed_secrets_call_records_no_detail() {
+        let key = {
+            let mut mgr = session_manager().lock().unwrap();
+            mgr.spawn_subagent("main", "secret failure", None, None)
+        };
+        record_tool_call(&key, "secrets_get", "no such secret 'hunter2'", true);
+        record_tool_call(&key, "read_file", "no such file: notes.txt", true);
+
+        let mgr = session_manager().lock().unwrap();
+        let history = &mgr.get(&key).unwrap().messages;
+        assert!(history.iter().any(|m| m.content == "failed secrets_get"));
+        // A non-secrets failure keeps its reason, which is the useful part.
+        assert!(
+            history
+                .iter()
+                .any(|m| m.content.contains("failed read_file: no such file"))
+        );
     }
 }

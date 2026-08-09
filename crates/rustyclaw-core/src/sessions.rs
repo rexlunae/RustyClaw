@@ -386,6 +386,13 @@ struct RunningSession {
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// How long a stopped run has to notice the cancel flag and unwind before it
+/// is aborted outright.
+///
+/// Long enough for a run between rounds to bail and write its own ending,
+/// short enough that a user who asked for a stop is not left watching.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Registry of spawned sessions that are still executing.
 #[derive(Default)]
 pub struct RunningSessions {
@@ -414,18 +421,38 @@ impl RunningSessions {
 
     /// Stop a running session. Returns whether there was one to stop.
     ///
-    /// Sets the cancel flag *and* aborts: the flag lets a run between model
-    /// calls exit cleanly, and the abort covers one parked inside a call that
-    /// would otherwise keep spending tokens until it returned.
+    /// The cancel flag is raised first and the abort follows only after
+    /// [`STOP_GRACE`], so a run that checks the flag between rounds can finish
+    /// the write it is in the middle of and record its own ending. Aborting in
+    /// the same breath as setting the flag — as this used to — meant the run
+    /// could never observe it: a `tokio` abort lands at the next await point,
+    /// and every flag check sits after one. The grace is what makes the
+    /// cooperative path reachable at all.
+    ///
+    /// The abort still has to happen. A run parked inside a five-minute model
+    /// call would otherwise keep spending tokens until it returned.
     pub fn stop(&mut self, key: &str) -> bool {
-        match self.runs.remove(key) {
-            Some(run) => {
-                run.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                run.handle.abort();
-                true
+        let Some(run) = self.runs.remove(key) else {
+            return false;
+        };
+        run.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Needs a reactor to time the grace period. `sessions_kill` is a
+        // synchronous tool and runs on the blocking pool, which still carries
+        // the runtime context; with no runtime at all (a plain unit test)
+        // there is nothing to wait with, so stop hard.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    tokio::time::sleep(STOP_GRACE).await;
+                    // A no-op if the run already unwound on its own, which is
+                    // the outcome the grace period is here to allow.
+                    run.handle.abort();
+                });
             }
-            None => false,
+            Err(_) => run.handle.abort(),
         }
+        true
     }
 
     /// Drop entries whose task has ended, so the registry does not grow for
