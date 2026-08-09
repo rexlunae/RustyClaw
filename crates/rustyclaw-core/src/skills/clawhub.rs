@@ -164,10 +164,16 @@ pub struct ClawHubProfile {
     pub email: String,
     #[serde(default)]
     pub bio: String,
+    /// `None` when the registry did not report it.
+    ///
+    /// Not `0`: whoami carries no counts, and a defaulted zero renders as
+    /// "Published: 0  Starred: 0" — a claim about the user's activity that
+    /// this client made up. Leaving a field at its default is still
+    /// inventing data when the caller prints it unconditionally.
     #[serde(default)]
-    pub published_count: u64,
+    pub published_count: Option<u64>,
     #[serde(default)]
-    pub starred_count: u64,
+    pub starred_count: Option<u64>,
     #[serde(default)]
     pub joined: String,
 }
@@ -1022,6 +1028,23 @@ mod route_tests {
             login.to_string().contains("auth login"),
             "the refusal must point at a real command: {login}"
         );
+    }
+
+    /// whoami reports no counts, so the profile must not claim any.
+    ///
+    /// `ClawHubProfile` used to default them to zero, and both display sites
+    /// printed the line unconditionally — so every user was told they had
+    /// published nothing and starred nothing, as fact. A defaulted field is
+    /// still fabricated data once something renders it.
+    #[test]
+    fn a_profile_from_whoami_claims_no_counts() {
+        let profile = ClawHubProfile {
+            username: "someone".into(),
+            display_name: "Someone".into(),
+            ..Default::default()
+        };
+        assert_eq!(profile.published_count, None);
+        assert_eq!(profile.starred_count, None);
     }
 
     /// Search deliberately uses the legacy route, and says so.
