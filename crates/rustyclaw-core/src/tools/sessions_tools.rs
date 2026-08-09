@@ -397,6 +397,24 @@ pub fn exec_sessions_send(args: &Value, _workspace_dir: &Path) -> ToolResult {
         return Err("Must provide sessionKey or label".into());
     };
 
+    // The write path needs the same rule the reads got, and needs it more.
+    // A message lands in the transcript as `user`, which is what a running
+    // sub-agent reads back as instruction — so an unowned write is not just
+    // graffiti in someone else's record, it is a way to steer their run.
+    //
+    // Gating the reads narrowed how keys are discovered but did not close
+    // this: keys travel in spawn results and error text, and `label` can be
+    // guessed outright.
+    //
+    // Refused as "not found", like the rest, so the answer is not an oracle.
+    let caller = crate::tool_caller::current();
+    if !mgr
+        .get(&key)
+        .is_some_and(|s| s.visible_to(caller.as_deref()))
+    {
+        return Err(format!("No session found: {key}").into());
+    }
+
     mgr.send_message(&key, message)?;
 
     Ok(format!("Message sent to session: {}", key))
