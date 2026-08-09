@@ -97,8 +97,18 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .lock()
         .map_err(|_| "Failed to acquire session manager lock".to_string())?;
 
-    let session_key = mgr.spawn_subagent(agent_id, task, label.clone(), None);
-    debug!(session_key = %session_key, "Sub-agent spawned");
+    // Record who asked, both so the fan-out ceiling below has something to
+    // count and so a sub-agent's children are attributed to it rather than
+    // looking like top-level work.
+    let parent = crate::tool_caller::current();
+    if let Some(parent_key) = parent.as_deref() {
+        let running = mgr.active_subagents_of(parent_key);
+        crate::tool_limits::check_subagent(running)
+            .map_err(|e| crate::tools::error::ToolError::msg(e.to_string()))?;
+    }
+
+    let session_key = mgr.spawn_subagent(agent_id, task, label.clone(), parent.clone());
+    debug!(session_key = %session_key, parent = ?parent, "Sub-agent spawned");
 
     // Get the run_id
     let run_id = mgr

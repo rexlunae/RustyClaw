@@ -213,6 +213,21 @@ impl SessionManager {
         key
     }
 
+    /// How many sub-agents spawned by `parent_key` are still active.
+    ///
+    /// Used to bound fan-out: a sub-agent can itself spawn sub-agents, so
+    /// without a ceiling one prompt can expand into an unbounded tree.
+    pub fn active_subagents_of(&self, parent_key: &str) -> usize {
+        self.sessions
+            .values()
+            .filter(|s| {
+                s.kind == SessionKind::Subagent
+                    && s.status == SessionStatus::Active
+                    && s.parent_key.as_deref() == Some(parent_key)
+            })
+            .count()
+    }
+
     /// Get a session by key.
     pub fn get(&self, key: &str) -> Option<&Session> {
         self.sessions.get(key)

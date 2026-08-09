@@ -442,15 +442,19 @@ async fn run_agent_turn(
                 } else {
                     // Scoped to the job, so one schedule's backgrounded
                     // process is not reachable from another job or from a
-                    // user conversation.
-                    match rustyclaw_core::tool_caller::with_caller(
-                        format!("cron:{}", job.job_id),
-                        tools::execute_tool(&tc.name, &tc.arguments, workspace_dir),
-                    )
-                    .await
-                    {
-                        Ok(text) => (text, false),
+                    // user conversation, and its tool budget is its own.
+                    let caller = format!("cron:{}", job.job_id);
+                    match rustyclaw_core::tool_limits::check_rate(Some(&caller), &tc.name) {
                         Err(err) => (err.to_string(), true),
+                        Ok(()) => match rustyclaw_core::tool_caller::with_caller(
+                            caller,
+                            tools::execute_tool(&tc.name, &tc.arguments, workspace_dir),
+                        )
+                        .await
+                        {
+                            Ok(text) => (text, false),
+                            Err(err) => (err.to_string(), true),
+                        },
                     }
                 };
                 tool_results.push(ToolCallResult {

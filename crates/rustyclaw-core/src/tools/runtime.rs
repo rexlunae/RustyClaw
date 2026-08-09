@@ -80,6 +80,19 @@ pub async fn exec_execute_command_streaming(
         // poll, write to, or kill the process. Unidentified callers (direct
         // CLI, tests) produce an unowned session, which stays shared.
         let owner = crate::tool_caller::current();
+
+        // A rate limit bounds how fast processes start; this bounds how many
+        // pile up. Background processes outlive the call that made them, so
+        // without a ceiling a loop well inside its call budget still ends up
+        // holding hundreds of children. Only identified callers are counted —
+        // an unowned session belongs to nobody to charge.
+        if let Some(owner_id) = owner.as_deref() {
+            mgr.poll_all();
+            let running = mgr.running_owned_by(owner_id);
+            crate::tool_limits::check_background_process(running)
+                .map_err(|e| ToolError::msg(e.to_string()))?;
+        }
+
         let session_id = mgr.spawn_with_owner(
             command,
             cwd.to_string_lossy().as_ref(),

@@ -5,7 +5,7 @@
 
 use rustyclaw_core::tools;
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::sync::Mutex;
@@ -17,96 +17,15 @@ use crate::skills_handler;
 
 // ── Rate limiting ──────────────────────────────────────────────────────────
 
-/// Simple sliding-window rate limiter for tool execution.
+/// Check the caller's tool budget before running `name`.
 ///
-/// Tracks calls per tool name within a configurable window.  When the
-/// limit is exceeded the tool is rejected with an error message, preventing
-/// runaway tool loops or abuse through repeated expensive calls.
-///
-/// The limiter is **global** (all sessions share one instance) and uses
-/// a coarse-grained mutex — contention is negligible given tool calls
-/// are serialised by the model anyway.
-pub struct ToolRateLimiter {
-    window_ms: u64,
-    max_calls: usize,
-    buckets: VecDeque<(String, Instant)>,
-}
-
-impl ToolRateLimiter {
-    /// Create a new limiter.
-    ///
-    /// `window_ms` — sliding window duration.
-    /// `max_calls`  — maximum tool invocations in the window **per tool name**.
-    pub fn new(window_ms: u64, max_calls: usize) -> Self {
-        Self {
-            window_ms,
-            max_calls,
-            buckets: VecDeque::new(),
-        }
-    }
-
-    /// Check whether a tool call of `name` is allowed.
-    pub fn check(&mut self, name: &str) -> Result<(), RateLimitError> {
-        let now = Instant::now();
-        let cutoff = now - Duration::from_millis(self.window_ms);
-
-        // Drop stale entries
-        while let Some(front) = self.buckets.front() {
-            if front.1 < cutoff {
-                self.buckets.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        // Count current-call-name entries in the window
-        let count = self.buckets.iter().filter(|(n, _)| n == name).count();
-        if count >= self.max_calls {
-            return Err(RateLimitError::Exceeded {
-                tool: name.to_string(),
-                count: count + 1,
-                window_ms: self.window_ms,
-            });
-        }
-
-        self.buckets.push_back((name.to_string(), now));
-        Ok(())
-    }
-}
-
-/// Global rate limiter instance (initialised lazily on first use).
-fn rate_limiter() -> &'static Mutex<ToolRateLimiter> {
-    static LIMITER: std::sync::OnceLock<Mutex<ToolRateLimiter>> = std::sync::OnceLock::new();
-    LIMITER.get_or_init(|| {
-        let cfg = std::env::var("RUSTYCLAW_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(60);
-        Mutex::new(ToolRateLimiter::new(30_000, cfg))
-    })
-}
-
-/// Why a tool call was rejected before execution.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum RateLimitError {
-    /// The per-tool call budget for the window was exhausted.
-    #[error("Rate limit exceeded: '{tool}' called {count} times in {window_ms}ms window")]
-    Exceeded {
-        tool: String,
-        count: usize,
-        window_ms: u64,
-    },
-    /// The limiter's lock was poisoned by a panicking task.
-    #[error("Rate limiter poisoned")]
-    Poisoned,
-}
-
-/// Check the rate limiter for a tool call.
-pub fn check_rate_limit(name: &str) -> Result<(), RateLimitError> {
-    rate_limiter()
-        .lock()
-        .map_err(|_| RateLimitError::Poisoned)
-        .and_then(|mut limiter| limiter.check(name))
+/// Budgets live in [`rustyclaw_core::tool_limits`] and are keyed by caller as
+/// well as tool, so one runaway conversation cannot spend everyone else's
+/// allowance. The caller comes from the ambient identity the dispatch paths
+/// establish; an unidentified caller shares the anonymous bucket rather than
+/// going unlimited.
+pub fn check_rate_limit(name: &str) -> Result<(), rustyclaw_core::tool_limits::LimitError> {
+    rustyclaw_core::tool_limits::check_rate(rustyclaw_core::tool_caller::current().as_deref(), name)
 }
 
 // ── Repeated malformed-call protection ─────────────────────────────────────

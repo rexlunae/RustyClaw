@@ -120,6 +120,25 @@ pub async fn run_gateway(
     );
     rustyclaw_core::runtime_ctx::set_host(host_caps);
 
+    // Publish the configured tool budgets before anything can run a tool.
+    // `RUSTYCLAW_RATE_LIMIT` predates the config section and still works, so
+    // existing deployments that set it keep the behaviour they tuned.
+    let mut tool_limits = config.tool_limits.clone();
+    if let Some(env_max) = std::env::var("RUSTYCLAW_RATE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        tool_limits.default_max_calls = env_max;
+    }
+    info!(
+        window_secs = tool_limits.window_secs,
+        default_max_calls = tool_limits.default_max_calls,
+        max_background_processes = tool_limits.max_background_processes,
+        max_subagents = tool_limits.max_subagents,
+        "Tool budgets installed"
+    );
+    rustyclaw_core::tool_limits::install(tool_limits);
+
     let load_tracker = rustyclaw_core::load::create_load_tracker();
     let _load_sampler_handle = rustyclaw_core::load::spawn_load_sampler(
         load_tracker.clone(),
