@@ -165,11 +165,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
       
+      # `--tests` is what reaches the integration tests under each crate's
+      # `tests/`. Without it this job built only lib and bin targets, so the
+      # `integration-tests` job below — which runs `--ignored` only, and is
+      # `continue-on-error` — was the sole thing that ever looked at them.
       - name: Run unit tests (default features)
-        run: cargo test --lib --bins --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
-      
+        run: cargo test --lib --bins --tests --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
+
       - name: Run unit tests (no default features)
-        run: cargo test --lib --bins --no-default-features --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
+        run: cargo test --lib --bins --tests --no-default-features --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
 
       # The step above does not compile rustyclaw-core's `web-tools = off`
       # arms, and neither does any `deps-no-default` matrix entry in `check`.
