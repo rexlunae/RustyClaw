@@ -16,7 +16,7 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-default = ["web-tools", "image-gen"]
+default = ["web-tools", "image-gen", "office-docs"]
 web-tools = ["dep:scraper", "dep:html2md"]
 browser = ["dep:chromiumoxide"]
 mcp = ["dep:rmcp", "dep:schemars"]
@@ -25,6 +25,10 @@ whatsapp = ["chat-system/whatsapp"]
 qr = ["dep:image"]
 # Text-to-image generation via provider APIs (OpenAI DALL-E, Google Imagen).
 image-gen = []
+# Text extraction from Office documents (DOCX, XLSX, PPTX) for the
+# `document` tool. Pure Rust and small, so it is on by default — the
+# alternative is `read_file` failing on these formats anywhere but macOS.
+office-docs = ["dep:quick-xml", "dep:calamine"]
 # Semantic vector memory (steel-memory → fastembed → ONNX Runtime).
 # Heavy native dep that does not cross-compile (no armv7 ONNX binaries and
 # the ort-sys build script breaks under cross); enabled by default in the
@@ -105,6 +109,8 @@ unicode-width.workspace = true
 rpassword.workspace = true
 
 # Optional (browser only)
+quick-xml = { workspace = true, optional = true }
+calamine = { workspace = true, optional = true }
 scraper = { workspace = true, optional = true }
 html2md = { workspace = true, optional = true }
 chromiumoxide = { workspace = true, optional = true }

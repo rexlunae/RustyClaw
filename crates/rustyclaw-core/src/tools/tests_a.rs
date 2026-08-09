@@ -1618,3 +1618,42 @@ async fn background_processes_are_capped_per_caller() {
 
     tool_limits::install(ToolLimitsConfig::default());
 }
+
+/// `read_file` reaches Office documents on every platform (issue #144).
+///
+/// Before this, a .docx read as UTF-8 and failed outright anywhere but
+/// macOS, where `textutil` picked it up. This asserts the routing, so the
+/// regression would be caught rather than showing up as an unreadable file.
+#[tokio::test]
+async fn read_file_extracts_office_documents() {
+    use crate::tools::file::exec_read_file_async;
+    use std::io::Write;
+
+    let dir = std::env::temp_dir().join("rustyclaw-readfile-docx");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("memo.docx");
+
+    {
+        let file = std::fs::File::create(&path).expect("create docx");
+        let mut zip = zip::ZipWriter::new(file);
+        let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        zip.start_file("word/document.xml", opts).expect("entry");
+        zip.write_all(
+            br#"<?xml version="1.0"?><w:document xmlns:w="w"><w:body>
+                <w:p><w:r><w:t>Board memo</w:t></w:r></w:p>
+                </w:body></w:document>"#,
+        )
+        .expect("write");
+        zip.finish().expect("finish");
+    }
+
+    let out = exec_read_file_async(&json!({"path": path.display().to_string()}), &dir)
+        .await
+        .expect("read_file should handle a docx");
+    assert!(
+        out.contains("Board memo"),
+        "read_file must extract docx text, got: {out}"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
