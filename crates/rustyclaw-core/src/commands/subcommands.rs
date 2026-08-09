@@ -138,19 +138,39 @@ pub(crate) fn handle_skill_subcommand(
             // registry refuses a publish that does not say so. Checked here,
             // before anything is uploaded: without it the command mints an
             // upload URL, sends the file, and only then gets rejected.
+            // The version is the publisher's to choose. It used to be a
+            // hardcoded "0.1.0", which only looked harmless while publish
+            // reached no real endpoint — sent for real, it means a skill can
+            // be published once and never updated.
+            let version = parts
+                .get(2)
+                .copied()
+                .filter(|v| *v != "accept-license-terms")
+                .unwrap_or("");
+            if version.is_empty() {
+                return CommandResponse {
+                    messages: vec![format!(
+                        "Give the version to publish, e.g. `{} 1.2.0 accept-license-terms`.",
+                        parts[..2].join(" ")
+                    )],
+                    action: CommandAction::None,
+                };
+            }
             let accepted = parts[2..].contains(&"accept-license-terms");
             if !accepted {
                 return CommandResponse {
                     messages: vec![
                         "Publishing licenses the skill to everyone under MIT-0.".to_string(),
-                        format!("Re-run as `/skill publish {name} accept-license-terms` to agree."),
+                        format!(
+                            "Re-run as `/skill publish {name} {version} accept-license-terms` to agree."
+                        ),
                     ],
                     action: CommandAction::None,
                 };
             }
             match context
                 .skill_manager
-                .publish_to_registry(name, None, accepted)
+                .publish_to_registry(name, version, None, accepted)
             {
                 Ok(msg) => CommandResponse {
                     messages: vec![msg],
@@ -795,20 +815,38 @@ pub(crate) fn handle_clawhub_subcommand(
             if name.is_empty() {
                 return CommandResponse {
                     messages: vec![
-                        "Usage: /clawhub publish <name> accept-license-terms".to_string(),
+                        "Usage: /clawhub publish <name> <version> accept-license-terms".to_string(),
                     ],
                     action: CommandAction::None,
                 };
             }
             // Same gate as `/skill publish` and the CLI: refuse before the
             // upload rather than after it.
+            // The version is the publisher's to choose. It used to be a
+            // hardcoded "0.1.0", which only looked harmless while publish
+            // reached no real endpoint — sent for real, it means a skill can
+            // be published once and never updated.
+            let version = parts
+                .get(2)
+                .copied()
+                .filter(|v| *v != "accept-license-terms")
+                .unwrap_or("");
+            if version.is_empty() {
+                return CommandResponse {
+                    messages: vec![format!(
+                        "Give the version to publish, e.g. `{} 1.2.0 accept-license-terms`.",
+                        parts[..2].join(" ")
+                    )],
+                    action: CommandAction::None,
+                };
+            }
             let accepted = parts[2..].contains(&"accept-license-terms");
             if !accepted {
                 return CommandResponse {
                     messages: vec![
                         "Publishing licenses the skill to everyone under MIT-0.".to_string(),
                         format!(
-                            "Re-run as `/clawhub publish {name} accept-license-terms` to agree."
+                            "Re-run as `/clawhub publish {name} {version} accept-license-terms` to agree."
                         ),
                     ],
                     action: CommandAction::None,
@@ -816,7 +854,7 @@ pub(crate) fn handle_clawhub_subcommand(
             }
             match context
                 .skill_manager
-                .publish_to_registry(name, None, accepted)
+                .publish_to_registry(name, version, None, accepted)
             {
                 Ok(msg) => CommandResponse {
                     messages: vec![format!("✓ {}", msg)],

@@ -243,6 +243,17 @@ struct PublishAccepted {
     skill_id: String,
 }
 
+/// Join a route onto the configured registry URL.
+///
+/// `set_registry_url` stores whatever the user configured, and a trailing
+/// slash is a perfectly ordinary thing to configure — `https://clawhub.ai/`
+/// concatenated with `/api/v1/whoami` gives `//api/v1/whoami`, which is a
+/// different path as far as the router is concerned. One seam so there is
+/// one place for that to be handled, and something for a test to hold onto.
+pub(crate) fn endpoint(registry_url: &str, route: &str) -> String {
+    format!("{}{}", registry_url.trim_end_matches('/'), route)
+}
+
 /// Whether an upload target the registry named is safe to send a file to.
 ///
 /// The registry hands back a URL and the client PUTs the skill to it, so the
@@ -431,9 +442,8 @@ impl SkillManager {
     /// Internal: attempt a remote registry search.
     fn search_registry_remote(&self, query: &str) -> Result<Vec<RegistryEntry>, SkillError> {
         let url = format!(
-            "{}{}?q={}",
-            self.registry_url,
-            routes::LEGACY_SEARCH,
+            "{}?q={}",
+            endpoint(&self.registry_url, routes::LEGACY_SEARCH),
             urlencoding::encode(query),
         );
 
@@ -473,9 +483,8 @@ impl SkillManager {
 
         // ClawHub download API: /api/v1/download?slug=<name>&version=<version>
         let mut url = format!(
-            "{}{}?slug={}",
-            self.registry_url,
-            routes::DOWNLOAD,
+            "{}?slug={}",
+            endpoint(&self.registry_url, routes::DOWNLOAD),
             urlencoding::encode(name)
         );
         if let Some(v) = version {
@@ -565,12 +574,20 @@ impl SkillManager {
     /// Publish a local skill to the ClawHub registry.
     /// Publish a skill, having been told the publisher accepts the terms.
     ///
+    /// The version is a parameter because it was a hardcoded `"0.1.0"`, which
+    /// was harmless only while publish posted to a route that did not exist.
+    /// Now that it reaches the registry, a constant version means a skill can
+    /// be published exactly once and never updated — every later attempt
+    /// collides with the version already stored, and the changelog has
+    /// nothing to attach to.
+    ///
     /// `accept_license_terms` is a parameter rather than a constant because
     /// the registry distributes skills under MIT-0 and requires the publisher
     /// to agree. Assuming it here would agree on the user's behalf.
     pub fn publish_to_registry(
         &self,
         skill_name: &str,
+        version: &str,
         changelog: Option<String>,
         accept_license_terms: bool,
     ) -> Result<String, SkillError> {
@@ -589,7 +606,7 @@ impl SkillManager {
 
         let manifest = SkillManifest {
             name: skill.name.clone(),
-            version: "0.1.0".to_string(), // TODO: extract from frontmatter
+            version: version.to_string(),
             description: skill.description.clone().unwrap_or_default(),
             author: String::new(),
             license: "MIT".to_string(),
@@ -612,7 +629,7 @@ impl SkillManager {
         // storage id as a version.
         let client = reqwest::blocking::Client::new();
 
-        let ticket_url = format!("{}{}", self.registry_url, routes::CLI_UPLOAD_URL);
+        let ticket_url = endpoint(&self.registry_url, routes::CLI_UPLOAD_URL);
         let ticket: UploadTicket = client
             .post(&ticket_url)
             .bearer_auth(token)
@@ -680,7 +697,7 @@ impl SkillManager {
             }],
         });
 
-        let publish_url = format!("{}{}", self.registry_url, routes::CLI_PUBLISH);
+        let publish_url = endpoint(&self.registry_url, routes::CLI_PUBLISH);
         let resp = client
             .post(&publish_url)
             .bearer_auth(token)
@@ -747,7 +764,7 @@ impl SkillManager {
     /// Authenticate with ClawHub using a pre-existing API token.
     /// Validates the token and returns the profile info.
     pub fn auth_token(&self, token: &str) -> Result<AuthResponse, SkillError> {
-        let url = format!("{}{}", self.registry_url, routes::WHOAMI);
+        let url = endpoint(&self.registry_url, routes::WHOAMI);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -828,7 +845,7 @@ impl SkillManager {
         category: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<TrendingEntry>, SkillError> {
-        let mut url = format!("{}{}", self.registry_url, routes::TRENDING);
+        let mut url = endpoint(&self.registry_url, routes::TRENDING);
         let mut params = vec![];
         if let Some(cat) = category {
             params.push(format!("category={}", urlencoding::encode(cat)));
@@ -893,7 +910,7 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!("{}{}", self.registry_url, routes::WHOAMI);
+        let url = endpoint(&self.registry_url, routes::WHOAMI);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -937,7 +954,7 @@ impl SkillManager {
 
         // One `stars` collection, with the slug in the body — not a
         // `/skills/{slug}/star` sub-resource, which 404'd.
-        let url = format!("{}{}", self.registry_url, routes::STARS);
+        let url = endpoint(&self.registry_url, routes::STARS);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -966,7 +983,7 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!("{}{}", self.registry_url, routes::STARS);
+        let url = endpoint(&self.registry_url, routes::STARS);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -991,9 +1008,8 @@ impl SkillManager {
     /// Get detailed info about a registry skill (not a locally installed one).
     pub fn registry_info(&self, skill_name: &str) -> Result<RegistrySkillDetail, SkillError> {
         let url = format!(
-            "{}{}/{}",
-            self.registry_url,
-            routes::SKILLS,
+            "{}/{}",
+            endpoint(&self.registry_url, routes::SKILLS),
             urlencoding::encode(skill_name),
         );
 
@@ -1027,60 +1043,58 @@ impl SkillManager {
 mod route_tests {
     use super::*;
 
-    /// The routes must match the registry's published table.
+    /// The URLs the client actually builds.
     ///
-    /// Every one of these was invented at a call site before, and most did
-    /// not exist — auth always failed and publish stored nothing (#411). The
-    /// values here are copied from `packages/schema/src/routes.ts` in
-    /// `github.com/openclaw/clawhub`, so this test is a diff against the
-    /// server's own definition rather than against what someone remembered.
+    /// Replaces two change-detectors that asserted the route constants
+    /// equalled literal copies of themselves and that one hardcoded array
+    /// did not contain another — vacuous, and the pattern CONTRIBUTING.md
+    /// asks contributors not to write. This exercises the joining instead,
+    /// which is where a real defect lives: `set_registry_url` stores what
+    /// the user configured, and a trailing slash is an ordinary thing to
+    /// configure.
     #[test]
-    fn routes_match_the_registrys_published_table() {
-        assert_eq!(routes::WHOAMI, "/api/v1/whoami");
-        assert_eq!(routes::SEARCH, "/api/v1/search");
-        assert_eq!(routes::DOWNLOAD, "/api/v1/download");
-        assert_eq!(routes::TRENDING, "/api/v1/trending");
-        assert_eq!(routes::SKILLS, "/api/v1/skills");
-        assert_eq!(routes::STARS, "/api/v1/stars");
-        assert_eq!(routes::CLI_UPLOAD_URL, "/api/cli/upload-url");
-        assert_eq!(routes::CLI_PUBLISH, "/api/cli/publish");
-        assert_eq!(routes::CLI_DEVICE_CODE, "/api/cli/device/code");
-        assert_eq!(routes::CLI_DEVICE_TOKEN, "/api/cli/device/token");
-    }
-
-    /// None of the routes that 404'd may come back.
-    ///
-    /// Named individually because each was a separate broken command, and
-    /// because the failure mode was silent for publish: `/skills/publish` is
-    /// not an API path at all, so the single-page app answered it with HTML
-    /// and a 200.
-    #[test]
-    fn the_invented_routes_are_gone() {
-        let real = [
-            routes::WHOAMI,
-            routes::SEARCH,
-            routes::DOWNLOAD,
-            routes::TRENDING,
-            routes::SKILLS,
-            routes::STARS,
-            routes::CLI_UPLOAD_URL,
-            routes::CLI_PUBLISH,
-            routes::CLI_DEVICE_CODE,
-            routes::CLI_DEVICE_TOKEN,
-        ];
-        for imaginary in [
-            "/api/v1/auth/verify",
-            "/api/v1/auth/login",
-            "/api/v1/profile",
-            "/api/v1/categories",
-            "/api/v1/starred",
-            "/skills/publish",
+    fn a_trailing_slash_on_the_registry_url_does_not_double_up() {
+        for configured in [
+            "https://clawhub.ai",
+            "https://clawhub.ai/",
+            "https://clawhub.ai///",
         ] {
-            assert!(
-                !real.contains(&imaginary),
-                "{imaginary} does not exist on the registry"
+            assert_eq!(
+                endpoint(configured, routes::WHOAMI),
+                "https://clawhub.ai/api/v1/whoami",
+                "built from {configured}"
             );
         }
+    }
+
+    /// Each route reaches its endpoint under the path the server matches on.
+    #[test]
+    fn every_route_builds_the_path_the_registry_serves() {
+        let base = "https://clawhub.ai";
+        for (route, expected) in [
+            (routes::WHOAMI, "https://clawhub.ai/api/v1/whoami"),
+            (routes::STARS, "https://clawhub.ai/api/v1/stars"),
+            (routes::TRENDING, "https://clawhub.ai/api/v1/trending"),
+            (routes::SKILLS, "https://clawhub.ai/api/v1/skills"),
+            (routes::DOWNLOAD, "https://clawhub.ai/api/v1/download"),
+            (
+                routes::CLI_UPLOAD_URL,
+                "https://clawhub.ai/api/cli/upload-url",
+            ),
+            (routes::CLI_PUBLISH, "https://clawhub.ai/api/cli/publish"),
+            (routes::LEGACY_SEARCH, "https://clawhub.ai/api/search"),
+        ] {
+            assert_eq!(endpoint(base, route), expected);
+        }
+    }
+
+    /// A self-hosted registry under a path prefix keeps that prefix.
+    #[test]
+    fn a_registry_behind_a_path_prefix_keeps_it() {
+        assert_eq!(
+            endpoint("https://example.test/clawhub/", routes::WHOAMI),
+            "https://example.test/clawhub/api/v1/whoami"
+        );
     }
 
     /// The commands with no backing route refuse instead of requesting one.
@@ -1158,18 +1172,6 @@ mod route_tests {
             serde_json::from_str(r#"{"user":{"handle":"someone"}}"#).expect("body parses");
         let profile = profile_from_whoami(handle_only);
         assert_eq!(profile.display_name, "someone");
-    }
-
-    /// Search deliberately uses the legacy route, and says so.
-    ///
-    /// Both are real — `/api/search` is on the registry's `LegacyApiRoutes`
-    /// — so this is not the invented-path problem. It stays on the legacy one
-    /// because the response parsing was written against it and the v1 shape
-    /// could not be confirmed from a live call.
-    #[test]
-    fn search_uses_the_legacy_route_on_purpose() {
-        assert_eq!(routes::LEGACY_SEARCH, "/api/search");
-        assert_ne!(routes::LEGACY_SEARCH, routes::SEARCH);
     }
 }
 

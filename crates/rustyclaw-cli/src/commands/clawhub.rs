@@ -83,6 +83,12 @@ pub(crate) enum ClawHubSub {
         /// Skill name to publish
         #[arg(value_name = "NAME")]
         name: String,
+        /// Version to publish, e.g. 1.2.0.
+        ///
+        /// Required: it used to be a hardcoded 0.1.0, which meant a skill
+        /// could be published once and never updated.
+        #[arg(long, value_name = "SEMVER")]
+        version: String,
         /// What changed in this version
         #[arg(long, value_name = "TEXT")]
         changelog: Option<String>,
@@ -455,6 +461,7 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
         }
         Some(ClawHubSub::Publish {
             name,
+            version,
             changelog,
             accept_license_terms,
         }) => {
@@ -471,7 +478,7 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
                 // script that checks the status.
                 std::process::exit(1);
             }
-            match sm.publish_to_registry(&name, changelog, accept_license_terms) {
+            match sm.publish_to_registry(&name, &version, changelog, accept_license_terms) {
                 Ok(msg) => println!("{}", t::icon_ok(&msg)),
                 Err(e) => {
                     println!("{}", t::icon_fail(&format!("Publish failed: {}", e)));
