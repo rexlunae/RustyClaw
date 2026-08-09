@@ -227,7 +227,7 @@ struct StoredUpload {
 }
 
 /// `/api/cli/publish` reply.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct PublishAccepted {
     /// `None` when the reply omitted the flag.
     ///
@@ -239,8 +239,10 @@ struct PublishAccepted {
     /// Only an explicit `false` is a rejection.
     #[serde(default)]
     ok: Option<bool>,
+    /// `null` and "absent" both land here as `None`. `#[serde(default)]` on
+    /// a `String` accepts the second but not the first.
     #[serde(rename = "skillId", default)]
-    skill_id: String,
+    skill_id: Option<String>,
 }
 
 /// Join a route onto the configured registry URL.
@@ -723,11 +725,15 @@ impl SkillManager {
             ));
         }
 
-        // A success that cannot be parsed is not a success worth reporting:
-        // that is exactly how the old code claimed to have published HTML.
-        let done: PublishAccepted = resp.json().map_err(|e| {
-            SkillError::context("ClawHub returned an unrecognised publish reply", e)
-        })?;
+        // The status already said yes. Treating an unexpected body as a
+        // failure reports a stored skill as unpublished and sends the user
+        // into a re-publish that collides as a duplicate — the same reasoning
+        // that made `ok` an `Option`, applied there and then not here.
+        //
+        // The old HTML-200 bug is not what this guards against either: that
+        // came from posting to a path the API did not serve. A real route, a
+        // checked status and an explicit rejection flag are what rule it out.
+        let done: PublishAccepted = resp.json().unwrap_or_default();
         if done.ok == Some(false) {
             return Err(SkillError::msg(
                 "ClawHub did not accept the publish".to_string(),
@@ -743,10 +749,9 @@ impl SkillManager {
             manifest.name,
             manifest.version,
             self.registry_url,
-            if done.skill_id.is_empty() {
-                String::new()
-            } else {
-                format!(" (skill {})", done.skill_id)
+            match done.skill_id.as_deref().filter(|id| !id.is_empty()) {
+                Some(id) => format!(" (skill {id})"),
+                None => String::new(),
             },
         ))
     }
