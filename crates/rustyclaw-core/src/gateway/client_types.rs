@@ -755,6 +755,11 @@ pub enum GatewayCommand {
         /// The payload is a scheduled agent turn (prompt), not a note.
         #[serde(default)]
         agent_turn: bool,
+        /// Provider the pinned model belongs to. `None` follows whichever
+        /// provider the gateway is on, which is what jobs did before this
+        /// field existed.
+        #[serde(default)]
+        provider: Option<String>,
         /// Model override for the scheduled turn.
         #[serde(default)]
         model: Option<String>,
@@ -1357,6 +1362,7 @@ impl GatewayCommand {
                 payload,
                 paused,
                 agent_turn,
+                provider,
                 model,
                 thread_id,
             } => ClientFrame {
@@ -1368,6 +1374,7 @@ impl GatewayCommand {
                     payload,
                     paused,
                     agent_turn,
+                    provider,
                     model,
                     thread_id,
                 },

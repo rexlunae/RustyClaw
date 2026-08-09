@@ -772,6 +772,11 @@ pub enum ClientPayload {
         paused: bool,
         #[serde(default)]
         agent_turn: bool,
+        /// Provider the pinned model belongs to. Absent from older clients,
+        /// which is read as "follow the gateway's provider" — the behaviour
+        /// they were built against.
+        #[serde(default)]
+        provider: Option<String>,
         #[serde(default)]
         model: Option<String>,
         #[serde(default)]

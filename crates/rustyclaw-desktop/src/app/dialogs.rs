@@ -831,6 +831,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     .iter()
                     .map(|t| (t.id, t.label.clone().unwrap_or_else(|| format!("Thread {}", t.id))))
                     .collect::<Vec<_>>(),
+                // Same live lists the composer's model bar draws on, so the
+                // wake editor offers exactly the models the session can use.
+                provider_models: state.read().provider_models.clone(),
                 on_close: move |_| state.write().show_cron_dialog = false,
                 on_command: move |cmd: crate::components::CronCommand| {
                     let gw = gateway.read().clone();
@@ -848,6 +851,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                     name,
                                     expr,
                                     prompt,
+                                    provider,
                                     model,
                                     thread_id,
                                 } => {
@@ -861,6 +865,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                             // The editor authors wakes: the
                                             // prompt runs as an agent turn.
                                             agent_turn: true,
+                                            provider,
                                             model,
                                             thread_id,
                                         })

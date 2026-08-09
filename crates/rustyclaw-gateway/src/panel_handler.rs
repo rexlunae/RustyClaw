@@ -38,6 +38,7 @@ pub async fn handle_panel_request(
             payload,
             paused,
             agent_turn,
+            provider,
             model,
             thread_id,
         } => cron_upsert(
@@ -49,6 +50,7 @@ pub async fn handle_panel_request(
                 payload,
                 paused,
                 agent_turn,
+                provider,
                 model,
                 thread_id,
             },
@@ -386,6 +388,10 @@ fn job_to_dto(store: &CronStore, job: &CronJob) -> CronJobDto {
         last_status: last.map(|r| format!("{:?}", r.status).to_lowercase()),
         run_count: runs.len() as u64,
         agent_turn: matches!(job.payload, Payload::AgentTurn { .. }),
+        provider: match &job.payload {
+            Payload::AgentTurn { provider, .. } => provider.clone(),
+            Payload::SystemEvent { .. } => None,
+        },
         model: match &job.payload {
             Payload::AgentTurn { model, .. } => model.clone(),
             Payload::SystemEvent { .. } => None,
@@ -422,6 +428,7 @@ struct CronUpsert {
     payload: String,
     paused: bool,
     agent_turn: bool,
+    provider: Option<String>,
     model: Option<String>,
     thread_id: Option<u64>,
 }
@@ -439,13 +446,16 @@ fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
                     .get(&id)
                     .ok_or_else(|| format!("Job not found: {id}"))?;
                 let was_agent_turn = matches!(existing.payload, Payload::AgentTurn { .. });
-                let existing_model = match &existing.payload {
-                    Payload::AgentTurn { model, .. } => model.clone(),
-                    Payload::SystemEvent { .. } => None,
+                let (existing_provider, existing_model) = match &existing.payload {
+                    Payload::AgentTurn {
+                        provider, model, ..
+                    } => (provider.clone(), model.clone()),
+                    Payload::SystemEvent { .. } => (None, None),
                 };
                 let payload = if req.agent_turn || was_agent_turn {
                     Payload::AgentTurn {
                         message: req.payload,
+                        provider: req.provider.or(existing_provider),
                         model: req.model.or(existing_model),
                         thinking: None,
                         timeout_seconds: None,
@@ -472,6 +482,7 @@ fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
                 let payload = if req.agent_turn {
                     Payload::AgentTurn {
                         message: req.payload,
+                        provider: req.provider,
                         model: req.model,
                         thinking: None,
                         timeout_seconds: None,
@@ -1328,6 +1339,7 @@ mod cron_panel_tests {
                 payload: "check the queue".into(),
                 paused: false,
                 agent_turn: true,
+                provider: None,
                 model: Some("deepseek-v4".into()),
                 thread_id: Some(7),
             },
@@ -1348,6 +1360,7 @@ mod cron_panel_tests {
                 payload: "check the queue".into(),
                 paused: false,
                 agent_turn: false,
+                provider: None,
                 model: None,
                 thread_id: None,
             },
@@ -1372,6 +1385,7 @@ mod cron_panel_tests {
                 payload: "ping".into(),
                 paused: false,
                 agent_turn: true,
+                provider: None,
                 model: None,
                 thread_id: None,
             },

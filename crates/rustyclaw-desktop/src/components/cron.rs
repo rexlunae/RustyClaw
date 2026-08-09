@@ -2,9 +2,12 @@
 //! prompt as an agent turn on a schedule, into a chosen thread, with an
 //! optional model override.
 
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::BulmaColor;
 use rustyclaw_core::gateway::CronActionKind;
+use rustyclaw_core::providers;
 
 use super::RcModal;
 
@@ -21,9 +24,23 @@ pub enum CronCommand {
         name: String,
         expr: String,
         prompt: String,
+        provider: Option<String>,
         model: Option<String>,
         thread_id: Option<u64>,
     },
+}
+
+/// Models to offer for a provider: the live list the gateway reported, or
+/// the static catalogue when it has not answered for this one yet. Same
+/// two-tier rule the composer's model bar uses, so the two pickers agree.
+fn models_for(provider_models: &HashMap<String, Vec<String>>, provider: &str) -> Vec<String> {
+    match provider_models.get(provider) {
+        Some(live) if !live.is_empty() => live.clone(),
+        _ => providers::models_for_provider(provider)
+            .iter()
+            .map(|m| (*m).to_string())
+            .collect(),
+    }
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -32,6 +49,9 @@ pub struct CronDialogProps {
     pub data: Option<rustyclaw_view::CronPanelData>,
     /// `(id, label)` of the threads a wake can target, for the selector.
     pub threads: Vec<(u64, String)>,
+    /// Live model lists per provider, as the composer's model bar uses.
+    /// A provider missing here falls back to the static catalogue.
+    pub provider_models: std::collections::HashMap<String, Vec<String>>,
     pub on_close: EventHandler<()>,
     pub on_command: EventHandler<CronCommand>,
 }
@@ -44,8 +64,14 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
     let mut form_name = use_signal(String::new);
     let mut form_expr = use_signal(String::new);
     let mut form_prompt = use_signal(String::new);
+    let mut form_provider = use_signal(String::new);
     let mut form_model = use_signal(String::new);
-    let mut form_thread = use_signal(String::new);
+    // Distinct from the empty string, which is a legitimate choice
+    // ("foreground"). `None` means the author has not chosen yet, and Save
+    // refuses until they do — see #406: a wake landing in whatever thread
+    // happens to be in front is rarely what was meant, and silently
+    // defaulting to it hid the decision entirely.
+    let mut form_thread = use_signal(|| Option::<String>::None);
 
     if !props.visible {
         return rsx! {};
@@ -53,6 +79,8 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
 
     let is_editing = editing.read().is_some();
     let threads = props.threads.clone();
+    let provider_models = props.provider_models.clone();
+    let model_options = models_for(&provider_models, &form_provider.read());
 
     let on_save = {
         let on_command = props.on_command;
@@ -60,21 +88,29 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
             let name = form_name.read().trim().to_string();
             let expr = form_expr.read().trim().to_string();
             let prompt = form_prompt.read().trim().to_string();
-            if name.is_empty() || expr.is_empty() || prompt.is_empty() {
+            let provider = form_provider.read().trim().to_string();
+            let model = form_model.read().trim().to_string();
+            let thread_choice = form_thread.read().clone();
+            // Model and provider join the required set (#405), and the thread
+            // has to be chosen rather than defaulted (#406).
+            if name.is_empty()
+                || expr.is_empty()
+                || prompt.is_empty()
+                || provider.is_empty()
+                || model.is_empty()
+                || thread_choice.is_none()
+            {
                 return;
             }
-            let model = {
-                let m = form_model.read().trim().to_string();
-                if m.is_empty() { None } else { Some(m) }
-            };
-            let thread_id = form_thread.read().trim().parse::<u64>().ok();
+            let thread_id = thread_choice.and_then(|t| t.trim().parse::<u64>().ok());
             let id = editing.read().clone().flatten();
             on_command.call(CronCommand::Save {
                 id,
                 name,
                 expr,
                 prompt,
-                model,
+                provider: Some(provider),
+                model: Some(model),
                 thread_id,
             });
             editing.set(None);
@@ -96,8 +132,9 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                 form_name.set(String::new());
                                 form_expr.set(String::new());
                                 form_prompt.set(String::new());
+                                form_provider.set(String::new());
                                 form_model.set(String::new());
-                                form_thread.set(String::new());
+                                form_thread.set(None);
                                 editing.set(Some(None));
                             },
                             "New wake"
@@ -149,31 +186,80 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                     }
                     div { class: "columns",
                         div { class: "column",
-                            label { class: "label is-small", "Model (optional)" }
-                            input {
-                                class: "input",
-                                r#type: "text",
-                                placeholder: "gateway default",
-                                value: "{form_model}",
-                                oninput: move |evt| form_model.set(evt.value()),
-                            }
-                        }
-                        div { class: "column",
-                            label { class: "label is-small", "Thread" }
+                            label { class: "label is-small", "Provider" }
                             div { class: "select is-fullwidth",
                                 select {
-                                    value: "{form_thread}",
-                                    onchange: move |evt| form_thread.set(evt.value()),
-                                    option { value: "", "Foreground at fire time" }
-                                    for (id, label) in threads.iter() {
+                                    value: "{form_provider}",
+                                    onchange: move |evt| {
+                                        let picked = evt.value();
+                                        // Keep the model if the new provider
+                                        // also offers it; otherwise take its
+                                        // first, so the pair is never a
+                                        // combination that cannot run.
+                                        let models = models_for(&provider_models, &picked);
+                                        let keep = models.iter().any(|m| *m == *form_model.read());
+                                        if !keep {
+                                            form_model.set(
+                                                models.first().cloned().unwrap_or_default(),
+                                            );
+                                        }
+                                        form_provider.set(picked);
+                                    },
+                                    option { value: "", disabled: true, "Select provider" }
+                                    for id in providers::provider_ids() {
                                         option {
                                             key: "{id}",
                                             value: "{id}",
-                                            "#{id} — {label}"
+                                            "{providers::display_name_for_provider(id)}"
                                         }
                                     }
                                 }
                             }
+                        }
+                        div { class: "column",
+                            label { class: "label is-small", "Model" }
+                            div { class: "select is-fullwidth",
+                                select {
+                                    value: "{form_model}",
+                                    disabled: form_provider.read().is_empty(),
+                                    onchange: move |evt| form_model.set(evt.value()),
+                                    option { value: "", disabled: true, "Select model" }
+                                    for name in model_options.iter() {
+                                        option {
+                                            key: "{name}",
+                                            value: "{name}",
+                                            "{name}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "field",
+                        label { class: "label is-small", "Thread" }
+                        div { class: "select is-fullwidth",
+                            select {
+                                value: "{form_thread.read().clone().unwrap_or_default()}",
+                                onchange: move |evt| form_thread.set(Some(evt.value())),
+                                // Unchosen is its own state, distinct from
+                                // "foreground": a wake landing wherever the
+                                // user happens to be looking is a decision,
+                                // not a default.
+                                if form_thread.read().is_none() {
+                                    option { value: "", disabled: true, "Select where it runs" }
+                                }
+                                option { value: "", "Foreground at fire time" }
+                                for (id, label) in threads.iter() {
+                                    option {
+                                        key: "{id}",
+                                        value: "{id}",
+                                        "#{id} — {label}"
+                                    }
+                                }
+                            }
+                        }
+                        p { class: "help",
+                            "Foreground follows whichever thread is in front when it fires; a named thread is fixed."
                         }
                     }
                     dioxus_bulma::prelude::Buttons {
@@ -250,13 +336,18 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                                             form_name.set(edit_seed.name.clone());
                                                             form_expr.set(edit_seed.expr.clone());
                                                             form_prompt.set(edit_seed.payload.clone());
+                                                            form_provider.set(edit_seed.provider.clone().unwrap_or_default());
                                                             form_model.set(edit_seed.model.clone().unwrap_or_default());
-                                                            form_thread.set(
+                                                            // An existing job already expresses a
+                                                            // thread choice, including "foreground"
+                                                            // as the empty string, so editing one
+                                                            // starts chosen rather than blank.
+                                                            form_thread.set(Some(
                                                                 edit_seed
                                                                     .thread_id
                                                                     .map(|t| t.to_string())
                                                                     .unwrap_or_default(),
-                                                            );
+                                                            ));
                                                             editing.set(Some(Some(edit_seed.id.clone())));
                                                         },
                                                         "Edit"
@@ -302,5 +393,48 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                 p { class: "has-text-grey", "Cron system not initialised." }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_live_model_list_wins_over_the_static_catalogue() {
+        let mut live = HashMap::new();
+        live.insert(
+            "openai".to_string(),
+            vec!["gpt-5-turbo".to_string(), "gpt-5-mini".to_string()],
+        );
+        assert_eq!(
+            models_for(&live, "openai"),
+            vec!["gpt-5-turbo".to_string(), "gpt-5-mini".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_empty_live_list_falls_back_rather_than_offering_nothing() {
+        // The gateway answers with an empty list for a provider it could not
+        // reach. Showing no models at all would make the field unfillable and
+        // the form unsubmittable, so the static catalogue stands in.
+        let mut live = HashMap::new();
+        live.insert("openai".to_string(), Vec::new());
+        assert_eq!(
+            models_for(&live, "openai"),
+            models_for(&HashMap::new(), "openai"),
+            "an empty live list is the same as no live list"
+        );
+    }
+
+    #[test]
+    fn a_provider_with_no_live_list_uses_the_catalogue() {
+        let models = models_for(&HashMap::new(), "openai");
+        assert!(!models.is_empty(), "openai must offer something to pick");
+    }
+
+    #[test]
+    fn an_unknown_provider_offers_nothing() {
+        assert!(models_for(&HashMap::new(), "not-a-provider").is_empty());
     }
 }

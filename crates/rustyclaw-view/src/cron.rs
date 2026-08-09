@@ -16,6 +16,9 @@ pub struct CronJobData {
     pub run_count: u64,
     /// The payload is a scheduled agent turn (a wake), not a plain note.
     pub agent_turn: bool,
+    /// Provider the pinned model belongs to, when set. `None` follows the
+    /// gateway's current provider.
+    pub provider: Option<String>,
     /// Model override for the scheduled turn, when set.
     pub model: Option<String>,
     /// Thread the wake uses for context and lands in, when pinned.
@@ -35,6 +38,7 @@ impl From<&rustyclaw_core::gateway::protocol::frames::CronJobDto> for CronJobDat
             last_status: dto.last_status.clone(),
             run_count: dto.run_count,
             agent_turn: dto.agent_turn,
+            provider: dto.provider.clone(),
             model: dto.model.clone(),
             thread_id: dto.thread_id,
         }
