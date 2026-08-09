@@ -137,6 +137,33 @@ impl Session {
         }
     }
 
+    /// Whether `caller` may see this session at all — its existence, its
+    /// status, and its transcript.
+    ///
+    /// A session belongs to whoever started it, and the model's own messages
+    /// land in the record: whatever a background run was working on is
+    /// readable from its history. Two conversations sharing a gateway must
+    /// not be able to read each other's, so an owned record answers only to
+    /// its owner.
+    ///
+    /// A record with no owner stays visible to everyone. That is not an
+    /// oversight — it is the same carve-out `sessions_kill` makes, and it is
+    /// what keeps the rule from locking out the only party with a claim.
+    /// `sessions_spawn` refuses to start an unattributed run and
+    /// `subagent_run` stamps its caller, so an unowned record is a swarm
+    /// deployment, a run started by a turn with no thread at all, or a
+    /// record predating ownership tracking — none of which have an owner to
+    /// compare against.
+    ///
+    /// Refusals built on this must read as "not found" rather than "denied",
+    /// or the answer becomes an oracle for probing keys.
+    pub fn visible_to(&self, caller: Option<&str>) -> bool {
+        match self.parent_key.as_deref() {
+            Some(owner) => caller == Some(owner),
+            None => true,
+        }
+    }
+
     /// Add a message to the session.
     pub fn add_message(&mut self, role: &str, content: &str) {
         self.messages.push(SessionMessage {
