@@ -131,7 +131,8 @@ struct TurnDeps {
 
 /// Spawn one turn: run the conversation through `handle_chat_frame` in its
 /// own task, reporting completion through the model-task channel. Returns
-/// the join handle and the turn's cancel flag for `ActiveTasks::register`.
+/// the join handle, the turn's cancel flag, and its steer queue, all for
+/// `ActiveTasks::register`.
 fn spawn_turn(
     deps: TurnDeps,
     messages: Vec<rustyclaw_core::gateway::ChatMessage>,
@@ -140,10 +141,18 @@ fn spawn_turn(
     turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     model_task_tx: concurrent::ModelTaskTx,
     is_resume: bool,
-) -> (tokio::task::JoinHandle<()>, ToolCancelFlag) {
+) -> (
+    tokio::task::JoinHandle<()>,
+    ToolCancelFlag,
+    concurrent::SteerQueue,
+) {
     let turn_key = turn_thread.unwrap_or(rustyclaw_core::threads::ThreadId(0));
     let tool_cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
     let turn_cancel = tool_cancel.clone();
+    // Minted here so the registry and the turn share one queue: the reader
+    // task pushes through the registry while the turn drains its own end.
+    let steers: concurrent::SteerQueue = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let turn_steers = steers.clone();
     let mut sink = concurrent::ChannelSink::new(model_task_tx, turn_key, turn_id, stream_id);
     // Which conversation, on which connection, anything this turn starts in
     // the background belongs to. Scoped around the whole turn rather than
@@ -180,6 +189,7 @@ fn spawn_turn(
             deps.session_origin,
             &deps.foreground,
             is_resume,
+            &turn_steers,
         )
         .await;
         match result {
@@ -189,7 +199,7 @@ fn spawn_turn(
             Err(e) => sink.error(format!("{e:#}")).await,
         }
     }));
-    (handle, tool_cancel)
+    (handle, tool_cancel, steers)
 }
 
 /// Re-offer the download completions that arrived while `thread` was busy.
@@ -1014,7 +1024,7 @@ pub(crate) async fn handle_connection(
             let turn_id = next_turn_id;
             next_server_stream_id += 2;
             let stream_id = next_server_stream_id;
-            let (handle, tool_cancel) = spawn_turn(
+            let (handle, tool_cancel, steers) = spawn_turn(
                 TurnDeps {
                     http: http.clone(),
                     config: config.clone(),
@@ -1047,10 +1057,14 @@ pub(crate) async fn handle_connection(
                 model_task_tx.clone(),
                 true,
             );
-            active_tasks
-                .lock()
-                .await
-                .register(thread, turn_id, stream_id, handle, tool_cancel);
+            active_tasks.lock().await.register(
+                thread,
+                turn_id,
+                stream_id,
+                handle,
+                tool_cancel,
+                steers,
+            );
         }
     }
 
@@ -1135,6 +1149,35 @@ pub(crate) async fn handle_connection(
                                         }
                                     }
                                     None => trace!("Cancel after the connection ended"),
+                                }
+                                continue;
+                            }
+                            // Steering, handled here for the same reason as
+                            // Stop: the whole point is to reach a turn that is
+                            // already running, and the main loop is busy
+                            // running it. Queued behind the loop this would
+                            // arrive only once the turn it meant to redirect
+                            // had finished.
+                            if frame.frame_type == ClientFrameType::Steer {
+                                if let ClientPayload::Steer { thread_id, text } = frame.payload {
+                                    match reader_tasks.upgrade() {
+                                        Some(tasks) => {
+                                            let queued = {
+                                                let tasks = tasks.lock().await;
+                                                match thread_id {
+                                                    Some(id) => tasks.queue_steer(
+                                                        &rustyclaw_core::threads::ThreadId(id),
+                                                        text,
+                                                    ),
+                                                    None => tasks.queue_steer_sole(text),
+                                                }
+                                            };
+                                            if !queued {
+                                                trace!("Steer with no turn running");
+                                            }
+                                        }
+                                        None => trace!("Steer after the connection ended"),
+                                    }
                                 }
                                 continue;
                             }
@@ -1369,7 +1412,7 @@ pub(crate) async fn handle_connection(
                                 // point of it: a Stop queued behind whatever the
                                 // loop is awaiting is a Stop that does nothing.
                                 // It never reaches here.
-                                ClientPayload::Cancel { .. } => {}
+                                ClientPayload::Cancel { .. } | ClientPayload::Steer { .. } => {}
                                 ClientPayload::Reload => {
                                     admin::handle_reload(
                                         &mut *writer,
@@ -1691,7 +1734,7 @@ pub(crate) async fn handle_connection(
                                     {
                                         next_turn_id += 1;
                                         let turn_id = next_turn_id;
-                                        let (handle, tool_cancel) = spawn_turn(
+                                        let (handle, tool_cancel, steers) = spawn_turn(
                                             TurnDeps {
                                                 http: http.clone(),
                                                 config: config.clone(),
@@ -1739,6 +1782,7 @@ pub(crate) async fn handle_connection(
                                             stream_id,
                                             handle,
                                             tool_cancel,
+                                            steers,
                                         );
                                     }
                                 }
@@ -2365,7 +2409,7 @@ pub(crate) async fn handle_connection(
                     // allocates odd ones, so the two can never collide.
                     next_server_stream_id += 2;
                     let stream_id = next_server_stream_id;
-                    let (handle, tool_cancel) = spawn_turn(
+                    let (handle, tool_cancel, steers) = spawn_turn(
                         TurnDeps {
                             http: http.clone(),
                             config: config.clone(),
@@ -2406,7 +2450,7 @@ pub(crate) async fn handle_connection(
                     active_tasks
                         .lock()
                         .await
-                        .register(thread, turn_id, stream_id, handle, tool_cancel);
+                        .register(thread, turn_id, stream_id, handle, tool_cancel, steers);
                 }
                 model_msg = model_task_rx.recv() => {
                     if let Some(task_msg) = model_msg {
@@ -3869,6 +3913,7 @@ mod tests {
             1,
             tokio::spawn(std::future::pending::<()>()),
             crate::ToolCancelFlag::default(),
+            Arc::new(std::sync::Mutex::new(Vec::new())),
         );
         let store: crate::agent_handler::StoreCell = Arc::new(std::sync::RwLock::new(
             crate::agent_handler::ConnectionStore {

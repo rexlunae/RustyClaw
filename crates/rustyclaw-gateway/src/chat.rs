@@ -69,6 +69,9 @@ pub(crate) async fn handle_chat_frame(
     // its last user message is recorded, and recording it again would
     // duplicate it in the transcript.
     is_resume: bool,
+    // Direction the user adds after this turn starts. Drained between rounds
+    // by the tool loop, so the model reads it on its next pass.
+    steers: &crate::concurrent::SteerQueue,
 ) -> Result<()> {
     // The thread this turn belongs to. The connection loop settles it —
     // including the auto-switch to a better-matching thread — before
@@ -384,6 +387,7 @@ pub(crate) async fn handle_chat_frame(
         active_thread_id,
         threads_path,
         foreground,
+        steers,
     )
     .await
     {
