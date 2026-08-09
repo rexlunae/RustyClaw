@@ -163,6 +163,17 @@ pub static SEARCH_HISTORY: ToolDef = ToolDef {
     execute: exec_search_history,
 };
 
+pub static SESSION_SEARCH: ToolDef = ToolDef {
+    name: "session_search",
+    description: "Search past conversations for something that was said. Searches persisted thread \
+                  history — the durable record — not the in-memory session registry, which does not \
+                  survive a restart. Use to recall an earlier discussion, decision, or detail: \
+                  'what did we decide about the retry policy?'. Ranked by relevance; \
+                  `includeContext` returns the messages either side of each hit.",
+    parameters: vec![],
+    execute: exec_session_search,
+};
+
 #[cfg(feature = "semantic-memory")]
 pub static ADD_MEMORY: ToolDef = ToolDef {
     name: "add_memory",

@@ -33,6 +33,7 @@ mod pdf;
 mod runtime;
 mod schema;
 mod secrets_tools;
+pub(crate) mod session_search;
 mod sessions_tools;
 mod skill_curator;
 mod skills_tools;
@@ -98,6 +99,7 @@ use image_gen::exec_image_generate_stub;
 #[cfg(feature = "semantic-memory")]
 use memory_tools::{exec_add_memory, exec_memory_search};
 use memory_tools::{exec_memory_get, exec_save_memory, exec_search_history};
+use session_search::exec_session_search;
 
 // Cron operations
 use cron_tool::exec_cron;
@@ -478,6 +480,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &MEMORY_GET,
         &SAVE_MEMORY,
         &SEARCH_HISTORY,
+        &SESSION_SEARCH,
         #[cfg(feature = "semantic-memory")]
         &ADD_MEMORY,
         &CRON,

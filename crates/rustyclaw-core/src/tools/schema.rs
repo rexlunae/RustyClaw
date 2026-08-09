@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use super::params::*;
 use super::{
     ToolDef, ToolParam, all_tools, ast_grep, freenet, kernel_tools, mcp_tools, model_tools, plugin,
-    service_tools, skill_curator, subagent_tools, task_tools, todo_tool, web_extract,
+    service_tools, session_search, skill_curator, subagent_tools, task_tools, todo_tool,
+    web_extract,
 };
 
 // ── Provider-specific formatters ────────────────────────────────────────────
@@ -173,6 +174,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         // `skill_curator` already had their tables written — nothing wired
         // them here, so both reached the model advertising actions in their
         // description and accepting no arguments to name one.
+        "session_search" => session_search::session_search_params(),
         "todo" => todo_tool::todo_params(),
         "skill_curator" => skill_curator::skill_curator_params(),
         "ast_grep_manage" => ast_grep::ast_grep_params(),

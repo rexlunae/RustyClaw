@@ -1034,6 +1034,7 @@ fn tool_category(name: &str) -> &'static str {
         "cron" => "scheduling",
         n if n.starts_with("sessions_")
             || n == "session_status"
+            || n == "session_search"
             || n.starts_with("agents_")
             || n.starts_with("subagent_")
             || n.starts_with("triggers_") =>
