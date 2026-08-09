@@ -26,15 +26,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{ChatMessage, ProviderRequest, ToolCallResult};
-use rustyclaw_core::sessions::{
-    SessionStatus, SpawnRequest, SpawnRunner, running_sessions, session_manager,
-};
+use rustyclaw_core::sessions::{SpawnRequest, SpawnRunner, running_sessions, session_manager};
 use rustyclaw_core::tools;
 use tracing::{debug, info, warn};
 
 use crate::{
-    SharedConfig, SharedModelCtx, SharedSkillManager, SharedTaskManager, SharedVault, providers,
-    tool_executor,
+    SharedConfig, SharedCopilotSession, SharedModelCtx, SharedSkillManager, SharedTaskManager,
+    SharedVault, providers, tool_executor,
 };
 
 /// Maximum tool rounds for one spawned run, matching the other headless loops.
@@ -55,6 +53,9 @@ pub struct GatewaySpawnRunner {
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: SharedTaskManager,
+    /// Needed to exchange a Copilot OAuth token for the short-lived session
+    /// token the provider actually accepts.
+    copilot_session: SharedCopilotSession,
     /// Captured at install time. The tool executors are synchronous functions
     /// and may be driven from a blocking pool, where `tokio::spawn` would
     /// panic for want of a reactor.
@@ -69,6 +70,7 @@ impl GatewaySpawnRunner {
         vault: SharedVault,
         skill_mgr: SharedSkillManager,
         task_mgr: SharedTaskManager,
+        copilot_session: SharedCopilotSession,
         runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
@@ -78,6 +80,7 @@ impl GatewaySpawnRunner {
             vault,
             skill_mgr,
             task_mgr,
+            copilot_session,
             runtime,
         }
     }
@@ -122,6 +125,7 @@ impl SpawnRunner for GatewaySpawnRunner {
             vault: self.vault.clone(),
             skill_mgr: self.skill_mgr.clone(),
             task_mgr: self.task_mgr.clone(),
+            copilot_session: self.copilot_session.clone(),
         };
 
         let key = req.session_key.clone();
@@ -195,7 +199,11 @@ fn record_outcome(key: &str, outcome: anyhow::Result<String>, cancelled: bool) {
         }
         Err(e) if cancelled => {
             session.add_message("system", &format!("stopped: {e:#}"));
-            session.status = SessionStatus::Stopped;
+            // Through `stop()` rather than assigning the status, so the record
+            // gets an end time — `runtime_secs` measures to *now* while
+            // `finished_ms` is unset, and a stopped run would keep reporting a
+            // growing runtime as though it were still working.
+            session.stop();
         }
         Err(e) => {
             session.add_message("assistant", &format!("error: {e:#}"));
@@ -212,6 +220,7 @@ struct RunContext {
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: SharedTaskManager,
+    copilot_session: SharedCopilotSession,
 }
 
 /// The run itself: a headless agent turn, bounded and cancellable.
@@ -246,6 +255,22 @@ async fn run_session(
     )
     .await;
 
+    // `ModelContext::api_key` holds the *raw* stored key. For Copilot that is
+    // an OAuth token the chat endpoint rejects; it has to be traded for a
+    // short-lived session token first, exactly as trigger, cron, and messenger
+    // runs do. `call_with_tools` does not do this for us.
+    let effective_key = crate::auth::resolve_bearer_token(
+        &ctx.http,
+        &ctx.model_ctx.provider,
+        ctx.model_ctx.api_key.as_deref(),
+        ctx.copilot_session.read().await.as_deref(),
+    )
+    .await
+    .unwrap_or_else(|e| {
+        warn!(error = %e, "Could not resolve bearer token for spawned run; using the stored key");
+        ctx.model_ctx.api_key.clone()
+    });
+
     let mut resolved = ProviderRequest {
         provider: ctx.model_ctx.provider.clone(),
         model: req
@@ -253,7 +278,7 @@ async fn run_session(
             .clone()
             .unwrap_or_else(|| ctx.model_ctx.model.clone()),
         base_url: ctx.model_ctx.base_url.clone(),
-        api_key: ctx.model_ctx.api_key.clone(),
+        api_key: effective_key,
         messages: vec![
             ChatMessage::text("system", &system_prompt),
             ChatMessage::text(
@@ -297,7 +322,9 @@ async fn run_session(
             if last_text.trim().is_empty() {
                 anyhow::bail!("the sub-agent finished without a final message");
             }
-            record_progress(&req.session_key, "assistant", &last_text);
+            // The final message is not appended here: `record_outcome` writes
+            // every ending, success or not, and doing it in both places showed
+            // a completed run's reply twice in its history.
             return Ok(last_text);
         }
 
@@ -443,6 +470,7 @@ mod tests {
                 rustyclaw_core::skills::SkillManager::new(tmp.to_path_buf()),
             )),
             task_mgr: Arc::new(rustyclaw_core::tasks::TaskManager::new()),
+            copilot_session: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
@@ -527,6 +555,47 @@ mod tests {
         .await;
         assert!(!is_error, "unexpected error: {output}");
         assert!(output.contains("hello spawn"));
+    }
+
+    #[test]
+    fn a_cancelled_run_gets_an_end_time() {
+        // Without one, `runtime_secs` measures to now and the stopped run
+        // shows an ever-growing runtime in session listings.
+        let key = {
+            let mut mgr = session_manager().lock().unwrap();
+            mgr.spawn_subagent("main", "cancelled", None, None)
+        };
+        record_outcome(&key, Err(anyhow::anyhow!("stopped by request")), true);
+
+        let mgr = session_manager().lock().unwrap();
+        let session = mgr.get(&key).unwrap();
+        assert_eq!(
+            session.status,
+            rustyclaw_core::sessions::SessionStatus::Stopped
+        );
+        assert!(
+            session.finished_ms.is_some(),
+            "stopped run needs an end time"
+        );
+    }
+
+    #[test]
+    fn a_completed_run_records_its_answer_once() {
+        let key = {
+            let mut mgr = session_manager().lock().unwrap();
+            mgr.spawn_subagent("main", "completed", None, None)
+        };
+        record_outcome(&key, Ok("the answer".to_string()), false);
+
+        let mgr = session_manager().lock().unwrap();
+        let said: Vec<_> = mgr
+            .get(&key)
+            .unwrap()
+            .messages
+            .iter()
+            .filter(|m| m.content == "the answer")
+            .collect();
+        assert_eq!(said.len(), 1, "the final message must not be duplicated");
     }
 
     #[test]

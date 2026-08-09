@@ -264,6 +264,7 @@ pub async fn run_gateway(
             vault.clone(),
             skill_mgr.clone(),
             task_mgr.clone(),
+            shared_copilot_session.clone(),
             tokio::runtime::Handle::current(),
         ),
     ));
