@@ -861,23 +861,75 @@ impl ProcessManager {
         self.sessions.get(id)
     }
 
-    /// Get a session by ID, verifying the caller owns it (if owner tracking is enabled).
-    /// Returns `None` if the session doesn't exist or ownership check fails.
-    pub fn get_owned(&self, id: &str, caller_id: Option<&str>) -> Option<&ExecSession> {
-        let session = self.sessions.get(id)?;
-        if let Some(owner) = &session.owner_id {
-            if let Some(caller) = caller_id {
-                if owner != caller {
-                    return None;
-                }
-            }
+    /// Whether `caller_id` may touch `session`.
+    ///
+    /// A session with no owner is shared: nothing recorded a creator, which
+    /// is what direct CLI use and tests produce, and locking those away would
+    /// break them for no gain. A session *with* an owner is private to that
+    /// owner — including from an unidentified caller, since "no identity" is
+    /// exactly what a caller reaching out of its own context looks like.
+    fn accessible(session: &ExecSession, caller_id: Option<&str>) -> bool {
+        match &session.owner_id {
+            None => true,
+            Some(owner) => caller_id.is_some_and(|caller| owner == caller),
         }
-        Some(session)
+    }
+
+    /// Get a session by ID, if `caller_id` may reach it.
+    ///
+    /// Returns `None` both for a missing session and for one owned by
+    /// somebody else, so callers cannot use this to probe which session ids
+    /// exist outside their own context.
+    pub fn get_owned(&self, id: &str, caller_id: Option<&str>) -> Option<&ExecSession> {
+        self.sessions
+            .get(id)
+            .filter(|s| Self::accessible(s, caller_id))
     }
 
     /// Get a mutable session by ID.
+    ///
+    /// Performs no ownership check — prefer [`get_owned_mut`](Self::get_owned_mut)
+    /// on any path reachable from a tool call.
     pub fn get_mut(&mut self, id: &str) -> Option<&mut ExecSession> {
         self.sessions.get_mut(id)
+    }
+
+    /// Get a mutable session by ID, if `caller_id` may reach it.
+    ///
+    /// The mutable counterpart of [`get_owned`](Self::get_owned), and the one
+    /// that matters most: writing stdin to, or killing, another caller's
+    /// process is the interference this guards against.
+    pub fn get_owned_mut(&mut self, id: &str, caller_id: Option<&str>) -> Option<&mut ExecSession> {
+        self.sessions
+            .get_mut(id)
+            .filter(|s| Self::accessible(s, caller_id))
+    }
+
+    /// List the sessions `caller_id` may see.
+    pub fn list_owned(&self, caller_id: Option<&str>) -> Vec<&ExecSession> {
+        self.sessions
+            .values()
+            .filter(|s| Self::accessible(s, caller_id))
+            .collect()
+    }
+
+    /// Remove a session, if `caller_id` may reach it.
+    pub fn remove_owned(&mut self, id: &str, caller_id: Option<&str>) -> Option<ExecSession> {
+        if self
+            .sessions
+            .get(id)
+            .is_some_and(|s| Self::accessible(s, caller_id))
+        {
+            return self.sessions.remove(id);
+        }
+        None
+    }
+
+    /// Clear completed sessions `caller_id` may reach, leaving other callers'
+    /// finished sessions in place for them to collect.
+    pub fn clear_completed_owned(&mut self, caller_id: Option<&str>) {
+        self.sessions
+            .retain(|_, s| s.status == SessionStatus::Running || !Self::accessible(s, caller_id));
     }
 
     /// List all sessions.
@@ -1207,6 +1259,113 @@ mod tests {
         // Get lines 1-3 (0-indexed offset)
         let output = session.log_output(Some(1), Some(2));
         assert_eq!(output, "line2\nline3");
+    }
+
+    /// Build a session record directly: ownership is what is under test,
+    /// and spawning real children would make these platform-dependent.
+    fn owned_session(id: &str, owner: Option<&str>) -> ExecSession {
+        ExecSession {
+            id: id.to_string(),
+            command: "sleep 60".to_string(),
+            working_dir: "/tmp".to_string(),
+            started_at: Instant::now(),
+            timeout: None,
+            status: SessionStatus::Running,
+            combined_output: String::new(),
+            last_read_pos: 0,
+            child: None,
+            adopted: None,
+            exit_code: None,
+            owner_id: owner.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn owner_can_reach_its_own_session() {
+        let mut mgr = ProcessManager::new();
+        mgr.insert(owned_session("a", Some("thread:1")));
+        assert!(mgr.get_owned("a", Some("thread:1")).is_some());
+        assert!(mgr.get_owned_mut("a", Some("thread:1")).is_some());
+    }
+
+    #[test]
+    fn other_callers_cannot_reach_an_owned_session() {
+        let mut mgr = ProcessManager::new();
+        mgr.insert(owned_session("a", Some("thread:1")));
+        // The cross-session interference this guards against: another
+        // conversation holding the id must not be able to read or kill it.
+        assert!(mgr.get_owned("a", Some("thread:2")).is_none());
+        assert!(mgr.get_owned_mut("a", Some("thread:2")).is_none());
+    }
+
+    #[test]
+    fn unidentified_callers_cannot_reach_an_owned_session() {
+        let mut mgr = ProcessManager::new();
+        mgr.insert(owned_session("a", Some("thread:1")));
+        // "No identity" is what reaching out of your own context looks
+        // like, so it must not act as a skeleton key.
+        assert!(mgr.get_owned("a", None).is_none());
+        assert!(mgr.get_owned_mut("a", None).is_none());
+    }
+
+    #[test]
+    fn unowned_sessions_stay_shared() {
+        let mut mgr = ProcessManager::new();
+        mgr.insert(owned_session("a", None));
+        // Direct CLI use and tests create these; locking them away would
+        // break those paths for no security gain.
+        assert!(mgr.get_owned("a", None).is_some());
+        assert!(mgr.get_owned("a", Some("thread:9")).is_some());
+    }
+
+    #[test]
+    fn listing_shows_only_reachable_sessions() {
+        let mut mgr = ProcessManager::new();
+        mgr.insert(owned_session("mine", Some("thread:1")));
+        mgr.insert(owned_session("theirs", Some("thread:2")));
+        mgr.insert(owned_session("shared", None));
+
+        let visible: Vec<&str> = mgr
+            .list_owned(Some("thread:1"))
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect();
+        assert!(visible.contains(&"mine"));
+        assert!(visible.contains(&"shared"));
+        assert!(
+            !visible.contains(&"theirs"),
+            "another caller's session must not even be enumerable"
+        );
+    }
+
+    #[test]
+    fn remove_refuses_another_callers_session() {
+        let mut mgr = ProcessManager::new();
+        mgr.insert(owned_session("a", Some("thread:1")));
+        assert!(mgr.remove_owned("a", Some("thread:2")).is_none());
+        assert!(
+            mgr.get("a").is_some(),
+            "session must survive a refused remove"
+        );
+        assert!(mgr.remove_owned("a", Some("thread:1")).is_some());
+    }
+
+    #[test]
+    fn clear_completed_leaves_other_callers_sessions() {
+        let mut mgr = ProcessManager::new();
+        let mut mine = owned_session("mine", Some("thread:1"));
+        mine.status = SessionStatus::Exited(0);
+        let mut theirs = owned_session("theirs", Some("thread:2"));
+        theirs.status = SessionStatus::Exited(0);
+        mgr.insert(mine);
+        mgr.insert(theirs);
+
+        mgr.clear_completed_owned(Some("thread:1"));
+        assert!(mgr.get("mine").is_none());
+        assert!(
+            mgr.get("theirs").is_some(),
+            "another caller must still be able to collect its own result"
+        );
     }
 
     #[test]
