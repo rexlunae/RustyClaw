@@ -306,27 +306,34 @@ fn test_fail_closed_behavior() {
     );
 }
 
-/// Test that sandbox modes gracefully degrade
+/// Auto always resolves to something concrete.
+///
+/// Asserted as "not Auto" rather than against a list of accepted modes. The
+/// list version rotted: it was written before `LandlockBwrap` and `Docker`
+/// existed, so it passed on a machine that detects neither and failed on a
+/// CI runner that does — a test that depended on the host being less capable
+/// than average. What actually matters is that nothing downstream is ever
+/// handed the unresolved placeholder, and that stays true as modes are added.
 #[test]
 fn test_sandbox_mode_detection() {
     use rustyclaw_core::sandbox::{Sandbox, SandboxMode};
 
-    // Test that Auto mode can be created
     let policy = rustyclaw_core::sandbox::SandboxPolicy::default();
     let sandbox = Sandbox::with_mode(SandboxMode::Auto, policy);
 
-    // Effective mode should be one of the supported modes
     let effective = sandbox.effective_mode();
-    assert!(
-        matches!(
-            effective,
-            SandboxMode::Landlock
-                | SandboxMode::Bubblewrap
-                | SandboxMode::MacOSSandbox
-                | SandboxMode::PathValidation
-                | SandboxMode::None
-        ),
-        "Effective mode should be a valid sandbox mode"
+    assert_ne!(
+        effective,
+        SandboxMode::Auto,
+        "Auto must resolve to a concrete mode before anything acts on it"
+    );
+    // Resolution is a pure read of detected capabilities, so it must not
+    // wander between calls — a mode that changed under a caller would apply
+    // one policy on the check and another on the run.
+    assert_eq!(
+        effective,
+        sandbox.effective_mode(),
+        "effective mode should be stable"
     );
 }
 
