@@ -83,6 +83,16 @@ pub(crate) enum ClawHubSub {
         /// Skill name to publish
         #[arg(value_name = "NAME")]
         name: String,
+        /// What changed in this version
+        #[arg(long, value_name = "TEXT")]
+        changelog: Option<String>,
+        /// Accept ClawHub's MIT-0 skill terms for this publish.
+        ///
+        /// Required, and deliberately not a default: publishing licenses the
+        /// skill to everyone under MIT-0, which is the publisher's decision
+        /// to make rather than this client's.
+        #[arg(long)]
+        accept_license_terms: bool,
     },
 }
 
@@ -443,13 +453,29 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
                 }
             }
         }
-        Some(ClawHubSub::Publish { name }) => match sm.publish_to_registry(&name) {
-            Ok(msg) => println!("{}", t::icon_ok(&msg)),
-            Err(e) => {
-                println!("{}", t::icon_fail(&format!("Publish failed: {}", e)));
-                std::process::exit(1);
+        Some(ClawHubSub::Publish {
+            name,
+            changelog,
+            accept_license_terms,
+        }) => {
+            if !accept_license_terms {
+                println!(
+                    "{}",
+                    t::warn(
+                        "Publishing licenses the skill to everyone under MIT-0. \
+                         Re-run with --accept-license-terms to agree."
+                    )
+                );
+                return Ok(());
             }
-        },
+            match sm.publish_to_registry(&name, changelog, accept_license_terms) {
+                Ok(msg) => println!("{}", t::icon_ok(&msg)),
+                Err(e) => {
+                    println!("{}", t::icon_fail(&format!("Publish failed: {}", e)));
+                    std::process::exit(1);
+                }
+            }
+        }
     }
     Ok(())
 }

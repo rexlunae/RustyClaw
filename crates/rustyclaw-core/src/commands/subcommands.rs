@@ -134,7 +134,7 @@ pub(crate) fn handle_skill_subcommand(
                     action: CommandAction::None,
                 };
             }
-            match context.skill_manager.publish_to_registry(name) {
+            match context.skill_manager.publish_to_registry(name, None, false) {
                 Ok(msg) => CommandResponse {
                     messages: vec![msg],
                     action: CommandAction::None,
@@ -782,7 +782,7 @@ pub(crate) fn handle_clawhub_subcommand(
                     action: CommandAction::None,
                 };
             }
-            match context.skill_manager.publish_to_registry(name) {
+            match context.skill_manager.publish_to_registry(name, None, false) {
                 Ok(msg) => CommandResponse {
                     messages: vec![format!("✓ {}", msg)],
                     action: CommandAction::None,
