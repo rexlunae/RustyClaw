@@ -26,6 +26,13 @@ pub enum CronCommand {
         prompt: String,
         provider: Option<String>,
         model: Option<String>,
+        /// Whether the wake stays paused.
+        ///
+        /// The editor has no pause control — that lives on the row — so this
+        /// is carried through unchanged rather than assumed. Sending `false`
+        /// unconditionally resumed any paused wake the moment an unrelated
+        /// detail was edited, and re-armed its schedule with it.
+        paused: bool,
         thread_id: Option<u64>,
         /// The author picked "foreground" for a job that may currently be
         /// pinned. `thread_id: None` cannot carry that — it is also what a
@@ -131,6 +138,9 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
     // happens to be in front is rarely what was meant, and silently
     // defaulting to it hid the decision entirely.
     let mut form_thread = use_signal(|| Option::<String>::None);
+    // Carried, not edited: the editor offers no pause control, so whatever
+    // the wake was set to has to survive a save of anything else.
+    let mut form_paused = use_signal(|| false);
 
     if !props.visible {
         return rsx! {};
@@ -207,6 +217,7 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                 prompt,
                 provider: Some(provider),
                 model: Some(model),
+                paused: *form_paused.read(),
                 thread_id,
                 // Save is gated on the author having chosen, so reaching
                 // here with no thread means they chose the foreground.
@@ -234,6 +245,7 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                 form_provider.set(String::new());
                                 form_model.set(String::new());
                                 form_thread.set(None);
+                                form_paused.set(false);
                                 editing.set(Some(None));
                             },
                             "New wake"
@@ -486,6 +498,7 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                                                     .map(|t| t.to_string())
                                                                     .unwrap_or_default(),
                                                             ));
+                                                            form_paused.set(edit_seed.paused);
                                                             editing.set(Some(Some(edit_seed.id.clone())));
                                                         },
                                                         "Edit"

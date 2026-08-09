@@ -879,6 +879,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                     prompt,
                                     provider,
                                     model,
+                                    paused,
                                     thread_id,
                                     clear_thread,
                                 } => {
@@ -888,7 +889,12 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                             name,
                                             expr,
                                             payload: prompt,
-                                            paused: false,
+                                            // Carried from the row, not
+                                            // assumed: the editor has no
+                                            // pause control, and sending
+                                            // `false` here resumed a paused
+                                            // wake on any unrelated edit.
+                                            paused,
                                             // The editor authors wakes: the
                                             // prompt runs as an agent turn.
                                             agent_turn: true,
