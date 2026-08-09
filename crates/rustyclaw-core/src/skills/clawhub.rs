@@ -3,6 +3,45 @@
 #![allow(unused_imports)]
 use super::*;
 
+/// The registry's actual HTTP routes.
+///
+/// Gathered in one place because they were previously invented at each call
+/// site, and half of them did not exist: `/api/v1/auth/verify`,
+/// `/api/v1/auth/login`, `/api/v1/profile`, `/api/v1/categories`,
+/// `/api/v1/starred`, `/api/v1/skills/{slug}/star` and `/skills/publish` all
+/// 404 (see issue #411). Auth never succeeded, and publish posted to the SPA,
+/// got HTML and a 200 back, and reported success having stored nothing.
+///
+/// Taken from the registry's own route table — `packages/schema/src/routes.ts`
+/// in `github.com/openclaw/clawhub`, published as `clawhub-schema` — rather
+/// than from observed behaviour, so the names are the ones the server matches
+/// on and not a guess that happened to work once.
+pub mod routes {
+    /// `GET`, bearer token. The identity endpoint; there is no `/auth/verify`
+    /// and no `/profile`.
+    pub const WHOAMI: &str = "/api/v1/whoami";
+    /// `GET ?q=`.
+    pub const SEARCH: &str = "/api/v1/search";
+    /// `GET ?slug=&version=`.
+    pub const DOWNLOAD: &str = "/api/v1/download";
+    /// `GET`.
+    pub const TRENDING: &str = "/api/v1/trending";
+    /// `GET /{slug}` for detail. `POST` publishes via upload tickets.
+    pub const SKILLS: &str = "/api/v1/skills";
+    /// `POST` to star, `DELETE` to unstar. Not `/skills/{slug}/star`, and
+    /// there is no route that lists what a user has starred.
+    pub const STARS: &str = "/api/v1/stars";
+
+    /// `POST`, bearer token: mints a one-shot Convex storage upload URL.
+    pub const CLI_UPLOAD_URL: &str = "/api/cli/upload-url";
+    /// `POST`, bearer token: registers the uploaded files as a version.
+    pub const CLI_PUBLISH: &str = "/api/cli/publish";
+    /// `POST`: starts the device-code login the official CLI uses.
+    pub const CLI_DEVICE_CODE: &str = "/api/cli/device/code";
+    /// `POST`: exchanges a device code for a token.
+    pub const CLI_DEVICE_TOKEN: &str = "/api/cli/device/token";
+}
+
 // ── ClawHub registry types ──────────────────────────────────────────────────
 
 /// Manifest used when publishing a skill to ClawHub.
@@ -108,15 +147,8 @@ pub struct Category {
     pub count: u64,
 }
 
-/// Response wrapper for categories.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CategoriesResponse {
-    #[serde(default)]
-    categories: Vec<Category>,
-}
-
 /// ClawHub user profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClawHubProfile {
     #[serde(default)]
     pub username: String,
@@ -134,15 +166,6 @@ pub struct ClawHubProfile {
     pub joined: String,
 }
 
-/// Response wrapper for profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProfileResponse {
-    #[serde(default)]
-    pub profile: Option<ClawHubProfile>,
-    #[serde(default)]
-    pub error: Option<String>,
-}
-
 /// A starred skill entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StarredEntry {
@@ -157,11 +180,47 @@ pub struct StarredEntry {
     pub starred_at: String,
 }
 
-/// Response wrapper for starred skills.
+/// What `/api/v1/whoami` actually returns.
+///
+/// Nothing like the `{ok, token, username}` shape the client used to expect
+/// from its imaginary `/auth/verify`: the handle is nested, and nullable for
+/// an account that has not chosen one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StarredResponse {
+struct WhoamiResponse {
+    user: WhoamiUser,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WhoamiUser {
     #[serde(default)]
-    results: Vec<StarredEntry>,
+    handle: Option<String>,
+    #[serde(rename = "displayName", default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    image: Option<String>,
+}
+
+/// One-shot Convex storage URL from `/api/cli/upload-url`.
+#[derive(Debug, Clone, Deserialize)]
+struct UploadTicket {
+    #[serde(rename = "uploadUrl")]
+    upload_url: String,
+}
+
+/// Convex storage answers a successful PUT with the id to register.
+#[derive(Debug, Clone, Deserialize)]
+struct StoredUpload {
+    #[serde(rename = "storageId")]
+    storage_id: String,
+}
+
+/// `/api/cli/publish` reply.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishAccepted {
+    #[serde(default)]
+    ok: bool,
+    #[serde(rename = "skillId", default)]
+    skill_id: String,
 }
 
 /// Auth response from ClawHub login.
@@ -311,8 +370,9 @@ impl SkillManager {
 
         // ClawHub download API: /api/v1/download?slug=<name>&version=<version>
         let mut url = format!(
-            "{}/api/v1/download?slug={}",
+            "{}{}?slug={}",
             self.registry_url,
+            routes::DOWNLOAD,
             urlencoding::encode(name)
         );
         if let Some(v) = version {
@@ -400,7 +460,17 @@ impl SkillManager {
     }
 
     /// Publish a local skill to the ClawHub registry.
-    pub fn publish_to_registry(&self, skill_name: &str) -> Result<String, SkillError> {
+    /// Publish a skill, having been told the publisher accepts the terms.
+    ///
+    /// `accept_license_terms` is a parameter rather than a constant because
+    /// the registry distributes skills under MIT-0 and requires the publisher
+    /// to agree. Assuming it here would agree on the user's behalf.
+    pub fn publish_to_registry(
+        &self,
+        skill_name: &str,
+        changelog: Option<String>,
+        accept_license_terms: bool,
+    ) -> Result<String, SkillError> {
         let skill = self
             .get_skill(skill_name)
             .ok_or_else(|| SkillError::NotFound(skill_name.to_string()))?;
@@ -425,19 +495,78 @@ impl SkillManager {
             metadata: skill.metadata.clone(),
         };
 
-        let payload = serde_json::json!({
-            "manifest": manifest,
-            "skill_md": content,
-        });
-
         if !self.registry_reachable() {
             return Err(SkillError::Unreachable(self.registry_url.clone()));
         }
 
-        let url = format!("{}/skills/publish", self.registry_url);
+        // Publishing is three steps, not one. The old code posted a JSON blob
+        // to `/skills/publish`, which is not an API route at all — the SPA
+        // answered 200 with HTML and the command reported success having
+        // stored nothing.
+        //
+        // The real flow, as the official CLI uses it: mint a one-shot upload
+        // URL, PUT the file to Convex storage, then register the returned
+        // storage id as a version.
         let client = reqwest::blocking::Client::new();
+
+        let ticket_url = format!("{}{}", self.registry_url, routes::CLI_UPLOAD_URL);
+        let ticket: UploadTicket = client
+            .post(&ticket_url)
+            .bearer_auth(token)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .map_err(|e| SkillError::context("Failed to request an upload URL", e))?
+            .error_for_status()
+            .map_err(|e| SkillError::context("ClawHub refused the upload request", e))?
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse the upload URL response", e))?;
+
+        let stored: StoredUpload = client
+            .post(&ticket.upload_url)
+            .header(reqwest::header::CONTENT_TYPE, "text/markdown")
+            .body(content.clone())
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .map_err(|e| SkillError::context("Failed to upload the skill", e))?
+            .error_for_status()
+            .map_err(|e| SkillError::context("Storage refused the upload", e))?
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse the storage response", e))?;
+
+        // The registry checks this against what it received, so it is the
+        // digest of exactly the bytes that were sent.
+        let sha256 = {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(content.as_bytes());
+            hasher
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+
+        let payload = serde_json::json!({
+            "slug": manifest.name,
+            "displayName": manifest.name,
+            "version": manifest.version,
+            "changelog": changelog.unwrap_or_default(),
+            // The registry publishes under MIT-0 terms and requires the
+            // publisher to say so. Passed through from the caller rather than
+            // hardcoded, so nobody agrees to a licence on the user's behalf.
+            "acceptLicenseTerms": accept_license_terms,
+            "files": [{
+                "path": "SKILL.md",
+                "size": content.len(),
+                "storageId": stored.storage_id,
+                "sha256": sha256,
+                "contentType": "text/markdown",
+            }],
+        });
+
+        let publish_url = format!("{}{}", self.registry_url, routes::CLI_PUBLISH);
         let resp = client
-            .post(&url)
+            .post(&publish_url)
             .bearer_auth(token)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(30))
@@ -452,9 +581,20 @@ impl SkillManager {
             ));
         }
 
+        // A success that cannot be parsed is not a success worth reporting:
+        // that is exactly how the old code claimed to have published HTML.
+        let done: PublishAccepted = resp.json().map_err(|e| {
+            SkillError::context("ClawHub returned an unrecognised publish reply", e)
+        })?;
+        if !done.ok {
+            return Err(SkillError::msg(
+                "ClawHub did not accept the publish".to_string(),
+            ));
+        }
+
         Ok(format!(
-            "Published {} v{} to {}",
-            manifest.name, manifest.version, self.registry_url,
+            "Published {} v{} to {} (skill {})",
+            manifest.name, manifest.version, self.registry_url, done.skill_id,
         ))
     }
 
@@ -472,39 +612,26 @@ impl SkillManager {
 
     /// Authenticate with ClawHub using a username and password.
     /// Returns the API token on success, which should be saved to config.
-    pub fn auth_login(&self, username: &str, password: &str) -> Result<AuthResponse, SkillError> {
-        let url = format!("{}/api/v1/auth/login", self.registry_url);
-        let client = reqwest::blocking::Client::new();
-        let payload = serde_json::json!({
-            "username": username,
-            "password": password,
-        });
-
-        let resp = client
-            .post(&url)
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .map_err(|e| {
-                SkillError::context("Failed to connect to ClawHub for authentication", e)
-            })?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(SkillError::status("ClawHub auth", status, body));
-        }
-
-        let auth: AuthResponse = resp
-            .json()
-            .map_err(|e| SkillError::context("Failed to parse auth response", e))?;
-        Ok(auth)
+    /// Password login, which this registry does not offer.
+    ///
+    /// The old implementation posted to `/api/v1/auth/login`, a route that
+    /// has never existed, so every attempt failed with a 404 dressed up as an
+    /// auth failure. There is no password API to point at instead: the
+    /// registry issues API tokens from its settings page, and the official
+    /// CLI uses a device-code flow. Say that, rather than making a request
+    /// that cannot succeed.
+    pub fn auth_login(&self, _username: &str, _password: &str) -> Result<AuthResponse, SkillError> {
+        Err(SkillError::msg(format!(
+            "ClawHub has no password login. Create an API token at \
+             {}/settings/tokens and run `clawhub auth token <token>`.",
+            self.registry_url
+        )))
     }
 
     /// Authenticate with ClawHub using a pre-existing API token.
     /// Validates the token and returns the profile info.
     pub fn auth_token(&self, token: &str) -> Result<AuthResponse, SkillError> {
-        let url = format!("{}/api/v1/auth/verify", self.registry_url);
+        let url = format!("{}{}", self.registry_url, routes::WHOAMI);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -526,10 +653,16 @@ impl SkillManager {
             ));
         }
 
-        let auth: AuthResponse = resp
+        let whoami: WhoamiResponse = resp
             .json()
-            .map_err(|e| SkillError::context("Failed to parse auth response", e))?;
-        Ok(auth)
+            .map_err(|e| SkillError::context("Failed to parse whoami response", e))?;
+        Ok(AuthResponse {
+            ok: true,
+            // The caller already holds the token; whoami does not reissue it.
+            token: Some(token.to_string()),
+            username: whoami.user.handle,
+            message: None,
+        })
     }
 
     /// Check authentication status (whether a token is configured and valid).
@@ -546,6 +679,20 @@ impl SkillManager {
                 Ok(_) => Ok(format!(
                     "Token configured but invalid on {}",
                     self.registry_url
+                )),
+                // A 404 used to be reported as "registry unreachable", which
+                // sent people to check their network for a bug in this client.
+                // The registry answered; it just had no such route.
+                Err(SkillError::Status { status, .. }) if status.as_u16() == 404 => Ok(format!(
+                    "Token configured, but {} did not recognise the identity \
+                     endpoint. The registry is reachable — this build is asking \
+                     for a route it does not serve.",
+                    self.registry_url
+                )),
+                Err(SkillError::Status { status, .. }) if status.as_u16() == 401 => Ok(format!(
+                    "Token configured but rejected by {}. Create a new one at \
+                     {}/settings/tokens.",
+                    self.registry_url, self.registry_url
                 )),
                 Err(_) => Ok(format!(
                     "Token configured but registry unreachable ({})",
@@ -565,7 +712,7 @@ impl SkillManager {
         category: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<TrendingEntry>, SkillError> {
-        let mut url = format!("{}/api/v1/trending", self.registry_url);
+        let mut url = format!("{}{}", self.registry_url, routes::TRENDING);
         let mut params = vec![];
         if let Some(cat) = category {
             params.push(format!("category={}", urlencoding::encode(cat)));
@@ -611,30 +758,16 @@ impl SkillManager {
 
     /// Fetch available categories from the ClawHub registry.
     pub fn categories(&self) -> Result<Vec<Category>, SkillError> {
-        let url = format!("{}/api/v1/categories", self.registry_url);
-        let client = reqwest::blocking::Client::new();
-        let mut req = client.get(&url);
-        if let Some(ref token) = self.registry_token {
-            req = req.bearer_auth(token);
-        }
-
-        let resp = req
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
-
-        if !resp.status().is_success() {
-            return Err(SkillError::status(
-                "ClawHub categories request",
-                resp.status(),
-                resp.text().unwrap_or_default(),
-            ));
-        }
-
-        let body: CategoriesResponse = resp
-            .json()
-            .map_err(|e| SkillError::context("Failed to parse categories response", e))?;
-        Ok(body.categories)
+        // `/api/v1/categories` has never existed; the old call 404'd and the
+        // failure was reported as if the registry were broken. There is no
+        // category route to move to — the catalogue is exposed through feeds
+        // and promotions instead — so this is an absence to state, not an
+        // endpoint to correct.
+        Err(SkillError::msg(
+            "ClawHub does not expose a categories API. Browse the catalogue at \
+             this registry's website, or use `search` and `trending`."
+                .to_string(),
+        ))
     }
 
     /// Fetch the authenticated user's profile from ClawHub.
@@ -644,7 +777,7 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!("{}/api/v1/profile", self.registry_url);
+        let url = format!("{}{}", self.registry_url, routes::WHOAMI);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -662,46 +795,33 @@ impl SkillManager {
             ));
         }
 
-        let body: ProfileResponse = resp
+        // whoami carries a handle, a display name and an avatar — not the
+        // counts and bio the old `/api/v1/profile` shape promised. The extra
+        // fields stay at their defaults rather than being invented, so the
+        // command shows what the registry actually knows.
+        let whoami: WhoamiResponse = resp
             .json()
-            .map_err(|e| SkillError::context("Failed to parse profile response", e))?;
-        match body.profile {
-            Some(profile) => Ok(profile),
-            None => Err(SkillError::msg(
-                body.error.unwrap_or_else(|| "Profile not found".into()),
-            )),
-        }
+            .map_err(|e| SkillError::context("Failed to parse whoami response", e))?;
+        Ok(ClawHubProfile {
+            username: whoami.user.handle.clone().unwrap_or_default(),
+            display_name: whoami
+                .user
+                .display_name
+                .or(whoami.user.handle)
+                .unwrap_or_default(),
+            ..Default::default()
+        })
     }
 
     /// Fetch the authenticated user's starred skills from ClawHub.
     pub fn starred(&self) -> Result<Vec<StarredEntry>, SkillError> {
-        let token = self
-            .registry_token
-            .as_ref()
-            .ok_or(SkillError::NotAuthenticated)?;
-
-        let url = format!("{}/api/v1/starred", self.registry_url);
-        let client = reqwest::blocking::Client::new();
-
-        let resp = client
-            .get(&url)
-            .bearer_auth(token)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
-
-        if !resp.status().is_success() {
-            return Err(SkillError::status(
-                "ClawHub starred request",
-                resp.status(),
-                resp.text().unwrap_or_default(),
-            ));
-        }
-
-        let body: StarredResponse = resp
-            .json()
-            .map_err(|e| SkillError::context("Failed to parse starred response", e))?;
-        Ok(body.results)
+        // Stars can be added and removed (`POST`/`DELETE /api/v1/stars`) but
+        // not listed: there is no `GET`. The old `/api/v1/starred` 404'd.
+        Err(SkillError::msg(
+            "ClawHub has no API for listing starred skills — stars can only be \
+             added and removed. Your stars are visible on the registry website."
+                .to_string(),
+        ))
     }
 
     /// Star a skill on ClawHub.
@@ -711,16 +831,15 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!(
-            "{}/api/v1/skills/{}/star",
-            self.registry_url,
-            urlencoding::encode(skill_name),
-        );
+        // One `stars` collection, with the slug in the body — not a
+        // `/skills/{slug}/star` sub-resource, which 404'd.
+        let url = format!("{}{}", self.registry_url, routes::STARS);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
             .post(&url)
             .bearer_auth(token)
+            .json(&serde_json::json!({ "slug": skill_name }))
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
@@ -743,16 +862,13 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!(
-            "{}/api/v1/skills/{}/star",
-            self.registry_url,
-            urlencoding::encode(skill_name),
-        );
+        let url = format!("{}{}", self.registry_url, routes::STARS);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
             .delete(&url)
             .bearer_auth(token)
+            .json(&serde_json::json!({ "slug": skill_name }))
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
@@ -771,8 +887,9 @@ impl SkillManager {
     /// Get detailed info about a registry skill (not a locally installed one).
     pub fn registry_info(&self, skill_name: &str) -> Result<RegistrySkillDetail, SkillError> {
         let url = format!(
-            "{}/api/v1/skills/{}",
+            "{}{}/{}",
             self.registry_url,
+            routes::SKILLS,
             urlencoding::encode(skill_name),
         );
 
@@ -799,5 +916,99 @@ impl SkillManager {
             .json()
             .map_err(|e| SkillError::context("Failed to parse skill detail response", e))?;
         Ok(detail)
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    /// The routes must match the registry's published table.
+    ///
+    /// Every one of these was invented at a call site before, and most did
+    /// not exist — auth always failed and publish stored nothing (#411). The
+    /// values here are copied from `packages/schema/src/routes.ts` in
+    /// `github.com/openclaw/clawhub`, so this test is a diff against the
+    /// server's own definition rather than against what someone remembered.
+    #[test]
+    fn routes_match_the_registrys_published_table() {
+        assert_eq!(routes::WHOAMI, "/api/v1/whoami");
+        assert_eq!(routes::SEARCH, "/api/v1/search");
+        assert_eq!(routes::DOWNLOAD, "/api/v1/download");
+        assert_eq!(routes::TRENDING, "/api/v1/trending");
+        assert_eq!(routes::SKILLS, "/api/v1/skills");
+        assert_eq!(routes::STARS, "/api/v1/stars");
+        assert_eq!(routes::CLI_UPLOAD_URL, "/api/cli/upload-url");
+        assert_eq!(routes::CLI_PUBLISH, "/api/cli/publish");
+        assert_eq!(routes::CLI_DEVICE_CODE, "/api/cli/device/code");
+        assert_eq!(routes::CLI_DEVICE_TOKEN, "/api/cli/device/token");
+    }
+
+    /// None of the routes that 404'd may come back.
+    ///
+    /// Named individually because each was a separate broken command, and
+    /// because the failure mode was silent for publish: `/skills/publish` is
+    /// not an API path at all, so the single-page app answered it with HTML
+    /// and a 200.
+    #[test]
+    fn the_invented_routes_are_gone() {
+        let real = [
+            routes::WHOAMI,
+            routes::SEARCH,
+            routes::DOWNLOAD,
+            routes::TRENDING,
+            routes::SKILLS,
+            routes::STARS,
+            routes::CLI_UPLOAD_URL,
+            routes::CLI_PUBLISH,
+            routes::CLI_DEVICE_CODE,
+            routes::CLI_DEVICE_TOKEN,
+        ];
+        for imaginary in [
+            "/api/v1/auth/verify",
+            "/api/v1/auth/login",
+            "/api/v1/profile",
+            "/api/v1/categories",
+            "/api/v1/starred",
+            "/skills/publish",
+        ] {
+            assert!(
+                !real.contains(&imaginary),
+                "{imaginary} does not exist on the registry"
+            );
+        }
+    }
+
+    /// The commands with no backing route refuse instead of requesting one.
+    ///
+    /// A 404 dressed up as "the registry is unreachable" sent people to check
+    /// their network for a missing feature. These have no endpoint to move
+    /// to, so the honest answer is that the registry does not offer them.
+    #[test]
+    fn unsupported_commands_say_so_without_a_request() {
+        let mgr = SkillManager::new(std::path::PathBuf::from("/nonexistent"));
+
+        let categories = mgr.categories().expect_err("no categories API exists");
+        assert!(
+            categories.to_string().contains("does not expose"),
+            "got: {categories}"
+        );
+
+        let starred = mgr.starred().expect_err("no starred-list API exists");
+        assert!(starred.to_string().contains("no API"), "got: {starred}");
+
+        // Password login is the same: refused locally rather than posted to a
+        // route that never existed.
+        let login = mgr
+            .auth_login("someone", "hunter2")
+            .expect_err("no password login exists");
+        assert!(
+            login.to_string().contains("no password login"),
+            "got: {login}"
+        );
+        assert!(
+            login.to_string().contains("/settings/tokens"),
+            "the refusal should say how to authenticate instead: {login}"
+        );
     }
 }
