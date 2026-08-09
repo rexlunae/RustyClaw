@@ -48,6 +48,24 @@ fn models_for(provider_models: &HashMap<String, Vec<String>>, provider: &str) ->
     }
 }
 
+/// Whether the model has to be typed rather than picked.
+///
+/// True when the provider offers nothing to choose from: the local servers
+/// (LM Studio, exo, llama.cpp, Joshua), the Copilot proxy and `custom` ship
+/// no static catalogue, because they serve whatever the operator loaded.
+/// With the model mandatory, a picker with no options is a form that cannot
+/// be completed — typing the name is the only thing that was ever going to
+/// work there.
+///
+/// Deliberately a question about the *provider*, not about the rendered
+/// option list. The list also carries the value currently in the form, so
+/// asking it would answer "not freeform" the moment the author typed a
+/// single character, and the text field would collapse into a one-entry
+/// menu mid-word.
+fn model_is_freeform(provider_models: &HashMap<String, Vec<String>>, provider: &str) -> bool {
+    models_for(provider_models, provider).is_empty()
+}
+
 /// The first field still standing between the author and a saveable wake,
 /// named as the hint under the Save button reads it. `None` means ready.
 ///
@@ -137,6 +155,9 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
     if !current_provider.is_empty() && !provider_options.contains(&current_provider) {
         provider_options.insert(0, current_provider.clone());
     }
+    // Asked of the provider, not of the option list — and so, necessarily,
+    // before the current value is folded in below.
+    let model_is_freeform = model_is_freeform(&provider_models, &current_provider);
     let mut model_options = models_for(&provider_models, &current_provider);
     if !current_model.is_empty() && !model_options.contains(&current_model) {
         model_options.insert(0, current_model.clone());
@@ -147,14 +168,6 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
     let orphan_thread = current_thread.as_deref().filter(|choice| {
         !choice.is_empty() && !threads.iter().any(|(id, _)| id.to_string() == *choice)
     });
-
-    // Several providers ship no static catalogue at all — the local servers
-    // (LM Studio, exo, llama.cpp, Joshua), the Copilot proxy, and `custom`
-    // serve whatever the operator loaded, so there is nothing to enumerate
-    // until the gateway answers. A picker with no options and a mandatory
-    // model is a form that cannot be completed, so those get a text field:
-    // typing the name is the only thing that was ever going to work there.
-    let model_is_freeform = model_options.is_empty();
 
     let incomplete = missing_field(
         &form_name.read(),
@@ -584,7 +597,44 @@ mod tests {
                 models_for(&none, provider).is_empty(),
                 "{provider} has a catalogue now — the freeform path may be unnecessary"
             );
+            assert!(model_is_freeform(&none, provider));
         }
+    }
+
+    /// The text field must survive being typed into.
+    ///
+    /// It renders whenever the model is freeform, and the option list it sits
+    /// beside also carries whatever is currently in the form. Deciding from
+    /// that list rather than from the provider made the first keystroke turn
+    /// the field into a one-entry menu, so only a paste of the whole name got
+    /// through.
+    #[test]
+    fn a_half_typed_model_does_not_end_the_freeform_field() {
+        let none = HashMap::new();
+        for partial in ["q", "qwen3", "qwen3-coder-30b"] {
+            assert!(
+                model_is_freeform(&none, "lmstudio"),
+                "typing {partial:?} must not turn the field back into a picker"
+            );
+            // What the render does with that partial value: it joins the
+            // options so the field shows what is set. The freeform decision
+            // must not be read back out of the result.
+            let mut options = models_for(&none, "lmstudio");
+            options.insert(0, partial.to_string());
+            assert!(!options.is_empty());
+        }
+    }
+
+    /// …and a provider that does publish a list still gets the picker.
+    #[test]
+    fn a_provider_with_a_catalogue_is_not_freeform() {
+        assert!(!model_is_freeform(&HashMap::new(), "anthropic"));
+        let mut live = HashMap::new();
+        live.insert("lmstudio".to_string(), vec!["qwen3-coder-30b".to_string()]);
+        assert!(
+            !model_is_freeform(&live, "lmstudio"),
+            "once the gateway answers, the picker should take over"
+        );
     }
 
     /// …and that a live list from the gateway does reach them, which is the
