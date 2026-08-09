@@ -5,8 +5,8 @@ use tracing::{debug, instrument, warn};
 
 use rustyclaw_core::gateway::protocol::server::{
     send_secrets_delete_credential_result, send_secrets_delete_result, send_secrets_get_result,
-    send_secrets_has_totp_result, send_secrets_list_result, send_secrets_peek_result,
-    send_secrets_remove_totp_result, send_secrets_set_disabled_result,
+    send_secrets_has_totp_result, send_secrets_list_result, send_secrets_peek_outcome,
+    send_secrets_peek_result, send_secrets_remove_totp_result, send_secrets_set_disabled_result,
     send_secrets_set_policy_result, send_secrets_setup_totp_result, send_secrets_store_result,
     send_secrets_verify_totp_result, send_vault_unlocked,
 };
@@ -16,6 +16,40 @@ use rustyclaw_core::secrets::{
 };
 
 use super::SharedVault;
+
+/// How long one accepted TOTP code keeps the secret viewer unlocked.
+///
+/// Long enough to read a few entries without retyping a code, short enough
+/// that an unattended terminal re-locks on its own.
+const SECRET_VIEW_WINDOW: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Per-connection step-up authentication state for the secret viewer.
+///
+/// Viewing a stored credential renders its plaintext, so it asks for a TOTP
+/// code even though the connection already authenticated — a session outlives
+/// the moment the user proved who they were. One accepted code opens a short
+/// window rather than gating each individual reveal, which is what makes
+/// reading several entries bearable.
+///
+/// Lives on the connection, so it dies with it: a reconnect starts locked.
+#[derive(Debug, Default)]
+pub(crate) struct SecretViewAuth {
+    /// When the current window expires; `None` means locked.
+    unlocked_until: Option<std::time::Instant>,
+}
+
+impl SecretViewAuth {
+    /// Whether a reveal may proceed without asking for a code.
+    fn is_unlocked(&self) -> bool {
+        self.unlocked_until
+            .is_some_and(|deadline| std::time::Instant::now() < deadline)
+    }
+
+    /// Start (or extend) the viewing window after an accepted code.
+    fn unlock(&mut self) {
+        self.unlocked_until = Some(std::time::Instant::now() + SECRET_VIEW_WINDOW);
+    }
+}
 
 /// Execute a secrets-vault tool against the shared vault.
 ///
@@ -403,6 +437,7 @@ pub async fn exec_secrets_link_trigger(
 pub(crate) async fn handle_secrets_frame(
     writer: &mut dyn transport::TransportWriter,
     vault: &SharedVault,
+    view_auth: &mut SecretViewAuth,
     payload: ClientPayload,
 ) -> Result<()> {
     match payload {
@@ -529,7 +564,7 @@ pub(crate) async fn handle_secrets_frame(
                 }
             };
         }
-        ClientPayload::SecretsPeek { name } => {
+        ClientPayload::SecretsPeek { name, code } => {
             // As for `SecretsGet`: peek renders credential values for
             // display, which is exactly what a service credential must never
             // have — the client was deliberately never sent it.
@@ -538,6 +573,71 @@ pub(crate) async fn handle_secrets_frame(
                 return Ok(());
             }
             let mut v = vault.lock().await;
+
+            // Step-up check. A vault with no TOTP enrolled has no second
+            // factor to demand, so unlocking the vault is the gate there;
+            // otherwise a code is required unless an earlier one is still
+            // inside its window.
+            if v.has_totp() && !view_auth.is_unlocked() {
+                match code.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+                    None => {
+                        send_secrets_peek_outcome(
+                            writer,
+                            false,
+                            vec![],
+                            Some("Enter your TOTP code to view this secret."),
+                            true,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                    Some(candidate) => {
+                        let accepted = match v.verify_totp_detailed(candidate) {
+                            Ok(outcome) => outcome,
+                            Err(e) => {
+                                warn!(error = %e, "TOTP verification failed during secret peek");
+                                rustyclaw_core::secrets::TotpOutcome::Invalid
+                            }
+                        };
+                        match accepted {
+                            rustyclaw_core::secrets::TotpOutcome::Valid => view_auth.unlock(),
+                            // Reuse the drift diagnosis from the connection
+                            // handshake: the same wrong-clock failure looks
+                            // identical here and is just as confusing.
+                            rustyclaw_core::secrets::TotpOutcome::ClockDrift { steps } => {
+                                let secs = steps.unsigned_abs() * 30;
+                                warn!(
+                                    drift_steps = steps,
+                                    "Secret-peek TOTP matched a nearby window — gateway clock off by roughly {secs}s"
+                                );
+                                send_secrets_peek_outcome(
+                                    writer,
+                                    false,
+                                    vec![],
+                                    Some(&format!(
+                                        "Invalid code. It matches but this machine's clock appears off by roughly {secs}s — sync the gateway's system time."
+                                    )),
+                                    true,
+                                )
+                                .await?;
+                                return Ok(());
+                            }
+                            rustyclaw_core::secrets::TotpOutcome::Invalid => {
+                                send_secrets_peek_outcome(
+                                    writer,
+                                    false,
+                                    vec![],
+                                    Some("Invalid TOTP code."),
+                                    true,
+                                )
+                                .await?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+
             let result = v.peek_credential_display(&name);
             match result {
                 Ok(fields) => {
@@ -726,5 +826,40 @@ mod reserved_namespace_tests {
         )
         .await;
         assert!(policy.is_err(), "reserved re-policy must be refused");
+    }
+}
+
+#[cfg(test)]
+mod secret_view_auth_tests {
+    use super::*;
+
+    #[test]
+    fn starts_locked() {
+        let auth = SecretViewAuth::default();
+        assert!(
+            !auth.is_unlocked(),
+            "a fresh connection must demand a code before revealing"
+        );
+    }
+
+    #[test]
+    fn unlock_opens_a_window() {
+        let mut auth = SecretViewAuth::default();
+        auth.unlock();
+        assert!(auth.is_unlocked(), "an accepted code opens the window");
+    }
+
+    #[test]
+    fn expired_window_relocks() {
+        // Backdate the deadline past the window rather than sleeping it out.
+        let auth = SecretViewAuth {
+            unlocked_until: std::time::Instant::now()
+                .checked_sub(SECRET_VIEW_WINDOW)
+                .map(|t| t + std::time::Duration::from_millis(1)),
+        };
+        assert!(
+            !auth.is_unlocked(),
+            "the window must lapse so an idle session re-locks"
+        );
     }
 }

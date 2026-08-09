@@ -339,13 +339,18 @@ pub(crate) fn gateway_event_to_gw_event(
             ok,
             fields,
             message,
+            totp_required,
         } => {
-            if ok {
-                let field_strs: Vec<String> = fields
-                    .iter()
-                    .map(|(k, v)| format!("  {}: {}", k, v))
-                    .collect();
-                GwEvent::Info(format!("Credential:\n{}", field_strs.join("\n")))
+            // Routed to the secrets dialog rather than the transcript: a
+            // revealed credential belongs in a dismissable viewer, not
+            // scrolled into the chat log where it would persist.
+            if ok || totp_required {
+                GwEvent::SecretRevealed {
+                    ok,
+                    fields,
+                    message,
+                    totp_required,
+                }
             } else {
                 GwEvent::error(message.unwrap_or_else(|| "Failed to peek credential".to_string()))
             }

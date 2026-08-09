@@ -197,12 +197,26 @@ pub async fn send_secrets_peek_result(
     fields: Vec<(String, String)>,
     message: Option<&str>,
 ) -> Result<()> {
+    send_secrets_peek_outcome(writer, ok, fields, message, false).await
+}
+
+/// As [`send_secrets_peek_result`], but able to flag that the peek was
+/// refused solely for want of a TOTP code so the client prompts for one
+/// instead of surfacing an error.
+pub async fn send_secrets_peek_outcome(
+    writer: &mut dyn TransportWriter,
+    ok: bool,
+    fields: Vec<(String, String)>,
+    message: Option<&str>,
+    totp_required: bool,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsPeekResult,
         payload: ServerPayload::SecretsPeekResult {
             ok,
             fields,
             message: message.map(|s| s.into()),
+            totp_required,
         },
     };
     send_frame(writer, &frame).await

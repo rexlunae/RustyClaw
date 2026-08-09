@@ -383,6 +383,11 @@ pub(super) fn apply_gw_event(
         mut analytics_data,
         mut show_logs_dialog,
         mut logs_data,
+        mut secrets_revealed,
+        secrets_reveal_pending,
+        mut secrets_reveal_code,
+        mut secrets_reveal_totp_prompt,
+        mut secrets_reveal_error,
         ..
     } = ui;
     drain_queued_dialogs(&ui_for_drain);
@@ -1096,6 +1101,26 @@ pub(super) fn apply_gw_event(
                 if let Some(ref tx) = *guard {
                     crate::app::events::submit(tx, UserInput::RefreshSecrets);
                 }
+            }
+        }
+        GwEvent::SecretRevealed {
+            ok,
+            fields,
+            message,
+            totp_required,
+        } => {
+            if ok {
+                let name = secrets_reveal_pending.read().clone().unwrap_or_default();
+                secrets_revealed.set(Some((name, fields)));
+                secrets_reveal_totp_prompt.set(false);
+                secrets_reveal_code.set(String::new());
+                secrets_reveal_error.set(String::new());
+            } else if totp_required {
+                // Either the first attempt (no code sent yet) or a rejected
+                // one — both land here, so the prompt stays up and shows why.
+                secrets_reveal_totp_prompt.set(true);
+                secrets_reveal_code.set(String::new());
+                secrets_reveal_error.set(message.unwrap_or_default());
             }
         }
         GwEvent::ThreadsUpdate {

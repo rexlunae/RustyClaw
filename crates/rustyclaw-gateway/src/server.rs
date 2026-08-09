@@ -406,6 +406,10 @@ pub(crate) async fn handle_connection(
     // Subscribe to thread events for push-based sidebar updates
     let mut thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
 
+    // Step-up auth for the secret viewer. Scoped to this connection, so it
+    // starts locked on every reconnect regardless of the handshake above.
+    let mut secret_view_auth = crate::secrets_handler::SecretViewAuth::default();
+
     // ── TOTP authentication challenge ───────────────────────────────
     //
     // If TOTP 2FA is enabled, require it for every transport.
@@ -1356,6 +1360,7 @@ pub(crate) async fn handle_connection(
                                     crate::secrets_handler::handle_secrets_frame(
                                         &mut *writer,
                                         &vault,
+                                        &mut secret_view_auth,
                                         payload,
                                     )
                                     .await?;

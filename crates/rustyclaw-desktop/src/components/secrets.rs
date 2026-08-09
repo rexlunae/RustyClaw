@@ -26,6 +26,11 @@ pub enum SecretsCommand {
     Delete { key: String },
     /// Set access policy for a secret.
     SetPolicy { name: String, policy: String },
+    /// Reveal a secret's values. `code` carries a TOTP code once the gateway
+    /// has asked for one; the first attempt sends `None`.
+    Peek { name: String, code: Option<String> },
+    /// Drop any revealed plaintext from the dialog.
+    ClearReveal,
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -72,6 +77,24 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
         adding.set(false);
         add_name.set(String::new());
         add_value.set(String::new());
+    };
+
+    // TOTP code for the reveal step-up check. `use_callback` keeps the
+    // submit handler `Copy`, so both the button and the Enter key can hold it.
+    let mut reveal_code = use_signal(String::new);
+    let submit_reveal_code = {
+        let on_command = props.on_command;
+        let pending = props.data.reveal_pending.clone();
+        use_callback(move |()| {
+            let code = reveal_code.read().clone();
+            if let Some(name) = pending.clone().filter(|_| code.len() == 6) {
+                reveal_code.set(String::new());
+                on_command.call(SecretsCommand::Peek {
+                    name,
+                    code: Some(code),
+                });
+            }
+        })
     };
 
     let mut on_add_save = {
@@ -157,6 +180,20 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
                             },
                             "↻"
                         }
+                        Button {
+                            color: BulmaColor::Ghost,
+                            size: BulmaSize::Small,
+                            class: "secrets-peek",
+                            onclick: {
+                                let n = name.clone();
+                                move |_| {
+                                    props.on_command.call(
+                                        SecretsCommand::Peek { name: n.clone(), code: None },
+                                    );
+                                }
+                            },
+                            "👁"
+                        }
                         Delete {
                             size: BulmaSize::Small,
                             onclick: {
@@ -224,6 +261,75 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
                     }
                 }
             },
+
+            // ── Secret viewer: TOTP step-up prompt ──────────
+            if d.reveal_totp_prompt {
+                div { class: "secrets-reveal-prompt",
+                    p { class: "secrets-reveal-help",
+                        "Enter your 6-digit TOTP code to reveal this secret. \
+                         One code unlocks viewing for 2 minutes."
+                    }
+                    input {
+                        class: "input secrets-reveal-code",
+                        r#type: "text",
+                        inputmode: "numeric",
+                        maxlength: "6",
+                        placeholder: "000000",
+                        value: "{reveal_code}",
+                        oninput: move |e| {
+                            // Digits only, capped at the 6-digit code width.
+                            let digits: String = e.value()
+                                .chars()
+                                .filter(|c| c.is_ascii_digit())
+                                .take(6)
+                                .collect();
+                            reveal_code.set(digits);
+                        },
+                        onkeydown: move |e| {
+                            if e.key() == Key::Enter {
+                                submit_reveal_code.call(());
+                            }
+                        },
+                    }
+                    if !d.reveal_error.is_empty() {
+                        p { class: "secrets-reveal-error has-text-danger", "{d.reveal_error}" }
+                    }
+                    Buttons {
+                        Button {
+                            color: BulmaColor::Primary,
+                            disabled: reveal_code.read().len() != 6,
+                            onclick: move |_| submit_reveal_code.call(()),
+                            "Reveal"
+                        }
+                        Button {
+                            color: BulmaColor::Light,
+                            onclick: move |_| {
+                                reveal_code.set(String::new());
+                                props.on_command.call(SecretsCommand::ClearReveal);
+                            },
+                            "Cancel"
+                        }
+                    }
+                }
+            }
+
+            // ── Secret viewer: revealed values ──────────────
+            if let Some((revealed_name, revealed_fields)) = d.revealed.clone() {
+                div { class: "secrets-revealed",
+                    p { class: "secrets-revealed-title", "🔓 {revealed_name}" }
+                    for (label, value) in revealed_fields {
+                        div { class: "secrets-revealed-row",
+                            span { class: "secrets-revealed-label", "{label}" }
+                            code { class: "secrets-revealed-value", "{value}" }
+                        }
+                    }
+                    Button {
+                        color: BulmaColor::Light,
+                        onclick: move |_| props.on_command.call(SecretsCommand::ClearReveal),
+                        "Hide"
+                    }
+                }
+            }
 
             // ── Status bar ──────────────────────────────────
             Level { class: "secrets-status",
