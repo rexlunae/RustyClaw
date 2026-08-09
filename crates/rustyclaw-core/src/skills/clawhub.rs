@@ -295,10 +295,28 @@ fn is_local_host(u: &url::Url) -> bool {
             let name = name.to_ascii_lowercase();
             name == "localhost" || name.ends_with(".localhost") || name.ends_with(".internal")
         }
-        Some(url::Host::Ipv4(ip)) => {
-            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        Some(url::Host::Ipv4(ip)) => is_local_addr(std::net::IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => is_local_addr(std::net::IpAddr::V6(ip)),
+        None => false,
+    }
+}
+
+/// The address half of [`is_local_host`], split out so the same rule can be
+/// applied to an address DNS returned as to one written in the URL.
+fn is_local_addr(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            // 169.254.0.0/16 is `is_link_local`, which is where the cloud
+            // metadata endpoint at 169.254.169.254 lives. `0.0.0.0/8` is
+            // matched whole rather than via `is_unspecified`, which is only
+            // the single address — on Linux `0.0.0.0` reaches loopback.
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.octets()[0] == 0
         }
-        Some(url::Host::Ipv6(ip)) => {
+        std::net::IpAddr::V6(ip) => {
             // `is_unique_local` and `is_unicast_link_local` are still
             // unstable, so the ranges are matched by prefix: fc00::/7 for
             // unique-local (fd00::/8 in practice) and fe80::/10 for
@@ -310,11 +328,72 @@ fn is_local_host(u: &url::Url) -> bool {
             // An IPv4 address wearing an IPv6 hat is still that address.
             let mapped_v4 = ip
                 .to_ipv4_mapped()
-                .is_some_and(|v4| v4.is_loopback() || v4.is_private() || v4.is_link_local());
+                .is_some_and(|v4| is_local_addr(std::net::IpAddr::V4(v4)));
             ip.is_loopback() || ip.is_unspecified() || unique_local || link_local || mapped_v4
         }
-        None => false,
     }
+}
+
+/// A DNS resolver that refuses to hand back an address inside this machine or
+/// this network.
+///
+/// [`upload_target_is_acceptable`] inspects the *URL* the registry named, so it
+/// stops `http://169.254.169.254/…` but not `http://uploads.example.com/…`
+/// backed by an A record pointing there. Resolution happens later, inside the
+/// HTTP client, and the URL check never sees the result.
+///
+/// Checking after a separate `lookup_host` call would not close that: the
+/// client would resolve again, and a name with a one-second TTL can answer
+/// differently the second time. Doing it *as* the resolver removes the second
+/// lookup — reqwest connects to exactly the addresses returned here, so there
+/// is no window between the check and the connection.
+///
+/// Only installed when the registry itself is not local, matching the relative
+/// rule in [`upload_target_is_acceptable`]: a developer running a registry on
+/// localhost is meant to be able to upload to localhost.
+struct RefuseLocalAddresses;
+
+impl reqwest::dns::Resolve for RefuseLocalAddresses {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            // Port 0: reqwest substitutes the port from the URL, or the
+            // scheme's default, over whatever comes back here.
+            let resolved = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+            let addrs = screen_resolved(&host, resolved.collect())?;
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// The decision [`RefuseLocalAddresses`] makes, separated from the lookup that
+/// feeds it so it can be tested without asking DNS anything.
+fn screen_resolved(
+    host: &str,
+    addrs: Vec<std::net::SocketAddr>,
+) -> Result<Vec<std::net::SocketAddr>, String> {
+    // Refusing the whole name rather than filtering the offending address
+    // out: a name that answers with even one internal address is not one a
+    // remote registry should be sending an upload to, and quietly connecting
+    // to the rest of its answer set would hide that it tried.
+    if let Some(bad) = addrs.iter().find(|a| is_local_addr(a.ip())) {
+        return Err(format!(
+            "refused: the upload host {host} resolves to {}, which is inside \
+             this machine or network",
+            bad.ip()
+        ));
+    }
+    if addrs.is_empty() {
+        // An empty answer would otherwise sail past the check above and reach
+        // the connector as "no addresses", which is a confusing way to fail.
+        return Err(format!(
+            "refused: the upload host {host} resolved to nothing"
+        ));
+    }
+    Ok(addrs)
 }
 
 /// Build a profile from what whoami actually returns.
@@ -645,7 +724,7 @@ impl SkillManager {
 
         // Where the registry told us to send the file is the registry's
         // choice, not ours — check it before handing over the contents.
-        {
+        let registry_is_local = {
             let registry = url::Url::parse(&self.registry_url)
                 .map_err(|e| SkillError::msg(format!("Registry URL is not a URL: {e}")))?;
             let upload = url::Url::parse(&ticket.upload_url).map_err(|e| {
@@ -654,15 +733,24 @@ impl SkillManager {
                 ))
             })?;
             upload_target_is_acceptable(&registry, &upload).map_err(SkillError::msg)?;
-        }
+            is_local_host(&registry)
+        };
 
         // A checked URL that 30x-redirects is an unchecked URL: reqwest
         // follows up to ten by default, and the destination is never
         // re-examined. Refusing to follow keeps the check meaningful — the
         // upload URL is one-shot and issued for this request, so there is no
         // legitimate reason for it to bounce.
-        let upload_client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
+        let mut upload_builder =
+            reqwest::blocking::Client::builder().redirect(reqwest::redirect::Policy::none());
+        // The URL check above reads the hostname; this reads what the hostname
+        // resolves to, which is the half a registry controls with an A record.
+        // Skipped for a local registry, for the same reason the URL check is
+        // relative: both halves on one machine is a developer, not an attack.
+        if !registry_is_local {
+            upload_builder = upload_builder.dns_resolver(std::sync::Arc::new(RefuseLocalAddresses));
+        }
+        let upload_client = upload_builder
             .build()
             .map_err(|e| SkillError::context("Failed to build the upload client", e))?;
         let stored: StoredUpload = upload_client
@@ -1276,5 +1364,93 @@ mod upload_target_tests {
     fn a_local_registry_may_name_a_local_target() {
         assert!(check("http://localhost:3000", "http://localhost:3000/upload").is_ok());
         assert!(check("http://127.0.0.1:3000", "http://127.0.0.1:9000/x").is_ok());
+    }
+}
+
+/// The URL check above reads the hostname the registry wrote. These cover the
+/// other half: what that hostname resolves to.
+#[cfg(test)]
+mod resolver_tests {
+    use super::{RefuseLocalAddresses, screen_resolved};
+    use reqwest::dns::Resolve;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    fn addrs(list: &[&str]) -> Vec<SocketAddr> {
+        list.iter()
+            .map(|a| SocketAddr::from_str(a).expect("test address parses"))
+            .collect()
+    }
+
+    /// The case the URL check cannot see: an ordinary-looking hostname whose
+    /// A record points at the cloud metadata endpoint. `upload_target_is_
+    /// acceptable` passes it, because nothing about the *URL* is local.
+    #[test]
+    fn a_name_resolving_to_the_metadata_endpoint_is_refused() {
+        let err = screen_resolved("uploads.example.com", addrs(&["169.254.169.254:443"]))
+            .expect_err("a metadata-endpoint answer must be refused");
+        assert!(err.contains("169.254.169.254"), "got: {err}");
+        assert!(err.contains("uploads.example.com"), "got: {err}");
+    }
+
+    /// Every inside-the-network range, not just the famous one.
+    #[test]
+    fn names_resolving_inward_are_refused() {
+        for inside in [
+            "127.0.0.1:443",
+            "10.1.2.3:443",
+            "172.16.0.1:443",
+            "192.168.1.1:443",
+            "0.0.0.0:443",
+            "[::1]:443",
+            "[fd00::1]:443",
+            "[fe80::1]:443",
+            "[::ffff:10.0.0.1]:443",
+        ] {
+            assert!(
+                screen_resolved("uploads.example.com", addrs(&[inside])).is_err(),
+                "{inside} should be refused"
+            );
+        }
+    }
+
+    /// One bad address in the answer set condemns the name. Connecting to the
+    /// good one instead would let a registry keep probing for free.
+    #[test]
+    fn a_mixed_answer_is_refused_whole() {
+        assert!(
+            screen_resolved(
+                "uploads.example.com",
+                addrs(&["93.184.216.34:443", "10.0.0.1:443"])
+            )
+            .is_err(),
+            "an answer containing an internal address must be refused entirely"
+        );
+    }
+
+    /// And the ordinary case still goes through, with the addresses intact.
+    #[test]
+    fn a_public_answer_passes_through_unchanged() {
+        let public = addrs(&["93.184.216.34:443", "[2606:4700::1111]:443"]);
+        let allowed =
+            screen_resolved("files.convex.cloud", public.clone()).expect("public answer is fine");
+        assert_eq!(allowed, public);
+    }
+
+    /// End to end through the real resolver, using the one name that answers
+    /// without a network: `localhost`. Proves the trait impl is wired to the
+    /// same rule, not just that the rule exists.
+    #[tokio::test]
+    async fn the_resolver_refuses_a_name_that_answers_with_loopback() {
+        let name = reqwest::dns::Name::from_str("localhost").expect("localhost is a valid name");
+        let err = RefuseLocalAddresses
+            .resolve(name)
+            .await
+            .err()
+            .expect("localhost must be refused");
+        assert!(
+            err.to_string().contains("inside this machine"),
+            "got: {err}"
+        );
     }
 }
