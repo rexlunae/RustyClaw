@@ -383,10 +383,10 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
                 if !p.bio.is_empty() {
                     println!("  Bio: {}", p.bio);
                 }
-                println!(
-                    "  Published: {}  Starred: {}",
-                    p.published_count, p.starred_count
-                );
+                // Printed only when the registry actually said so.
+                if let (Some(published), Some(starred)) = (p.published_count, p.starred_count) {
+                    println!("  Published: {published}  Starred: {starred}");
+                }
                 if !p.joined.is_empty() {
                     println!("  Joined: {}", p.joined);
                 }
@@ -466,7 +466,10 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
                          Re-run with --accept-license-terms to agree."
                     )
                 );
-                return Ok(());
+                // Every other refusal in this command exits non-zero. A
+                // publish that uploaded nothing must not report success to a
+                // script that checks the status.
+                std::process::exit(1);
             }
             match sm.publish_to_registry(&name, changelog, accept_license_terms) {
                 Ok(msg) => println!("{}", t::icon_ok(&msg)),

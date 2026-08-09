@@ -675,10 +675,9 @@ pub(crate) fn handle_clawhub_subcommand(
                 if !p.bio.is_empty() {
                     msgs.push(format!("  Bio: {}", p.bio));
                 }
-                msgs.push(format!(
-                    "  Published: {}  Starred: {}",
-                    p.published_count, p.starred_count
-                ));
+                if let (Some(published), Some(starred)) = (p.published_count, p.starred_count) {
+                    msgs.push(format!("  Published: {published}  Starred: {starred}"));
+                }
                 if !p.joined.is_empty() {
                     msgs.push(format!("  Joined: {}", p.joined));
                 }
