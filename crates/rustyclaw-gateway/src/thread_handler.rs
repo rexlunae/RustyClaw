@@ -463,6 +463,7 @@ pub(crate) async fn handle_thread_history(
                     ChatMessage {
                         role: role.to_string(),
                         content: m.content.clone(),
+                        id: m.id.clone(),
                         // Threads persist as JSON and can hold a bare `Value`;
                         // the bincode wire cannot. Decode here, at the boundary.
                         tool_calls: m
@@ -549,6 +550,51 @@ pub(crate) async fn handle_thread_close(
     if let Some(fg) = now_foreground {
         send_thread_messages_update_shared(writer, fg, thread_mgr).await?;
     }
+    Ok(())
+}
+
+/// Handle a `MessageDelete`: remove one message from a thread's history by
+/// its stable id, rewrite the thread's log (append-only logs cannot express
+/// a deletion), and push the updated history back to the client.
+pub(crate) async fn handle_thread_message_delete(
+    writer: &mut dyn transport::TransportWriter,
+    thread_mgr: &crate::SharedThreadMgr,
+    threads_path: &std::path::Path,
+    thread_id: u64,
+    message_id: &str,
+) -> Result<()> {
+    debug!(thread_id, message_id, "Thread message delete request");
+    let task_id = ThreadId(thread_id);
+    let mut tm = thread_mgr.lock().await;
+    let removed = match tm.get_mut(task_id) {
+        Some(thread) => thread.remove_message(message_id),
+        None => None,
+    };
+    if removed.is_none() {
+        tracing::warn!(
+            thread_id,
+            message_id,
+            "Message delete: no such message in thread"
+        );
+        // Still reply with the current history so the client converges on
+        // the truth (the bubble it tried to delete may already be gone).
+        drop(tm);
+        send_thread_messages_update_shared(writer, task_id, thread_mgr).await?;
+        return Ok(());
+    }
+    if let Some(thread) = tm.get_mut(task_id) {
+        let store = rustyclaw_core::threads::ThreadStore::at_legacy_path(threads_path);
+        if let Err(e) = store.rewrite_thread_log(thread) {
+            tracing::error!(
+                thread_id,
+                error = %e,
+                "Failed to rewrite thread log after message delete"
+            );
+        }
+    }
+    crate::helpers::persist_threads(&mut tm, threads_path);
+    drop(tm);
+    send_thread_messages_update_shared(writer, task_id, thread_mgr).await?;
     Ok(())
 }
 
@@ -850,6 +896,7 @@ fn thread_message_to_wire(m: &rustyclaw_core::threads::ThreadMessage) -> ChatMes
     ChatMessage {
         role: role.to_string(),
         content: m.content.clone(),
+        id: m.id.clone(),
         // Threads persist as JSON and can hold a bare `Value`; the bincode
         // wire cannot. Decode here, at the boundary.
         tool_calls: m
@@ -1322,6 +1369,7 @@ mod tests {
             thread
                 .messages
                 .push_back(rustyclaw_core::threads::ThreadMessage {
+                    id: Some(uuid::Uuid::new_v4().to_string()),
                     role: MessageRole::User,
                     content: "What is 2+2?".to_string(),
                     timestamp: std::time::SystemTime::now(),
@@ -1331,6 +1379,7 @@ mod tests {
             thread
                 .messages
                 .push_back(rustyclaw_core::threads::ThreadMessage {
+                    id: Some(uuid::Uuid::new_v4().to_string()),
                     role: MessageRole::Assistant,
                     content: "Four.".to_string(),
                     timestamp: std::time::SystemTime::now(),

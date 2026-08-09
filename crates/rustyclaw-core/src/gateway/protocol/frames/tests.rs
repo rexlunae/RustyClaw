@@ -1035,6 +1035,7 @@ mod thread_history_wire {
                     ChatMessage {
                         role: "assistant".into(),
                         content: String::new(),
+                        id: None,
                         tool_calls: Some(calls),
                         tool_call_id: None,
                         media: None,
@@ -1042,6 +1043,7 @@ mod thread_history_wire {
                     ChatMessage {
                         role: "tool".into(),
                         content: "fn main() {}".into(),
+                        id: None,
                         tool_calls: None,
                         tool_call_id: Some("call_1".into()),
                         media: None,
@@ -1088,6 +1090,7 @@ mod thread_history_wire {
                 messages: vec![ChatMessage {
                     role: "assistant".into(),
                     content: String::new(),
+                    id: None,
                     tool_calls: Some(ToolCallRecord::from_stored_json(&stored_tool_calls())),
                     tool_call_id: None,
                     media: None,

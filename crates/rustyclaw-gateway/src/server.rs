@@ -1899,6 +1899,16 @@ pub(crate) async fn handle_connection(
                                 ClientPayload::ThreadHistoryRequest { thread_id } => {
                                     thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
                                 }
+                                ClientPayload::MessageDelete { thread_id, message_id } => {
+                                    thread_handler::handle_thread_message_delete(
+                                        &mut *writer,
+                                        &agent_session.thread_mgr,
+                                        &agent_session.threads_path,
+                                        thread_id,
+                                        &message_id,
+                                    )
+                                    .await?;
+                                }
                                 ClientPayload::ThreadClose { thread_id } => {
                                     // The turn writing to this thread has nowhere
                                     // to put its answer once the thread is gone:
@@ -3409,6 +3419,65 @@ mod tests {
     }
 
     /// Seed two chat threads and leave `first` in the foreground.
+    /// Deleting a message by id removes it from the thread's log and the
+    /// gateway republishes the updated history to the client.
+    #[tokio::test]
+    async fn message_delete_removes_the_message_and_republishes() -> Result<()> {
+        let (_tmp, cfg) = test_config_with_temp_state()?;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+
+        use rustyclaw_core::threads::MessageRole;
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+        let thread_id = manager.create_chat("Trimmer");
+        {
+            let thread = manager.get_mut(thread_id).unwrap();
+            thread.add_message_with_id(Some("keep-1".into()), MessageRole::User, "keep me");
+            thread.add_message_with_id(Some("gone-1".into()), MessageRole::Assistant, "delete me");
+        }
+        let store = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path);
+        store.persist(&mut manager).unwrap();
+        let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
+
+        let outgoing = Arc::new(Mutex::new(Vec::new()));
+        let mut writer = MockWriter {
+            outgoing: outgoing.clone(),
+            fail_from_streaming: false,
+            dead: false,
+        };
+
+        thread_handler::handle_thread_message_delete(
+            &mut writer,
+            &thread_mgr,
+            &threads_path,
+            thread_id.0,
+            "gone-1",
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        let messages = frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadMessages { messages, .. } => Some(messages),
+                _ => None,
+            })
+            .expect("the gateway republished the history");
+        assert_eq!(messages.len(), 1, "the deleted message is gone");
+        assert_eq!(messages[0].id.as_deref(), Some("keep-1"));
+        assert_eq!(messages[0].content, "keep me");
+
+        // The deletion is durable: reload from disk and the message is gone.
+        let reloaded = store.load().unwrap();
+        let thread = reloaded.get(thread_id).unwrap();
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0].content, "keep me");
+
+        Ok(())
+    }
+
     fn seed_two_threads(
         cfg: &Config,
         first: &str,

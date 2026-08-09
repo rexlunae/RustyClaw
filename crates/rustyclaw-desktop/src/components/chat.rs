@@ -10,7 +10,9 @@
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button};
-use dioxus_genai_chat::{ChatControls, ChatSurface, ContextEvent};
+use dioxus_genai_chat::{
+    ChatControls, ChatSurface, ContextEvent, MessageAction, MessageActionEvent,
+};
 use rustyclaw_core::ui::ChatMessage;
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 
@@ -41,6 +43,10 @@ pub struct ChatProps {
     pub on_add_directory_attachment: EventHandler<()>,
     pub on_remove_attachment: EventHandler<String>,
     pub on_select_directory: EventHandler<String>,
+    /// The user clicked a bubble's delete action. Carries the message's
+    /// stable id; the parent asks the gateway to remove it from the thread's
+    /// history.
+    pub on_delete_message: EventHandler<String>,
 }
 
 /// The chat surface: empty-state when there are no messages, otherwise the
@@ -161,6 +167,19 @@ pub fn Chat(props: ChatProps) -> Element {
                     input: input_ref(),
                     attachments: to_context_items(&props.bottom_bar.composer.attachments),
                     input_accessory: accessory,
+                    default_message_actions: vec![
+                        MessageAction::copy(),
+                        MessageAction::delete(),
+                    ],
+                    on_message_action: move |event: MessageActionEvent| {
+                        // Delete must be honoured by the host (the gateway
+                        // owns the history); the crate handles Copy itself.
+                        if let (MessageAction::Delete { .. }, Some(id)) =
+                            (event.action, event.message_id)
+                        {
+                            props.on_delete_message.call(id);
+                        }
+                    },
                     on_input: move |value: String| {
                         input_ref.set(value);
                     },

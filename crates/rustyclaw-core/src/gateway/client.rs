@@ -493,6 +493,7 @@ impl GatewayClient {
             message,
             thread_id: None,
             client_kind: None,
+            message_id: None,
         })
         .await
     }
@@ -509,13 +510,23 @@ impl GatewayClient {
         message: String,
         thread_id: Option<u64>,
         client_kind: Option<SessionOrigin>,
+        message_id: Option<String>,
     ) -> Result<()> {
         self.send(GatewayCommand::Chat {
             message,
             thread_id,
             client_kind,
+            message_id,
         })
         .await
+    }
+
+    /// Delete one message from a thread's history, by the stable id the
+    /// gateway minted (or echoed) for it. The gateway rewrites the thread's
+    /// log and pushes the updated history back.
+    pub async fn delete_message(&self, thread_id: u64, message_id: String) -> Result<()> {
+        self.send(GatewayCommand::MessageDelete { thread_id, message_id })
+            .await
     }
 
     /// Authenticate with TOTP code.
@@ -654,6 +665,7 @@ mod tests {
                 message: bulk.clone(),
                 thread_id: None,
                 client_kind: None,
+                message_id: None,
             }) {
                 Ok(()) => tokio::task::yield_now().await,
                 Err(e) => {

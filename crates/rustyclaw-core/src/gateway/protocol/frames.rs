@@ -201,6 +201,8 @@ pub enum ClientFrameType {
     ThreadExport = 97,
     /// Add a steering message to a turn that is already running.
     Steer = 98,
+    /// Delete one message from a thread's history.
+    MessageDelete = 99,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -1095,6 +1097,18 @@ pub enum ClientPayload {
     /// the client. Answered with a `ThreadExportResult`.
     ThreadExport {
         thread_id: u64,
+    },
+    // ── Message actions ───────────────────────────────────────────────────
+    /// Delete one message from a thread's history, by its stable id.
+    ///
+    /// The gateway removes the message and its log record and replies with
+    /// the thread's updated history, like a fresh `ThreadHistoryRequest`.
+    /// Appended here (not after `Steer`): `ClientPayload` is encoded
+    /// positionally, and inserting mid-enum would renumber every later
+    /// variant for existing peers.
+    MessageDelete {
+        thread_id: u64,
+        message_id: String,
     },
 }
 

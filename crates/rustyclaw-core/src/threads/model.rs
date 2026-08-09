@@ -187,6 +187,12 @@ impl ThreadStatus {
 /// A message in a thread's conversation history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadMessage {
+    /// Stable identity, generated for every new message and carried over
+    /// the wire so clients can refer to a specific message (delete-by-id,
+    /// edit-by-id, …). Messages persisted before this field existed load
+    /// with `None` — they are assigned one in memory on load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub role: MessageRole,
     pub content: String,
     pub timestamp: SystemTime,
@@ -520,7 +526,15 @@ impl AgentThread {
     }
 
     /// Append a message to the conversation history and the pending log.
+    ///
+    /// Every new message is stamped with a stable id (uuid) so clients can
+    /// refer to it — the id is generated here, at the single write point,
+    /// so no caller can forget it.
     fn push_message(&mut self, message: ThreadMessage) {
+        let mut message = message;
+        if message.id.is_none() {
+            message.id = Some(uuid::Uuid::new_v4().to_string());
+        }
         self.messages.push_back(message.clone());
         self.pending_log.push(ThreadLogRecord::Message(message));
         self.last_activity = SystemTime::now();
@@ -529,12 +543,50 @@ impl AgentThread {
     /// Add a message to the conversation history.
     pub fn add_message(&mut self, role: MessageRole, content: impl Into<String>) {
         self.push_message(ThreadMessage {
+            id: None,
             role,
             content: content.into(),
             timestamp: SystemTime::now(),
             tool_calls: None,
             tool_call_id: None,
         });
+    }
+
+    /// Add a message whose id the caller already knows (e.g. one echoed from
+    /// a client, so the bubble the user sees and the persisted record agree).
+    pub fn add_message_with_id(
+        &mut self,
+        id: Option<String>,
+        role: MessageRole,
+        content: impl Into<String>,
+    ) {
+        self.push_message(ThreadMessage {
+            id,
+            role,
+            content: content.into(),
+            timestamp: SystemTime::now(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+
+    /// Remove a message by its stable id: from the in-memory history and
+    /// from the pending log, so a not-yet-persisted message cannot come
+    /// back with the next append. Returns the removed message.
+    ///
+    /// The removal is persisted by the store rewriting the thread's log
+    /// (append-only logs only add records, so the caller must call
+    /// `ThreadStore::rewrite_thread_log` after this).
+    pub fn remove_message(&mut self, message_id: &str) -> Option<ThreadMessage> {
+        let pos = self.messages.iter().position(|m| m.id.as_deref() == Some(message_id))?;
+        let removed = self.messages.remove(pos).unwrap();
+        self.pending_log
+            .retain(|r| !matches!(r, ThreadLogRecord::Message(m) if m.id.as_deref() == Some(message_id)));
+        // A removed message that sat before the compaction boundary shifts
+        // the boundary; never let it drift past the end.
+        self.compacted_up_to = self.compacted_up_to.saturating_sub(1).min(self.messages.len());
+        self.last_activity = SystemTime::now();
+        Some(removed)
     }
 
     /// Record that a turn began in this thread. The log carries the marker;
@@ -581,6 +633,7 @@ impl AgentThread {
         tool_calls: serde_json::Value,
     ) {
         self.push_message(ThreadMessage {
+            id: None,
             role: MessageRole::Assistant,
             content: text.into(),
             timestamp: SystemTime::now(),
@@ -592,6 +645,7 @@ impl AgentThread {
     /// Add a tool-result message linked to the originating call's id.
     pub fn add_tool_result(&mut self, tool_call_id: impl Into<String>, output: impl Into<String>) {
         self.push_message(ThreadMessage {
+            id: None,
             role: MessageRole::Tool,
             content: output.into(),
             timestamp: SystemTime::now(),

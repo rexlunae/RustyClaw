@@ -709,14 +709,15 @@ pub fn App() -> Element {
     let mut on_submit = move |message: String| {
         let attachments = state.read().prompt_attachments.clone();
         let prompt = build_prompt_with_attachments(&message, &attachments);
-        {
+        let message_id = {
             let mut s = state.write();
-            s.add_user_message(prompt.clone());
+            let id = s.add_user_message(prompt.clone());
             s.prompt_attachments.clear();
             // Records which thread owns the response, so its stream events
             // don't follow the user if they switch threads mid-response.
             s.mark_request_started();
-        }
+            id
+        };
 
         // Name the thread on the wire. The message was typed into *this*
         // thread and belongs to it however long the frame takes to arrive,
@@ -726,10 +727,31 @@ pub fn App() -> Element {
         if let Some(client) = gw {
             spawn(async move {
                 if let Err(e) = client
-                    .chat_in_thread(prompt, turn_thread, Some(SessionOrigin::Desktop))
+                    .chat_in_thread(
+                        prompt,
+                        turn_thread,
+                        Some(SessionOrigin::Desktop),
+                        Some(message_id),
+                    )
                     .await
                 {
                     tracing::error!("Failed to send message: {}", e);
+                }
+            });
+        }
+    };
+
+    // A bubble's delete action: the gateway owns thread history, so removal
+    // happens there and the updated transcript comes back in a
+    // `ThreadMessages` frame. No local edit — the reply is the truth, and
+    // optimistically hiding the bubble first would make the repaint flicker.
+    let on_delete_message = move |message_id: String| {
+        let turn_thread = state.read().foreground_thread_id;
+        let gw = gateway.read().clone();
+        if let (Some(client), Some(thread_id)) = (gw, turn_thread) {
+            spawn(async move {
+                if let Err(e) = client.delete_message(thread_id, message_id).await {
+                    tracing::error!("Failed to delete message: {}", e);
                 }
             });
         }
@@ -1584,6 +1606,7 @@ pub fn App() -> Element {
                     provider_models: state.read().provider_models.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
+                    on_delete_message: on_delete_message,
                     on_prompt_respond: on_prompt_respond,
                     on_prompt_dismiss: on_prompt_dismiss,
                     on_model_change: move |(provider, model): (String, String)| {

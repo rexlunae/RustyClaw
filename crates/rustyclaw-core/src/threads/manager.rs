@@ -728,11 +728,18 @@ impl ThreadManager {
             config: ThreadManagerConfig::default(),
         };
 
-        for thread in state.threads {
+        for mut thread in state.threads {
             // Restored ids were minted by a previous process, whose counter
             // died with it. Reserve above them or the next `create_chat` will
             // mint an id that is already taken and overwrite that thread.
             ThreadId::reserve_above(thread.id.0);
+            // Legacy records predate stable message ids; mint them now so
+            // every message in a loaded thread is addressable.
+            for message in thread.messages.iter_mut() {
+                if message.id.is_none() {
+                    message.id = Some(uuid::Uuid::new_v4().to_string());
+                }
+            }
             mgr.threads.insert(thread.id, thread);
         }
 

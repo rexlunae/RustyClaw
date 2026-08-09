@@ -406,6 +406,7 @@ impl App {
                             message: prompt,
                             thread_id,
                             client_kind: Some(SessionOrigin::Tui),
+                            message_id: None,
                         })
                         .await
                         .context("sending Chat")
