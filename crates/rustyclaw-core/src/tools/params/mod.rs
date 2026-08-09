@@ -895,6 +895,7 @@ pub fn sessions_spawn_params() -> Vec<ToolParam> {
     ]
 }
 
+/// Parameters for `sessions_kill`: which background sub-agent to stop.
 pub fn sessions_kill_params() -> Vec<ToolParam> {
     vec![
         ToolParam {

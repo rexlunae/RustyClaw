@@ -215,6 +215,7 @@ pub static SESSIONS_SPAWN: ToolDef = ToolDef {
     execute: exec_sessions_spawn,
 };
 
+/// Stops a background sub-agent started by `sessions_spawn`.
 pub static SESSIONS_KILL: ToolDef = ToolDef {
     name: "sessions_kill",
     description: "Stop a background sub-agent started with sessions_spawn, by sessionKey or label. \

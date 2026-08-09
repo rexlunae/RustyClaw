@@ -63,6 +63,10 @@ pub struct GatewaySpawnRunner {
 }
 
 impl GatewaySpawnRunner {
+    /// Build the runner from the gateway's shared state.
+    ///
+    /// `runtime` is the handle background runs are spawned onto, captured
+    /// here because `start` is called from the blocking pool.
     pub fn new(
         http: reqwest::Client,
         config: SharedConfig,
@@ -210,6 +214,14 @@ impl SpawnRunner for GatewaySpawnRunner {
 ///
 /// A cancelled run is recorded as Stopped rather than Error: the parent
 /// polling it needs to tell "someone stopped this" from "this broke".
+///
+/// One rule governs the whole function: **a record that has already ended
+/// keeps its ending.** A stop stamps the record and tells the caller so
+/// immediately, but the run then has [`STOP_GRACE`] to unwind — long enough
+/// that a model call already in flight can come back with an answer. Letting
+/// that answer call `complete()` would flip Stopped to Completed and tell the
+/// parent that work the user cancelled had in fact succeeded. Whatever the run
+/// produces after the ending is written is a note on it, never a new verdict.
 fn record_outcome(key: &str, outcome: anyhow::Result<String>, cancelled: bool) {
     let Ok(mut mgr) = session_manager().lock() else {
         return;
@@ -217,23 +229,27 @@ fn record_outcome(key: &str, outcome: anyhow::Result<String>, cancelled: bool) {
     let Some(session) = mgr.get_mut(key) else {
         return;
     };
-    match outcome {
-        Ok(text) => {
-            session.add_message("assistant", &text);
-            session.complete();
-        }
-        Err(e) if cancelled => {
-            session.add_message("system", &format!("stopped: {e:#}"));
-            // Through `stop()` rather than assigning the status, so the record
-            // gets an end time — `runtime_secs` measures to *now* while
-            // `finished_ms` is unset, and a stopped run would keep reporting a
-            // growing runtime as though it were still working.
-            session.stop();
-        }
-        Err(e) => {
-            session.add_message("assistant", &format!("error: {e:#}"));
-            session.error();
-        }
+    let settled = session.status != rustyclaw_core::sessions::SessionStatus::Active;
+
+    match &outcome {
+        Ok(text) => session.add_message("assistant", text),
+        Err(e) if cancelled || settled => session.add_message("system", &format!("stopped: {e:#}")),
+        Err(e) => session.add_message("assistant", &format!("error: {e:#}")),
+    }
+
+    if settled {
+        return;
+    }
+    // Through `stop()` rather than assigning the status, so the record gets an
+    // end time — `runtime_secs` measures to *now* while `finished_ms` is
+    // unset, and a stopped run would keep reporting a growing runtime as
+    // though it were still working.
+    if cancelled {
+        session.stop();
+    } else if outcome.is_err() {
+        session.error();
+    } else {
+        session.complete();
     }
 }
 
@@ -365,7 +381,7 @@ async fn run_session(
             // Mirror activity into the record as it happens, so a parent
             // polling `sessions_history` sees progress rather than silence
             // until the run ends.
-            record_tool_call(&req.session_key, &tc.name, &output, is_error);
+            record_tool_call(&req.session_key, &tc.name, is_error);
             tool_results.push(ToolCallResult {
                 id: tc.id.clone(),
                 name: tc.name.clone(),
@@ -456,32 +472,24 @@ fn record_progress(key: &str, role: &str, content: &str) {
     }
 }
 
-/// Record one tool call in the session history.
+/// Record one tool call in the session history: its name, and whether it
+/// worked.
 ///
-/// Only the tool's name and whether it worked. Tool *output* is deliberately
-/// not mirrored: `secrets_get` returns a plaintext secret, and this record is
-/// readable through `sessions_history(includeTools=true)` by anyone who can
-/// see the key. A progress view is not worth a copy of the vault, and the name
-/// alone carries nearly all of the "what is it doing" value.
+/// No tool text of any kind reaches the record — not results, not error
+/// messages. This record is readable through
+/// `sessions_history(includeTools=true)` by anyone who can see the key, and
+/// tool text is not safe to put there: `secrets_get` returns a plaintext
+/// secret outright, and a `web_fetch` or `execute_command` *failure* can quote
+/// an `Authorization` header, a token passed as an argument, or a
+/// credential-bearing URL back in its message.
 ///
-/// A failure keeps its message, which is the part worth reading — except from
-/// the secrets tools, whose errors can quote what they were handling.
-fn record_tool_call(key: &str, tool: &str, output: &str, is_error: bool) {
-    const REASON_CHARS: usize = 200;
-    let note = if !is_error {
-        format!("ran {tool}")
-    } else if tools::is_secrets_tool(tool) {
-        format!("failed {tool}")
-    } else {
-        let reason: String = output.chars().take(REASON_CHARS).collect();
-        let ellipsis = if output.chars().count() > REASON_CHARS {
-            "…"
-        } else {
-            ""
-        };
-        format!("failed {tool}: {reason}{ellipsis}")
-    };
-    record_progress(key, "tool", &note);
+/// Losing the failure reason from the record costs little. The model driving
+/// the run still sees the full error in its own conversation and can say what
+/// went wrong in its final message; only this persisted, world-readable copy
+/// is trimmed. A progress view is not worth a credential.
+fn record_tool_call(key: &str, tool: &str, is_error: bool) {
+    let verb = if is_error { "failed" } else { "ran" };
+    record_progress(key, "tool", &format!("{verb} {tool}"));
 }
 
 #[cfg(test)]
@@ -638,42 +646,57 @@ mod tests {
     }
 
     #[test]
-    fn tool_output_is_never_mirrored_into_the_record() {
+    fn a_tool_call_records_only_its_name_and_verdict() {
         // `sessions_history(includeTools=true)` reads this back with no
-        // ownership check, and `secrets_get` returns a plaintext secret.
+        // ownership check. `secrets_get` returns a plaintext secret, and a
+        // `web_fetch` failure can quote a credential-bearing URL, so neither
+        // results nor error text may reach the record.
         let key = {
             let mut mgr = session_manager().lock().unwrap();
-            mgr.spawn_subagent("main", "output test", None, None)
+            mgr.spawn_subagent("main", "record shape", None, None)
         };
-        record_tool_call(&key, "secrets_get", "hunter2-the-actual-secret", false);
-        record_tool_call(&key, "read_file", &"x".repeat(5_000), false);
+        record_tool_call(&key, "secrets_get", false);
+        record_tool_call(&key, "web_fetch", true);
 
         let mgr = session_manager().lock().unwrap();
-        let history = &mgr.get(&key).unwrap().messages;
-        for message in history {
-            assert!(!message.content.contains("hunter2"), "{}", message.content);
-            assert!(!message.content.contains("xxxx"), "{}", message.content);
-        }
-        assert!(history.iter().any(|m| m.content == "ran secrets_get"));
+        let recorded: Vec<&str> = mgr
+            .get(&key)
+            .unwrap()
+            .messages
+            .iter()
+            .filter(|m| m.role == "tool")
+            .map(|m| m.content.as_str())
+            .collect();
+        assert_eq!(recorded, ["ran secrets_get", "failed web_fetch"]);
     }
 
     #[test]
-    fn a_failed_secrets_call_records_no_detail() {
+    fn a_stop_wins_over_an_answer_that_lands_during_the_grace_period() {
+        // `sessions_kill` stamps the record and tells the caller immediately,
+        // but the run gets STOP_GRACE to unwind — long enough for an in-flight
+        // model call to come back. That answer must not flip Stopped to
+        // Completed and report cancelled work as having succeeded.
         let key = {
             let mut mgr = session_manager().lock().unwrap();
-            mgr.spawn_subagent("main", "secret failure", None, None)
+            let key = mgr.spawn_subagent("main", "stopped mid-flight", None, None);
+            mgr.stop_session(&key).unwrap();
+            key
         };
-        record_tool_call(&key, "secrets_get", "no such secret 'hunter2'", true);
-        record_tool_call(&key, "read_file", "no such file: notes.txt", true);
+        record_outcome(&key, Ok("I finished anyway".to_string()), false);
 
         let mgr = session_manager().lock().unwrap();
-        let history = &mgr.get(&key).unwrap().messages;
-        assert!(history.iter().any(|m| m.content == "failed secrets_get"));
-        // A non-secrets failure keeps its reason, which is the useful part.
+        let session = mgr.get(&key).unwrap();
+        assert_eq!(
+            session.status,
+            rustyclaw_core::sessions::SessionStatus::Stopped,
+            "a settled record keeps its ending"
+        );
+        // The work is not thrown away, just demoted to a note on that ending.
         assert!(
-            history
+            session
+                .messages
                 .iter()
-                .any(|m| m.content.contains("failed read_file: no such file"))
+                .any(|m| m.content == "I finished anyway")
         );
     }
 }
