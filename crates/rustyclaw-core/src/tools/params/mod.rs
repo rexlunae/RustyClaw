@@ -799,14 +799,16 @@ pub fn cron_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
             name: "action".into(),
-            description: "Action: 'status', 'list', 'add', 'update', 'remove', 'run', 'runs'."
+            description: "Action: 'status', 'list', 'get', 'add', 'update', 'remove', \
+                          'run', 'runs'. Use 'get' to read a job in full before \
+                          editing it — 'list' is a summary."
                 .into(),
             param_type: "string".into(),
             required: true,
         },
         ToolParam {
             name: "jobId".into(),
-            description: "Job ID for update/remove/run/runs actions.".into(),
+            description: "Job ID for get/update/remove/run/runs actions.".into(),
             param_type: "string".into(),
             required: false,
         },
@@ -826,6 +828,12 @@ pub fn cron_params() -> Vec<ToolParam> {
             name: "includeDisabled".into(),
             description: "Include disabled jobs in list. Default: false.".into(),
             param_type: "boolean".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "limit".into(),
+            description: "How many entries 'runs' returns. Default 10, max 200.".into(),
+            param_type: "integer".into(),
             required: false,
         },
     ]

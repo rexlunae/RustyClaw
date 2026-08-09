@@ -27,7 +27,26 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
     };
     adopt_legacy_store(&settings_dir, &workspace_dir.join(".cron"));
     let cron_dir = central_cron_dir(&settings_dir);
-    let mut store = CronStore::new(&cron_dir)?;
+
+    // Through `with_store`, which holds the store lock across the whole
+    // read-modify-write. Every save rewrites the entire jobs file, so an
+    // interleave with the client panel or the scheduler drops one of the two
+    // changes outright. The lock was written for exactly these three writers;
+    // this one was opening the store directly and taking part in the race it
+    // was meant to prevent.
+    with_store(&settings_dir, |store| {
+        Ok(run_action(action, args, store, &cron_dir))
+    })?
+}
+
+/// One cron action against an already-locked store.
+fn run_action(
+    action: &str,
+    args: &Value,
+    store: &mut crate::cron::CronStore,
+    cron_dir: &Path,
+) -> ToolResult {
+    use crate::cron::*;
 
     match action {
         "status" => {
@@ -68,12 +87,43 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
                         )
                     }
                 };
+                // Where it runs and on what, not just when. Without these a
+                // caller has to `get` every job to answer "which of these is
+                // pinned to a thread" or "which override the model".
+                let target = match job.thread_id {
+                    Some(id) => format!("thread #{id}"),
+                    None => "foreground".to_string(),
+                };
+                let model = match &job.payload {
+                    Payload::AgentTurn {
+                        model: Some(model), ..
+                    } => format!(", model {model}"),
+                    _ => String::new(),
+                };
                 output.push_str(&format!(
-                    "{} {} [{}] — {}\n",
-                    status, job.job_id, name, schedule
+                    "{} {} [{}] — {} → {}{}\n",
+                    status, job.job_id, name, schedule, target, model
                 ));
             }
+            output.push_str("\nUse action 'get' with a jobId for a job's full definition.\n");
             Ok(output)
+        }
+
+        "get" => {
+            let job_id = args
+                .get("jobId")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing jobId for get")?;
+
+            let job = store
+                .get(job_id)
+                .ok_or_else(|| format!("Job not found: {job_id}"))?;
+
+            // Serialized whole rather than summarized: this is the action a
+            // caller reaches for before editing, and a field omitted here is
+            // one it cannot know to preserve.
+            serde_json::to_string_pretty(job)
+                .map_err(|e| ToolError::context("Failed to serialize job", e))
         }
 
         "add" => {
@@ -144,7 +194,15 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing jobId for runs")?;
 
-            let runs = store.get_runs(job_id, 10)?;
+            // Bounded, but by the caller rather than by a constant: a job
+            // that fires every few minutes buries the failure being chased
+            // ten entries deep.
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10)
+                .clamp(1, 200) as usize;
+            let runs = store.get_runs(job_id, limit)?;
             debug!(job_id, run_count = runs.len(), "Fetching run history");
             if runs.is_empty() {
                 return Ok(format!("No run history for job: {}", job_id));
@@ -167,7 +225,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
         _ => {
             warn!(action, "Unknown cron action");
             Err(format!(
-                "Unknown action: {}. Valid: status, list, add, update, remove, run, runs",
+                "Unknown action: {}. Valid: status, list, get, add, update, remove, run, runs",
                 action
             )
             .into())

@@ -277,6 +277,49 @@ pub enum CronError {
     /// The referenced job does not exist.
     #[error("Job not found: {0}")]
     JobNotFound(String),
+    /// A job with this id is already in the store.
+    #[error("Job already exists: {0} (use update to change it)")]
+    JobExists(String),
+}
+
+/// Fold a patched payload onto the stored one, keeping settings the patch
+/// left unspecified.
+///
+/// `Payload` is patched as a whole object — there is no field-level payload
+/// patch — so a caller changing only the prompt sends an `AgentTurn` with
+/// `model: None`. Taken literally that clears the model override, and the
+/// commonest edit there is silently discards it. Within the same variant the
+/// unspecified optionals therefore carry forward.
+///
+/// Switching variants replaces outright: a `SystemEvent` has no model to keep.
+///
+/// The limitation this accepts: with `None` meaning "leave alone", there is no
+/// way to *clear* a model through a patch. That was already true of the client
+/// panel, which folds the same way by hand, so nothing is lost here — and a
+/// caller can still clear it by replacing the job.
+fn merge_payload(current: &Payload, patch: Payload) -> Payload {
+    match (current, patch) {
+        (
+            Payload::AgentTurn {
+                model: old_model,
+                thinking: old_thinking,
+                timeout_seconds: old_timeout,
+                ..
+            },
+            Payload::AgentTurn {
+                message,
+                model,
+                thinking,
+                timeout_seconds,
+            },
+        ) => Payload::AgentTurn {
+            message,
+            model: model.or_else(|| old_model.clone()),
+            thinking: thinking.or_else(|| old_thinking.clone()),
+            timeout_seconds: timeout_seconds.or(*old_timeout),
+        },
+        (_, patch) => patch,
+    }
 }
 
 /// Serialize open→mutate→save cycles on the jobs file. Three writers share
@@ -395,8 +438,16 @@ impl CronStore {
     }
 
     /// Add a new job.
+    ///
+    /// Refuses an id that is already taken. The caller supplies `job_id`, so a
+    /// clash is a real possibility — and a plain insert would silently replace
+    /// somebody else's schedule with this one, which looks like the old job
+    /// simply vanished. Use [`update`](Self::update) to change an existing job.
     pub fn add(&mut self, job: CronJob) -> Result<JobId, CronError> {
         let id = job.job_id.clone();
+        if self.jobs.contains_key(&id) {
+            return Err(CronError::JobExists(id));
+        }
         self.jobs.insert(id.clone(), job);
         self.save()?;
         Ok(id)
@@ -437,7 +488,7 @@ impl CronStore {
             job.next_run_ms = None;
         }
         if let Some(payload) = patch.payload {
-            job.payload = payload;
+            job.payload = merge_payload(&job.payload, payload);
         }
         if let Some(delivery) = patch.delivery {
             job.delivery = Some(delivery);
@@ -621,6 +672,143 @@ pub struct CronJobPatch {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// An `AgentTurn` job with a model override, as the panel or tool creates.
+    fn job_with_model(model: &str) -> CronJob {
+        CronJob::new(
+            Some("nightly".to_string()),
+            Schedule::Cron {
+                expr: "0 3 * * *".to_string(),
+                tz: None,
+            },
+            SessionTarget::Main,
+            Payload::AgentTurn {
+                message: "summarize yesterday".to_string(),
+                model: Some(model.to_string()),
+                thinking: Some("high".to_string()),
+                timeout_seconds: Some(600),
+            },
+        )
+    }
+
+    #[test]
+    fn patching_a_prompt_keeps_the_model_override() {
+        // `Payload` is patched whole, so editing only the prompt sends
+        // `model: None`. Taken literally that silently discards the override
+        // the user chose — the commonest edit destroying the setting.
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let id = store.add(job_with_model("claude-haiku")).unwrap();
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    payload: Some(Payload::AgentTurn {
+                        message: "summarize the last 24h".to_string(),
+                        model: None,
+                        thinking: None,
+                        timeout_seconds: None,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        match &store.get(&id).unwrap().payload {
+            Payload::AgentTurn {
+                message,
+                model,
+                thinking,
+                timeout_seconds,
+            } => {
+                assert_eq!(message, "summarize the last 24h", "the prompt does change");
+                assert_eq!(model.as_deref(), Some("claude-haiku"));
+                assert_eq!(thinking.as_deref(), Some("high"));
+                assert_eq!(*timeout_seconds, Some(600));
+            }
+            other => panic!("expected an agent turn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_patch_can_still_change_the_model() {
+        // Carry-forward must not become "the model is frozen".
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let id = store.add(job_with_model("claude-haiku")).unwrap();
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    payload: Some(Payload::AgentTurn {
+                        message: "summarize yesterday".to_string(),
+                        model: Some("claude-opus".to_string()),
+                        thinking: None,
+                        timeout_seconds: None,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        match &store.get(&id).unwrap().payload {
+            Payload::AgentTurn { model, .. } => assert_eq!(model.as_deref(), Some("claude-opus")),
+            other => panic!("expected an agent turn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switching_payload_kind_replaces_outright() {
+        // A system event has no model to carry, so nothing should be folded in.
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let id = store.add(job_with_model("claude-haiku")).unwrap();
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    payload: Some(Payload::SystemEvent {
+                        text: "just a note".to_string(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.get(&id).unwrap().payload,
+            Payload::SystemEvent { .. }
+        ));
+    }
+
+    #[test]
+    fn adding_a_job_twice_is_refused_rather_than_silently_replacing() {
+        // The caller supplies `job_id`, so a clash is reachable. A plain
+        // insert would overwrite someone else's schedule and look like the
+        // original job had simply vanished.
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let first = job_with_model("claude-haiku");
+        let id = first.job_id.clone();
+        store.add(first).unwrap();
+
+        let mut clash = job_with_model("claude-opus");
+        clash.job_id = id.clone();
+        let err = store.add(clash).unwrap_err();
+        assert!(
+            matches!(err, CronError::JobExists(ref got) if got == &id),
+            "{err}"
+        );
+
+        // The original survives untouched.
+        match &store.get(&id).unwrap().payload {
+            Payload::AgentTurn { model, .. } => assert_eq!(model.as_deref(), Some("claude-haiku")),
+            other => panic!("expected an agent turn, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_create_job() {

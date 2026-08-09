@@ -1046,9 +1046,17 @@ fn test_memory_get_invalid_path() {
 #[test]
 fn test_cron_params_defined() {
     let params = cron_params();
-    assert_eq!(params.len(), 5);
+    assert_eq!(params.len(), 6);
     assert!(params.iter().any(|p| p.name == "action" && p.required));
     assert!(params.iter().any(|p| p.name == "jobId" && !p.required));
+    assert!(params.iter().any(|p| p.name == "limit" && !p.required));
+    // The action list is what tells a model `get` exists at all.
+    let action = params.iter().find(|p| p.name == "action").unwrap();
+    assert!(
+        action.description.contains("'get'"),
+        "{}",
+        action.description
+    );
 }
 
 #[test]
