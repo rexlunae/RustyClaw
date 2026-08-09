@@ -274,15 +274,35 @@ async fn logs(source: String, tail: Option<usize>) -> ServerFrame {
 // Cron
 // ═════════════════════════════════════════════════════════════════════════
 
+/// Run `f` against the central store while holding the cron store lock.
+///
+/// Use this for anything that writes. Every save rewrites the whole jobs
+/// file, so an unserialized read-modify-write racing the agent tool or the
+/// scheduler drops one of the two changes with no error on either side.
+/// [`open_cron_store`] stays for read-only views, which cannot lose a write.
+fn with_cron_store<R>(
+    config: &Config,
+    f: impl FnOnce(&mut CronStore) -> Result<R, String>,
+) -> Result<R, String> {
+    adopt_legacy_cron(config);
+    rustyclaw_core::cron::with_store(&config.settings_dir, |store| Ok(f(store)))
+        .map_err(|e| e.to_string())?
+}
+
+/// One-time adoption of a legacy per-workspace `.cron` directory.
+fn adopt_legacy_cron(config: &Config) {
+    rustyclaw_core::cron::adopt_legacy_store(
+        &config.settings_dir,
+        &config.workspace_dir().join(".cron"),
+    );
+}
+
 fn open_cron_store(config: &Config) -> Result<CronStore, String> {
     // The central store, shared with the agent tool and the scheduler.
     // This handler used to open `.cron` under the gateway workspace while
     // the tool opened the agent's — two half-stores; jobs from the old
     // location are adopted on first touch.
-    rustyclaw_core::cron::adopt_legacy_store(
-        &config.settings_dir,
-        &config.workspace_dir().join(".cron"),
-    );
+    adopt_legacy_cron(config);
     let cron_dir = rustyclaw_core::cron::central_cron_dir(&config.settings_dir);
     CronStore::new(&cron_dir).map_err(|e| e.to_string())
 }
@@ -407,8 +427,7 @@ struct CronUpsert {
 }
 
 fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
-    let result = (|| -> Result<CronJobDto, String> {
-        let mut store = open_cron_store(config)?;
+    let result = with_cron_store(config, |store| {
         let schedule = parse_schedule(&req.expr)?;
         let job_id = match req.id {
             Some(id) => {
@@ -469,10 +488,10 @@ fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
         let job = store
             .get(&job_id)
             .ok_or_else(|| format!("Job not found after save: {}", job_id))?;
-        let dto = job_to_dto(&store, job);
+        let dto = job_to_dto(store, job);
         rustyclaw_core::runtime_ctx::notify_cron_changed();
         Ok(dto)
-    })();
+    });
 
     let (ok, job, message) = match result {
         Ok(dto) => (true, Some(dto), None),
@@ -485,45 +504,42 @@ fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
 }
 
 fn cron_action(config: &Config, id: String, action: CronActionKind) -> ServerFrame {
-    let result = (|| -> Result<Option<String>, String> {
-        let mut store = open_cron_store(config)?;
-        match action {
-            CronActionKind::Pause => {
-                store
-                    .update(
-                        &id,
-                        CronJobPatch {
-                            enabled: Some(false),
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|e| e.to_string())?;
-                Ok(None)
-            }
-            CronActionKind::Resume => {
-                store
-                    .update(
-                        &id,
-                        CronJobPatch {
-                            enabled: Some(true),
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|e| e.to_string())?;
-                Ok(None)
-            }
-            CronActionKind::Remove => {
-                store.remove(&id).map_err(|e| e.to_string())?;
-                Ok(None)
-            }
-            CronActionKind::Run => {
-                store.request_run_now(&id).map_err(|e| e.to_string())?;
-                Ok(Some(
-                    "Run requested; the scheduler fires it momentarily".into(),
-                ))
-            }
+    let result = with_cron_store(config, |store| match action {
+        CronActionKind::Pause => {
+            store
+                .update(
+                    &id,
+                    CronJobPatch {
+                        enabled: Some(false),
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(None)
         }
-    })();
+        CronActionKind::Resume => {
+            store
+                .update(
+                    &id,
+                    CronJobPatch {
+                        enabled: Some(true),
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(None)
+        }
+        CronActionKind::Remove => {
+            store.remove(&id).map_err(|e| e.to_string())?;
+            Ok(None)
+        }
+        CronActionKind::Run => {
+            store.request_run_now(&id).map_err(|e| e.to_string())?;
+            Ok(Some(
+                "Run requested; the scheduler fires it momentarily".into(),
+            ))
+        }
+    });
     rustyclaw_core::runtime_ctx::notify_cron_changed();
 
     let (ok, message) = match result {
