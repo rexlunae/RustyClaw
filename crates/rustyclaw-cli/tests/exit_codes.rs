@@ -6,21 +6,13 @@ use std::process::Command;
 
 /// Run rustyclaw and get exit code
 fn exit_code(args: &[&str]) -> i32 {
-    // Try the built binary first (faster)
-    let binary_path = concat!(env!("CARGO_MANIFEST_DIR"), "/target/debug/rustyclaw");
-    
-    let output = if std::path::Path::new(binary_path).exists() {
-        Command::new(binary_path)
-            .args(args)
-            .output()
-            .expect("Failed to execute rustyclaw")
-    } else {
-        Command::new("cargo")
-            .args(["run", "--bin", "rustyclaw", "--quiet", "--"])
-            .args(args)
-            .output()
-            .expect("Failed to execute rustyclaw")
-    };
+    // Cargo builds the binary as a dependency of this test and hands over its
+    // path, so there is no guessing at a profile directory and no fallback to
+    // `cargo run` (which would recurse into a fresh build from inside one).
+    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
+        .args(args)
+        .output()
+        .expect("Failed to execute rustyclaw");
 
     output.status.code().unwrap_or(-1)
 }
@@ -68,7 +60,11 @@ mod error_codes {
         let code = exit_code(&["nonexistent-command-xyz"]);
         assert_ne!(code, 0, "Unknown command should fail");
         // clap typically returns 2 for usage errors
-        assert!(code == 1 || code == 2, "Expected error code 1 or 2, got {}", code);
+        assert!(
+            code == 1 || code == 2,
+            "Expected error code 1 or 2, got {}",
+            code
+        );
     }
 
     #[test]
@@ -131,6 +127,11 @@ fn test_exit_code_documentation() {
     ];
 
     for (code, description) in expected_codes {
-        assert!(code >= 0 && code <= 255, "{}: {} should be valid exit code", code, description);
+        assert!(
+            (0..=255).contains(&code),
+            "{}: {} should be valid exit code",
+            code,
+            description
+        );
     }
 }
