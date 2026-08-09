@@ -1426,6 +1426,77 @@ mod cron_panel_tests {
         assert_eq!(moved.thread_id, None, "the pin outlived the choice");
     }
 
+    /// An edit that carries `paused: true` leaves the wake paused.
+    ///
+    /// The desktop editor has no pause control, so it reports the row's
+    /// current state; it used to send `false` unconditionally and quietly
+    /// resume a paused wake — and re-arm its schedule — on any unrelated
+    /// edit. This pins the gateway half of that contract, so the client's
+    /// carried value has something to be carried *to*.
+    #[test]
+    fn an_edit_can_leave_a_wake_paused() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+
+        let created = upsert(
+            &config,
+            CronUpsert {
+                id: None,
+                name: "wake".into(),
+                expr: "every 1h".into(),
+                payload: "check the queue".into(),
+                paused: true,
+                agent_turn: true,
+                provider: Some("anthropic".into()),
+                model: Some("claude-opus".into()),
+                thread_id: None,
+                clear_thread: false,
+            },
+        )
+        .unwrap();
+        assert!(created.paused, "a wake created paused should stay paused");
+
+        let renamed = upsert(
+            &config,
+            CronUpsert {
+                id: Some(created.id.clone()),
+                name: "renamed".into(),
+                expr: "every 1h".into(),
+                payload: "check the queue".into(),
+                paused: true,
+                agent_turn: true,
+                provider: Some("anthropic".into()),
+                model: Some("claude-opus".into()),
+                thread_id: None,
+                clear_thread: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            renamed.paused,
+            "editing the name switched a paused wake back on"
+        );
+
+        // And the other direction still works, or nothing could resume.
+        let resumed = upsert(
+            &config,
+            CronUpsert {
+                id: Some(created.id.clone()),
+                name: "renamed".into(),
+                expr: "every 1h".into(),
+                payload: "check the queue".into(),
+                paused: false,
+                agent_turn: true,
+                provider: Some("anthropic".into()),
+                model: Some("claude-opus".into()),
+                thread_id: None,
+                clear_thread: false,
+            },
+        )
+        .unwrap();
+        assert!(!resumed.paused);
+    }
+
     /// Run-now arms the job for an immediate fire instead of erroring.
     #[test]
     fn run_now_arms_an_immediate_fire() {
