@@ -97,6 +97,12 @@ pub(crate) enum UserInput {
         name: String,
         value: String,
     },
+    /// Reveal a credential's values. `code` carries a TOTP code when the
+    /// gateway has asked for one; the first attempt sends `None`.
+    PeekSecret {
+        name: String,
+        code: Option<String>,
+    },
     /// Re-request secrets list from gateway (after a mutation)
     RefreshSecrets,
     /// Re-request a gateway panel's data (after a mutation)
@@ -650,6 +656,13 @@ impl App {
                         .send(GatewayCommand::SecretsStore { key: name, value })
                         .await
                         .context("sending SecretsStore")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
+                }
+                Ok(UserInput::PeekSecret { name, code }) => {
+                    client
+                        .send(GatewayCommand::SecretsPeek { name, code })
+                        .await
+                        .context("sending SecretsPeek")
                         .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::RefreshSecrets) => {

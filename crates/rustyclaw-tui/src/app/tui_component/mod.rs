@@ -220,6 +220,12 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let secrets_add_step = hooks.use_state(|| 0u8);
     let secrets_add_name = hooks.use_state(String::new);
     let secrets_add_value = hooks.use_state(String::new);
+    // Secret viewer: revealed values plus the TOTP step-up prompt.
+    let secrets_revealed: State<Option<(String, Vec<(String, String)>)>> = hooks.use_state(|| None);
+    let secrets_reveal_pending: State<Option<String>> = hooks.use_state(|| None);
+    let secrets_reveal_code = hooks.use_state(String::new);
+    let secrets_reveal_totp_prompt = hooks.use_state(|| false);
+    let secrets_reveal_error = hooks.use_state(String::new);
 
     let show_skills_dialog = hooks.use_state(|| false);
     let skills_dialog_data: State<Vec<rustyclaw_view::SkillInfoData>> = hooks.use_state(Vec::new);
@@ -399,6 +405,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         secrets_add_step,
         secrets_add_name,
         secrets_add_value,
+        secrets_revealed,
+        secrets_reveal_pending,
+        secrets_reveal_code,
+        secrets_reveal_totp_prompt,
+        secrets_reveal_error,
         show_skills_dialog,
         skills_dialog_data,
         skills_selected,
@@ -638,6 +649,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             secrets_add_step: secrets_add_step.get(),
             secrets_add_name: secrets_add_name.read().clone(),
             secrets_add_value: secrets_add_value.read().clone(),
+            secrets_revealed: secrets_revealed.read().clone(),
+            secrets_reveal_code: secrets_reveal_code.read().clone(),
+            secrets_reveal_totp_prompt: secrets_reveal_totp_prompt.get(),
+            secrets_reveal_error: secrets_reveal_error.read().clone(),
             show_skills_dialog: show_skills_dialog.get(),
             skills_data: skills_dialog_data.read().clone(),
             skills_selected: skills_selected.get(),

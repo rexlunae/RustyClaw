@@ -14,6 +14,23 @@ pub struct SecretsDialogProps {
 #[component]
 pub fn SecretsDialog(props: &SecretsDialogProps) -> impl Into<AnyElement<'static>> {
     let d = &props.data;
+    element! {
+        View(width: 100pct, height: 100pct) {
+            // The viewer replaces the list while a reveal is in progress, so
+            // the plaintext gets the whole dialog and one obvious way out.
+            #(if d.reveal_totp_prompt {
+                render_reveal_totp_prompt(d)
+            } else if let Some((name, fields)) = &d.revealed {
+                render_revealed(name, fields)
+            } else {
+                render_list(d)
+            })
+        }
+    }
+}
+
+/// The credential list and its add/delete/policy affordances.
+fn render_list(d: &SecretsDialogData) -> AnyElement<'static> {
     let access_label = if d.agent_access {
         "Enabled"
     } else {
@@ -227,6 +244,8 @@ pub fn SecretsDialog(props: &SecretsDialogProps) -> impl Into<AnyElement<'static
                             Text(content: "add  ", color: crate::theme::MUTED)
                             Text(content: "d ", color: crate::theme::ACCENT_BRIGHT)
                             Text(content: "delete  ", color: crate::theme::MUTED)
+                            Text(content: "v ", color: crate::theme::ACCENT_BRIGHT)
+                            Text(content: "view  ", color: crate::theme::MUTED)
                             Text(content: "Esc ", color: crate::theme::ACCENT_BRIGHT)
                             Text(content: "close", color: crate::theme::MUTED)
                         }
@@ -237,4 +256,123 @@ pub fn SecretsDialog(props: &SecretsDialogProps) -> impl Into<AnyElement<'static
             }
         }
     }
+    .into_any()
+}
+
+/// Step-up TOTP prompt shown before a secret's values are revealed.
+fn render_reveal_totp_prompt(d: &SecretsDialogData) -> AnyElement<'static> {
+    let typed = &d.reveal_code;
+    let display = format!(
+        "{}{}",
+        typed,
+        "\u{b7}".repeat(6usize.saturating_sub(typed.len()))
+    );
+    let has_error = !d.reveal_error.is_empty();
+    element! {
+        View(
+            width: 100pct,
+            height: 100pct,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+        ) {
+            View(
+                width: 52,
+                flex_direction: FlexDirection::Column,
+                border_style: BorderStyle::Round,
+                border_color: crate::theme::ACCENT_BRIGHT,
+                background_color: crate::theme::BG_SURFACE,
+                padding_left: 2,
+                padding_right: 2,
+                padding_top: 1,
+                padding_bottom: 1,
+            ) {
+                Text(
+                    content: "\u{1f511} Confirm to view secret",
+                    color: crate::theme::ACCENT_BRIGHT,
+                    weight: Weight::Bold,
+                )
+                View(height: 1)
+                Text(
+                    content: "Enter your 6-digit TOTP code to reveal this",
+                    color: crate::theme::TEXT,
+                )
+                Text(
+                    content: "secret. One code unlocks viewing for 2 minutes.",
+                    color: crate::theme::TEXT,
+                )
+                View(height: 1)
+                View(flex_direction: FlexDirection::Row, justify_content: JustifyContent::Center) {
+                    Text(
+                        content: format!("  {}  ", display),
+                        color: crate::theme::ACCENT_BRIGHT,
+                        weight: Weight::Bold,
+                    )
+                }
+                #(if has_error {
+                    element! {
+                        View(margin_top: 1) {
+                            Text(content: d.reveal_error.clone(), color: crate::theme::ERROR)
+                        }
+                    }.into_any()
+                } else {
+                    element! { View() }.into_any()
+                })
+                View(height: 1)
+                Text(
+                    content: "Enter \u{21a9} confirm  \u{b7}  Esc cancel",
+                    color: crate::theme::MUTED,
+                )
+            }
+        }
+    }
+    .into_any()
+}
+
+/// The revealed credential's fields. Dismissing drops them from state.
+fn render_revealed(name: &str, fields: &[(String, String)]) -> AnyElement<'static> {
+    let rows: Vec<(String, String)> = fields
+        .iter()
+        .map(|(label, value)| (label.clone(), value.clone()))
+        .collect();
+    element! {
+        View(
+            width: 100pct,
+            height: 100pct,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+        ) {
+            View(
+                width: 70pct,
+                max_height: 80pct,
+                flex_direction: FlexDirection::Column,
+                border_style: BorderStyle::Round,
+                border_color: crate::theme::WARN,
+                background_color: crate::theme::BG_SURFACE,
+                padding_left: 2,
+                padding_right: 2,
+                padding_top: 1,
+                padding_bottom: 1,
+                overflow: Overflow::Hidden,
+            ) {
+                Text(
+                    content: format!("\u{1f513} {}", name),
+                    color: crate::theme::WARN,
+                    weight: Weight::Bold,
+                )
+                View(height: 1)
+                #(rows.into_iter().map(|(label, value)| element! {
+                    View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
+                        Text(content: label, color: crate::theme::TEXT_DIM)
+                        Text(content: value, color: crate::theme::TEXT)
+                    }
+                }).collect::<Vec<_>>())
+                View(height: 1)
+                View(flex_direction: FlexDirection::Row) {
+                    Text(content: "Esc ", color: crate::theme::ACCENT_BRIGHT)
+                    Text(content: "hide", color: crate::theme::MUTED)
+                }
+            }
+        }
+    }
+    .into_any()
 }

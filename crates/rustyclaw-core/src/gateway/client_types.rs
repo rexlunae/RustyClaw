@@ -267,6 +267,9 @@ pub enum GatewayEvent {
         ok: bool,
         fields: Vec<(String, String)>,
         message: Option<String>,
+        /// The peek was refused only because a TOTP code is needed; prompt
+        /// for one and retry rather than reporting an error.
+        totp_required: bool,
     },
 
     /// Result of enabling/disabling a credential
@@ -633,6 +636,15 @@ pub enum GatewayCommand {
     /// Delete a full credential from the gateway vault
     #[serde(rename = "secrets_delete_credential")]
     SecretsDeleteCredential { name: String },
+
+    /// Reveal a credential's values for display to the user.
+    ///
+    /// Send `code: None` first: the gateway answers `totp_required` when a
+    /// step-up code is needed, and serves the values outright when the vault
+    /// has no TOTP enrolled or the unlock window from an earlier code is
+    /// still open.
+    #[serde(rename = "secrets_peek")]
+    SecretsPeek { name: String, code: Option<String> },
 
     /// Ask whether the vault has TOTP 2FA configured
     #[serde(rename = "secrets_has_totp")]
@@ -1216,6 +1228,10 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::SecretsDeleteCredential,
                 payload: ClientPayload::SecretsDeleteCredential { name },
             },
+            GatewayCommand::SecretsPeek { name, code } => ClientFrame {
+                frame_type: ClientFrameType::SecretsPeek,
+                payload: ClientPayload::SecretsPeek { name, code },
+            },
             GatewayCommand::SecretsHasTotp => ClientFrame {
                 frame_type: ClientFrameType::SecretsHasTotp,
                 payload: ClientPayload::SecretsHasTotp,
@@ -1719,10 +1735,12 @@ impl GatewayEvent {
                 ok,
                 fields,
                 message,
+                totp_required,
             } => Some(GatewayEvent::SecretsPeekResult {
                 ok,
                 fields,
                 message,
+                totp_required,
             }),
             ServerPayload::SecretsSetPolicyResult { ok, message } => {
                 Some(GatewayEvent::SecretsSetPolicyResult { ok, message })

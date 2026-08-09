@@ -179,6 +179,11 @@ pub(super) fn apply_key_event(
         input_history: _,
         history_index: _,
         history_draft: _,
+        secrets_revealed: _,
+        secrets_reveal_pending: _,
+        secrets_reveal_code: _,
+        secrets_reveal_totp_prompt: _,
+        secrets_reveal_error: _,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {

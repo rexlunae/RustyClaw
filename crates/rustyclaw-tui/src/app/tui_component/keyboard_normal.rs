@@ -149,6 +149,11 @@ pub(super) fn handle_normal_key(
         mut secrets_add_step,
         mut secrets_add_name,
         mut secrets_add_value,
+        mut secrets_revealed,
+        mut secrets_reveal_pending,
+        mut secrets_reveal_code,
+        mut secrets_reveal_totp_prompt,
+        mut secrets_reveal_error,
         mut show_skills_dialog,
         mut skills_dialog_data,
         mut skills_selected,
@@ -815,6 +820,62 @@ pub(super) fn handle_normal_key(
     }
     if show_secrets_dialog.get() {
         const VISIBLE_ROWS: usize = 20;
+
+        // Secret viewer takes focus while a reveal is on screen: the TOTP
+        // prompt collects digits, and a revealed value waits for a dismiss.
+        if secrets_reveal_totp_prompt.get() {
+            match code {
+                KeyCode::Esc => {
+                    secrets_reveal_pending.set(None);
+                    secrets_reveal_totp_prompt.set(false);
+                    secrets_reveal_code.set(String::new());
+                    secrets_reveal_error.set(String::new());
+                }
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let mut v = secrets_reveal_code.read().clone();
+                    if v.len() < 6 {
+                        v.push(c);
+                        secrets_reveal_code.set(v);
+                    }
+                }
+                KeyCode::Backspace => {
+                    let mut v = secrets_reveal_code.read().clone();
+                    v.pop();
+                    secrets_reveal_code.set(v);
+                }
+                KeyCode::Enter => {
+                    let entered = secrets_reveal_code.read().clone();
+                    if entered.len() == 6 {
+                        if let Some(name) = secrets_reveal_pending.read().clone() {
+                            secrets_reveal_error.set("Verifying…".to_string());
+                            if let Ok(guard) = tx_for_keys.lock() {
+                                if let Some(ref tx) = *guard {
+                                    crate::app::events::submit(
+                                        tx,
+                                        UserInput::PeekSecret {
+                                            name,
+                                            code: Some(entered),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if secrets_revealed.read().is_some() {
+            // Any dismiss key drops the plaintext; nothing else is bound so a
+            // stray keypress cannot leave it on screen.
+            if matches!(code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
+                secrets_revealed.set(None);
+                secrets_reveal_pending.set(None);
+            }
+            return;
+        }
+
         // Add-secret inline input mode
         let add_step = secrets_add_step.get();
         if add_step > 0 {
@@ -948,6 +1009,28 @@ pub(super) fn handle_normal_key(
                 secrets_add_step.set(1);
                 secrets_add_name.set(String::new());
                 secrets_add_value.set(String::new());
+            }
+            KeyCode::Char('v') => {
+                // Reveal the selected secret. Sent without a code first so
+                // the gateway can answer whether the step-up check applies.
+                let idx = secrets_selected.get().unwrap_or(0);
+                let data = secrets_dialog_data.read();
+                if let Some(secret) = data.get(idx) {
+                    let name = secret.key.clone();
+                    drop(data);
+                    secrets_revealed.set(None);
+                    secrets_reveal_code.set(String::new());
+                    secrets_reveal_error.set(String::new());
+                    secrets_reveal_pending.set(Some(name.clone()));
+                    if let Ok(guard) = tx_for_keys.lock() {
+                        if let Some(ref tx) = *guard {
+                            crate::app::events::submit(
+                                tx,
+                                UserInput::PeekSecret { name, code: None },
+                            );
+                        }
+                    }
+                }
             }
             _ => {}
         }

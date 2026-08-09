@@ -744,8 +744,28 @@ pub(crate) fn handle_gateway_event(
         GatewayEvent::SecretsHasTotpResult { has_totp } => {
             state.write().secrets_data.has_totp = has_totp;
         }
+        GatewayEvent::SecretsPeekResult {
+            ok,
+            fields,
+            message,
+            totp_required,
+        } => {
+            let mut s = state.write();
+            if ok {
+                s.secrets_data.finish_reveal(fields);
+            } else if totp_required {
+                // Covers both the first attempt (sent without a code) and a
+                // rejected one, so the prompt stays up carrying the reason.
+                s.secrets_data.require_reveal_code(message);
+            } else {
+                s.secrets_data.clear_reveal();
+                s.push_notice(
+                    MessageRole::Error,
+                    message.unwrap_or_else(|| "Failed to reveal credential".to_string()),
+                );
+            }
+        }
         GatewayEvent::SecretsGetResult { .. }
-        | GatewayEvent::SecretsPeekResult { .. }
         | GatewayEvent::SecretsSetDisabledResult { .. }
         | GatewayEvent::SecretsDeleteCredentialResult { .. }
         | GatewayEvent::SecretsSetupTotpResult { .. }

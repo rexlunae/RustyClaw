@@ -59,6 +59,18 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
     } = sig;
 
     let on_secrets_command = move |cmd: SecretsCommand| {
+        // Dropping revealed plaintext is local state, not a gateway round
+        // trip — and it must still work when the connection has gone away.
+        if matches!(cmd, SecretsCommand::ClearReveal) {
+            state.write().secrets_data.clear_reveal();
+            return;
+        }
+        // Record which secret a fresh reveal is for, so the result knows what
+        // to label and a TOTP retry knows what to re-request. Only on the
+        // first press — a retry carrying a code must keep the existing state.
+        if let SecretsCommand::Peek { name, code: None } = &cmd {
+            state.write().secrets_data.start_reveal(name);
+        }
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn_reporting("secrets command", async move {
@@ -95,6 +107,14 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                             .await
                             .context("sending SecretsList")?;
                     }
+                    SecretsCommand::Peek { name, code } => {
+                        client
+                            .send(GatewayCommand::SecretsPeek { name, code })
+                            .await
+                            .context("sending SecretsPeek")?;
+                    }
+                    // Handled before the gateway lookup above.
+                    SecretsCommand::ClearReveal => {}
                     SecretsCommand::SetPolicy { name, policy } => {
                         client
                             .send(GatewayCommand::SecretsSetPolicy {

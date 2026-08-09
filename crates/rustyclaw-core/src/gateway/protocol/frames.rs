@@ -612,6 +612,13 @@ pub enum ClientPayload {
     },
     SecretsPeek {
         name: String,
+        /// TOTP code for the step-up check the gateway applies before
+        /// revealing values. Optional: the first peek of a session is sent
+        /// without one to learn whether a code is needed at all (vaults with
+        /// no TOTP secret enrolled are gated on vault unlock alone), and
+        /// further peeks inside the unlock window need none either.
+        #[serde(default)]
+        code: Option<String>,
     },
     SecretsSetPolicy {
         name: String,
@@ -1137,6 +1144,11 @@ pub enum ServerPayload {
         ok: bool,
         fields: Vec<(String, String)>,
         message: Option<String>,
+        /// Set when the peek was refused only because a TOTP code is needed.
+        /// The client should collect one and retry rather than treat this as
+        /// a failure. Defaults to false so older gateways decode unchanged.
+        #[serde(default)]
+        totp_required: bool,
     },
     SecretsSetPolicyResult {
         ok: bool,

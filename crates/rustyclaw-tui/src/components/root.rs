@@ -124,6 +124,10 @@ pub struct RootProps {
     pub secrets_add_step: u8,
     pub secrets_add_name: String,
     pub secrets_add_value: String,
+    pub secrets_revealed: Option<(String, Vec<(String, String)>)>,
+    pub secrets_reveal_code: String,
+    pub secrets_reveal_totp_prompt: bool,
+    pub secrets_reveal_error: String,
 
     // skills dialog overlay
     pub show_skills_dialog: bool,
@@ -223,6 +227,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let secrets_add_step = props.secrets_add_step;
     let secrets_add_name = std::mem::take(&mut props.secrets_add_name);
     let secrets_add_value = std::mem::take(&mut props.secrets_add_value);
+    let secrets_revealed = props.secrets_revealed.take();
+    let secrets_reveal_code = std::mem::take(&mut props.secrets_reveal_code);
+    let secrets_reveal_totp_prompt = props.secrets_reveal_totp_prompt;
+    let secrets_reveal_error = std::mem::take(&mut props.secrets_reveal_error);
     #[allow(unused_variables)]
     let show_secrets = props.show_secrets_dialog;
     let skills_data = std::mem::take(&mut props.skills_data);
@@ -504,6 +512,11 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                                 add_name: secrets_add_name,
                                 add_value: secrets_add_value,
                                 status: None,
+                                revealed: secrets_revealed,
+                                reveal_pending: None,
+                                reveal_code: secrets_reveal_code,
+                                reveal_totp_prompt: secrets_reveal_totp_prompt,
+                                reveal_error: secrets_reveal_error,
                             },
                         )
                     }

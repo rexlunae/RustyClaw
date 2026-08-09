@@ -180,6 +180,17 @@ pub(super) struct Ui {
     pub secrets_add_step: State<u8>,
     pub secrets_add_name: State<String>,
     pub secrets_add_value: State<String>,
+    /// Revealed credential: name plus its `(label, value)` pairs. Cleared on
+    /// dismiss so plaintext does not outlive the viewer.
+    pub secrets_revealed: State<Option<(String, Vec<(String, String)>)>>,
+    /// Secret a reveal is in flight for.
+    pub secrets_reveal_pending: State<Option<String>>,
+    /// TOTP code being typed for the reveal step-up check.
+    pub secrets_reveal_code: State<String>,
+    /// Whether the gateway asked for a code before revealing.
+    pub secrets_reveal_totp_prompt: State<bool>,
+    /// Error from the last rejected reveal.
+    pub secrets_reveal_error: State<String>,
     pub show_skills_dialog: State<bool>,
     pub skills_dialog_data: State<Vec<rustyclaw_view::SkillInfoData>>,
     pub skills_selected: State<Option<usize>>,

@@ -227,6 +227,14 @@ pub(crate) enum GwEvent {
     },
     /// A secrets mutation succeeded — re-fetch the list from the gateway.
     RefreshSecrets,
+    /// Outcome of a secret reveal: either the plaintext fields, or a request
+    /// for the TOTP code that gates them.
+    SecretRevealed {
+        ok: bool,
+        fields: Vec<(String, String)>,
+        message: Option<String>,
+        totp_required: bool,
+    },
     /// Thread list update from gateway (unified tasks + threads).
     ThreadsUpdate {
         threads: Vec<crate::action::ThreadInfo>,

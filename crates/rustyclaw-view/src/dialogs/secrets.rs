@@ -121,6 +121,24 @@ pub struct SecretsDialogData {
 
     /// Optional status/error message to display.
     pub status: Option<String>,
+
+    /// The revealed credential: its name and `(label, value)` pairs.
+    ///
+    /// Held only while the viewer is open — dismissing clears it so a
+    /// plaintext secret does not linger in the dialog's state.
+    pub revealed: Option<(String, Vec<(String, String)>)>,
+
+    /// Name of the secret a reveal is currently pending for, if any.
+    pub reveal_pending: Option<String>,
+
+    /// TOTP code being typed for the step-up check (empty when not prompting).
+    pub reveal_code: String,
+
+    /// Whether the gateway asked for a TOTP code before revealing.
+    pub reveal_totp_prompt: bool,
+
+    /// Error from the last rejected reveal attempt.
+    pub reveal_error: String,
 }
 
 impl SecretsDialogData {
@@ -136,7 +154,52 @@ impl SecretsDialogData {
             add_name: String::new(),
             add_value: String::new(),
             status: None,
+            revealed: None,
+            reveal_pending: None,
+            reveal_code: String::new(),
+            reveal_totp_prompt: false,
+            reveal_error: String::new(),
         }
+    }
+
+    /// Begin revealing `name`; the first request carries no code so the
+    /// gateway can say whether one is needed.
+    pub fn start_reveal(&mut self, name: &str) {
+        self.revealed = None;
+        self.reveal_pending = Some(name.to_string());
+        self.reveal_code = String::new();
+        self.reveal_totp_prompt = false;
+        self.reveal_error = String::new();
+    }
+
+    /// The gateway wants a TOTP code before it will reveal.
+    pub fn require_reveal_code(&mut self, message: Option<String>) {
+        self.reveal_totp_prompt = true;
+        self.reveal_code = String::new();
+        self.reveal_error = message.unwrap_or_default();
+    }
+
+    /// Store revealed fields and close the code prompt.
+    pub fn finish_reveal(&mut self, fields: Vec<(String, String)>) {
+        let name = self.reveal_pending.take().unwrap_or_default();
+        self.revealed = Some((name, fields));
+        self.reveal_totp_prompt = false;
+        self.reveal_code = String::new();
+        self.reveal_error = String::new();
+    }
+
+    /// Drop any revealed plaintext and cancel a pending reveal.
+    pub fn clear_reveal(&mut self) {
+        self.revealed = None;
+        self.reveal_pending = None;
+        self.reveal_code = String::new();
+        self.reveal_totp_prompt = false;
+        self.reveal_error = String::new();
+    }
+
+    /// Whether any part of the reveal flow is on screen.
+    pub fn reveal_active(&self) -> bool {
+        self.revealed.is_some() || self.reveal_totp_prompt
     }
 
     /// Number of visible secrets (excluding disabled/ui helpers).
@@ -258,5 +321,56 @@ impl SecretsDialogData {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dialog() -> SecretsDialogData {
+        SecretsDialogData::from_vault(Vec::new(), false, true)
+    }
+
+    #[test]
+    fn reveal_flow_carries_name_from_request_to_result() {
+        let mut d = dialog();
+        d.start_reveal("github-token");
+        assert_eq!(d.reveal_pending.as_deref(), Some("github-token"));
+        assert!(!d.reveal_active(), "no prompt or value on screen yet");
+
+        d.require_reveal_code(Some("Enter your TOTP code.".into()));
+        assert!(d.reveal_totp_prompt);
+        assert!(d.reveal_active());
+
+        d.finish_reveal(vec![("Token".into(), "ghp_secret".into())]);
+        let (name, fields) = d.revealed.clone().expect("revealed");
+        assert_eq!(name, "github-token");
+        assert_eq!(fields[0].1, "ghp_secret");
+        // The prompt closes and the typed code is not retained.
+        assert!(!d.reveal_totp_prompt);
+        assert!(d.reveal_code.is_empty());
+    }
+
+    #[test]
+    fn clear_reveal_drops_plaintext_and_prompt_state() {
+        let mut d = dialog();
+        d.start_reveal("db-password");
+        d.finish_reveal(vec![("Password".into(), "hunter2".into())]);
+        d.clear_reveal();
+        assert!(d.revealed.is_none(), "plaintext must not outlive dismissal");
+        assert!(d.reveal_pending.is_none());
+        assert!(!d.reveal_active());
+    }
+
+    #[test]
+    fn starting_a_new_reveal_clears_the_previous_value() {
+        let mut d = dialog();
+        d.start_reveal("first");
+        d.finish_reveal(vec![("Token".into(), "one".into())]);
+        // Selecting another secret must not leave the old plaintext showing.
+        d.start_reveal("second");
+        assert!(d.revealed.is_none());
+        assert_eq!(d.reveal_pending.as_deref(), Some("second"));
     }
 }
