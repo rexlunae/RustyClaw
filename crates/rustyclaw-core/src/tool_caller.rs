@@ -12,22 +12,34 @@
 //!
 //! # Scope and limits
 //!
-//! This is a [`tokio::task_local`], so it is visible to the wrapped future
-//! and anything it awaits inline, and it is *not* visible inside
-//! `spawn_blocking` or a freshly `tokio::spawn`ed task. Tools that need the
-//! identity must therefore be async-native (as `execute_command` and
-//! `process` are) rather than dispatched to the blocking pool. A tool that
-//! reads [`current`] from the blocking pool sees `None`, which callers must
-//! treat as "unidentified", never as "trusted".
+//! The identity rides on a [`tokio::task_local`], so it is visible to the
+//! wrapped future and anything it awaits inline, and *not* to a freshly
+//! `tokio::spawn`ed task — which is the point: a sub-agent gets its own
+//! identity rather than inheriting its parent's.
+//!
+//! A task-local is also invisible inside `spawn_blocking`, where every
+//! synchronous tool runs. That would leave most of the registry unidentified,
+//! so the blocking dispatch carries the identity across on a thread-local via
+//! [`with_caller_blocking`], and [`current`] reads whichever is set. The
+//! thread-local is restored on the way out, because blocking-pool threads are
+//! reused and a leaked identity would hand the next tool call someone else's
+//! ownership.
 //!
 //! An absent identity is not an error. Direct CLI use and tests run without
 //! one, and resources they create are simply unowned.
 
+use std::cell::RefCell;
 use std::future::Future;
 
 tokio::task_local! {
     /// Identity of the caller whose tool call is currently running.
     static CURRENT_CALLER: String;
+}
+
+thread_local! {
+    /// Identity carried onto a blocking-pool thread by
+    /// [`with_caller_blocking`], where the task-local cannot reach.
+    static BLOCKING_CALLER: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Run `fut` with `id` as the ambient caller identity.
@@ -57,12 +69,39 @@ where
     }
 }
 
+/// Run `f` on this thread with `id` as the ambient caller identity.
+///
+/// The blocking-pool counterpart to [`with_caller`], for dispatching a
+/// synchronous tool: pass what [`current`] returned on the async side and the
+/// tool sees the same identity it would have seen inline.
+///
+/// The previous value is restored even if `f` panics, so a thread returning
+/// to the pool never carries an identity into the next call.
+pub fn with_caller_blocking<T>(id: Option<String>, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            BLOCKING_CALLER.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+
+    // `id` of `None` clears rather than leaves: an unidentified call must not
+    // inherit whatever the previous call on this thread was.
+    let previous = BLOCKING_CALLER.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), id));
+    let _restore = Restore(previous);
+    f()
+}
+
 /// The current caller's identity, or `None` when running unidentified.
 ///
-/// `None` means "no identity was established" — from a blocking-pool tool,
-/// direct CLI use, or a test. Treat it as untrusted, not privileged.
+/// `None` means "no identity was established" — direct CLI use, a test, or a
+/// call site that never set one. Treat it as untrusted, not privileged.
 pub fn current() -> Option<String> {
-    CURRENT_CALLER.try_with(|id| id.clone()).ok()
+    CURRENT_CALLER
+        .try_with(|id| id.clone())
+        .ok()
+        .or_else(|| BLOCKING_CALLER.with(|slot| slot.borrow().clone()))
 }
 
 #[cfg(test)]
@@ -117,6 +156,49 @@ mod tests {
         }));
         assert_eq!(a.await.unwrap().as_deref(), Some("thread:1"));
         assert_eq!(b.await.unwrap().as_deref(), Some("thread:2"));
+    }
+
+    #[tokio::test]
+    async fn identity_survives_the_trip_to_the_blocking_pool() {
+        // The path every synchronous tool takes. Without the hand-off the
+        // identity vanishes and ownership checks silently pass everyone.
+        let seen = with_caller("thread:9", async {
+            let caller = current();
+            tokio::task::spawn_blocking(move || with_caller_blocking(caller, current))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(seen.as_deref(), Some("thread:9"));
+    }
+
+    #[test]
+    fn a_blocking_identity_does_not_outlive_its_call() {
+        // Blocking-pool threads are reused; a leaked identity would hand the
+        // next tool call someone else's ownership.
+        with_caller_blocking(Some("thread:1".into()), || {
+            assert_eq!(current().as_deref(), Some("thread:1"));
+        });
+        assert_eq!(current(), None);
+    }
+
+    #[test]
+    fn an_unidentified_blocking_call_does_not_inherit() {
+        with_caller_blocking(Some("thread:1".into()), || {
+            with_caller_blocking(None, || {
+                assert_eq!(current(), None, "must not inherit the outer identity");
+            });
+            assert_eq!(current().as_deref(), Some("thread:1"));
+        });
+    }
+
+    #[test]
+    fn a_panicking_blocking_call_still_restores() {
+        let panicked = std::panic::catch_unwind(|| {
+            with_caller_blocking(Some("thread:1".into()), || panic!("boom"));
+        });
+        assert!(panicked.is_err());
+        assert_eq!(current(), None);
     }
 
     #[tokio::test]

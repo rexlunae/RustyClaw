@@ -310,7 +310,164 @@ impl SessionManager {
         session.complete();
         Ok(())
     }
+
+    /// Mark a session stopped at the user's request.
+    ///
+    /// Distinct from [`complete_session`](Self::complete_session): a stopped
+    /// run did not finish its task, and reporting it as Completed would tell
+    /// the parent agent the work was done.
+    pub fn stop_session(&mut self, key: &str) -> Result<(), SessionError> {
+        let session = self
+            .sessions
+            .get_mut(key)
+            .ok_or_else(|| SessionError::NotFound(key.to_string()))?;
+        session.status = SessionStatus::Stopped;
+        session.finished_ms = Some(now_millis());
+        Ok(())
+    }
 }
+
+// ── Running spawned sessions ────────────────────────────────────────────────
+
+/// Handle on a spawned session that is actually executing.
+///
+/// The session *record* says a run exists; this says it is still running and
+/// gives the means to stop it. Kept apart from [`Session`] because a record
+/// outlives its run — history stays readable long after the task is gone —
+/// and because the handle is not serializable.
+struct RunningSession {
+    handle: tokio::task::JoinHandle<()>,
+    /// Asked first, so a run can unwind and record its own outcome rather
+    /// than being torn down mid-write.
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Registry of spawned sessions that are still executing.
+#[derive(Default)]
+pub struct RunningSessions {
+    runs: HashMap<SessionKey, RunningSession>,
+}
+
+impl RunningSessions {
+    /// Record a newly spawned run.
+    pub fn register(
+        &mut self,
+        key: SessionKey,
+        handle: tokio::task::JoinHandle<()>,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        if let Some(old) = self.runs.insert(key, RunningSession { handle, cancel }) {
+            // Should not happen — keys are unique — but a leaked task would
+            // keep making model calls forever.
+            old.handle.abort();
+        }
+    }
+
+    /// Whether this session is still executing.
+    pub fn is_running(&self, key: &str) -> bool {
+        self.runs.get(key).is_some_and(|r| !r.handle.is_finished())
+    }
+
+    /// Stop a running session. Returns whether there was one to stop.
+    ///
+    /// Sets the cancel flag *and* aborts: the flag lets a run between model
+    /// calls exit cleanly, and the abort covers one parked inside a call that
+    /// would otherwise keep spending tokens until it returned.
+    pub fn stop(&mut self, key: &str) -> bool {
+        match self.runs.remove(key) {
+            Some(run) => {
+                run.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                run.handle.abort();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Drop entries whose task has ended, so the registry does not grow for
+    /// the life of the process.
+    pub fn reap_finished(&mut self) {
+        self.runs.retain(|_, r| !r.handle.is_finished());
+    }
+
+    /// Keys of every run still executing.
+    pub fn running_keys(&self) -> Vec<SessionKey> {
+        self.runs
+            .iter()
+            .filter(|(_, r)| !r.handle.is_finished())
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+}
+
+/// Global registry of executing spawned sessions.
+pub fn running_sessions() -> &'static Arc<Mutex<RunningSessions>> {
+    static RUNNING: OnceLock<Arc<Mutex<RunningSessions>>> = OnceLock::new();
+    RUNNING.get_or_init(|| Arc::new(Mutex::new(RunningSessions::default())))
+}
+
+// ── The thing that actually runs a spawned session ──────────────────────────
+
+/// What a spawned session needs in order to run.
+#[derive(Debug, Clone)]
+pub struct SpawnRequest {
+    /// Key of the session record already created for this run.
+    pub session_key: SessionKey,
+    /// Agent whose workspace and system prompt the run adopts.
+    pub agent_id: String,
+    /// The work to do.
+    pub task: String,
+    /// Model to use instead of the gateway's current one.
+    pub model: Option<String>,
+    /// Stop the run after this many seconds if it is still working.
+    pub timeout_secs: Option<u64>,
+}
+
+/// Starts the background work behind `sessions_spawn`.
+///
+/// Core owns the session *records*; it has no model client, no provider
+/// credentials, and no system prompt of its own, so it cannot run an agent
+/// turn. The gateway installs an implementation of this at startup and every
+/// caller of the tool — client dispatch, a trigger fire, a cron job, another
+/// sub-agent — gets real execution through the same door.
+pub trait SpawnRunner: Send + Sync {
+    /// Start `req` in the background and return immediately.
+    ///
+    /// `Err` means nothing was started, and the caller is responsible for
+    /// disposing of the session record.
+    fn start(&self, req: SpawnRequest) -> Result<(), String>;
+}
+
+static SPAWN_RUNNER: OnceLock<Mutex<Option<Arc<dyn SpawnRunner>>>> = OnceLock::new();
+
+fn spawn_runner_slot() -> &'static Mutex<Option<Arc<dyn SpawnRunner>>> {
+    SPAWN_RUNNER.get_or_init(|| Mutex::new(None))
+}
+
+/// Install the runner that gives `sessions_spawn` its teeth.
+pub fn set_spawn_runner(runner: Arc<dyn SpawnRunner>) {
+    if let Ok(mut slot) = spawn_runner_slot().lock() {
+        *slot = Some(runner);
+    }
+}
+
+/// The installed runner, if a gateway is hosting these tools.
+pub fn spawn_runner() -> Option<Arc<dyn SpawnRunner>> {
+    spawn_runner_slot().lock().ok().and_then(|s| s.clone())
+}
+
+/// Remove the installed runner, restoring the no-gateway behaviour.
+#[cfg(test)]
+pub(crate) fn clear_spawn_runner() {
+    if let Ok(mut slot) = spawn_runner_slot().lock() {
+        *slot = None;
+    }
+}
+
+/// Serializes tests that install or clear the process-wide spawn runner:
+/// without it, one test's runner answers another test's spawn.
+#[cfg(test)]
+pub(crate) static SPAWN_RUNNER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 impl Default for SessionManager {
     fn default() -> Self {
@@ -350,6 +507,54 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_registered_run_is_stoppable() {
+        let mut runs = RunningSessions::default();
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watched = flag.clone();
+        let handle = tokio::spawn(async move {
+            // Long enough that the test does the stopping, not the clock.
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            watched.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        runs.register("k".to_string(), handle, flag.clone());
+        assert!(runs.is_running("k"));
+
+        assert!(runs.stop("k"), "a registered run must be stoppable");
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!runs.is_running("k"));
+        // Stopping twice is not an error, just a no-op.
+        assert!(!runs.stop("k"));
+    }
+
+    #[tokio::test]
+    async fn finished_runs_are_reaped() {
+        let mut runs = RunningSessions::default();
+        let handle = tokio::spawn(async {});
+        runs.register(
+            "done".to_string(),
+            handle,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+        // Let the task complete before reaping.
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        runs.reap_finished();
+        assert!(runs.running_keys().is_empty());
+    }
+
+    #[test]
+    fn a_stopped_session_is_not_reported_as_completed() {
+        let mut manager = SessionManager::new();
+        let key = manager.spawn_subagent("main", "half-done work", None, None);
+        manager.stop_session(&key).unwrap();
+
+        let session = manager.get(&key).unwrap();
+        assert_eq!(session.status, SessionStatus::Stopped);
+        assert!(session.finished_ms.is_some());
+    }
 
     #[test]
     fn test_session_creation() {

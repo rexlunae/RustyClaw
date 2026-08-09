@@ -890,9 +890,9 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
 
 /// Sync wrapper for process tool.
 ///
-/// Not the gateway's path — `process` is dispatched async-native. Anything
-/// reaching this from the blocking pool runs unidentified and therefore sees
-/// only unowned sessions.
+/// Not the gateway's path — `process` is dispatched async-native — but the
+/// blocking dispatch carries the caller identity across, so a call arriving
+/// here sees the same ownership as one taken inline.
 #[instrument(skip(args, _workspace_dir), fields(action))]
 pub fn exec_process(args: &Value, _workspace_dir: &Path) -> ToolResult {
     process_action(args, crate::tool_caller::current().as_deref())
