@@ -130,7 +130,9 @@ pub(crate) fn handle_skill_subcommand(
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
                 return CommandResponse {
-                    messages: vec!["Usage: /skill publish <name> accept-license-terms".to_string()],
+                    messages: vec![
+                        "Usage: /skill publish <name> <version> accept-license-terms".to_string(),
+                    ],
                     action: CommandAction::None,
                 };
             }
@@ -149,9 +151,12 @@ pub(crate) fn handle_skill_subcommand(
                 .unwrap_or("");
             if version.is_empty() {
                 return CommandResponse {
+                    // `parts` starts at the subcommand, so joining it drops
+                    // the leading `/skill` and prints something that is not a
+                    // command.
                     messages: vec![format!(
-                        "Give the version to publish, e.g. `{} 1.2.0 accept-license-terms`.",
-                        parts[..2].join(" ")
+                        "Give the version to publish, e.g. `/skill publish {name} 1.2.0 \
+                         accept-license-terms`."
                     )],
                     action: CommandAction::None,
                 };
@@ -834,8 +839,8 @@ pub(crate) fn handle_clawhub_subcommand(
             if version.is_empty() {
                 return CommandResponse {
                     messages: vec![format!(
-                        "Give the version to publish, e.g. `{} 1.2.0 accept-license-terms`.",
-                        parts[..2].join(" ")
+                        "Give the version to publish, e.g. `/clawhub publish {name} 1.2.0 \
+                         accept-license-terms`."
                     )],
                     action: CommandAction::None,
                 };
