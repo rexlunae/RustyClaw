@@ -153,6 +153,44 @@ mod serialization {
         );
     }
 
+    /// `provider` and `clear_thread` sit at the tail of `CronUpsertRequest`,
+    /// where a positional encoding requires new fields to go.
+    ///
+    /// Asserted structurally rather than by eye: two payloads differing only
+    /// in the two appended fields must agree byte-for-byte up to where the
+    /// older record ended. A field inserted mid-record would perturb bytes
+    /// before that point, and an older gateway would then read every
+    /// following value one slot out — a wake saved against the wrong model,
+    /// rather than a decode error anyone would notice.
+    #[test]
+    fn cron_upsert_appends_its_new_fields_at_the_tail() {
+        fn payload(provider: Option<&str>, clear_thread: bool) -> ClientPayload {
+            ClientPayload::CronUpsertRequest {
+                id: Some("job-1".into()),
+                name: "nightly".into(),
+                expr: "every 24h".into(),
+                payload: "summarize the day".into(),
+                paused: false,
+                agent_turn: true,
+                model: Some("claude-opus".into()),
+                thread_id: Some(7),
+                provider: provider.map(str::to_string),
+                clear_thread,
+            }
+        }
+
+        // In the older record both tail fields are one byte each: an absent
+        // `Option` discriminant and a `false`.
+        let old = serialize_frame(&payload(None, false)).unwrap();
+        let new = serialize_frame(&payload(Some("anthropic"), true)).unwrap();
+        let shared = old.len() - 2;
+        assert_eq!(
+            old[..shared],
+            new[..shared],
+            "the two fields are not at the end of the record"
+        );
+    }
+
     /// Plugins had no wire representation at all before this: the manager was
     /// gateway-side only, so a client's plugin panel had nothing to render.
     #[test]

@@ -537,6 +537,8 @@ pub(super) async fn handle_command_action(
                     provider: None,
                     model,
                     thread_id,
+                    // A fresh job has no thread to unpin.
+                    clear_thread: false,
                 })
                 .await
                 .context("sending CronUpsert")

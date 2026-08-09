@@ -774,15 +774,25 @@ pub enum ClientPayload {
         paused: bool,
         #[serde(default)]
         agent_turn: bool,
-        /// Provider the pinned model belongs to. Absent from older clients,
-        /// which is read as "follow the gateway's provider" — the behaviour
-        /// they were built against.
-        #[serde(default)]
-        provider: Option<String>,
         #[serde(default)]
         model: Option<String>,
         #[serde(default)]
         thread_id: Option<u64>,
+        /// Provider the pinned model belongs to. Absent from older clients,
+        /// which is read as "follow the gateway's provider" — the behaviour
+        /// they were built against.
+        ///
+        /// Last, like every field added here: bincode is positional, so a
+        /// field inserted mid-record would make a peer that lacks it read
+        /// every following value one slot out — a wake silently saved
+        /// against the wrong model rather than a clean decode failure.
+        #[serde(default)]
+        provider: Option<String>,
+        /// Unpin the wake from its thread, returning it to the foreground.
+        /// `thread_id: None` cannot say this — it already means "unchanged",
+        /// which is all an older client can express.
+        #[serde(default)]
+        clear_thread: bool,
     },
     /// Perform an action on a cron job.
     CronActionRequest {

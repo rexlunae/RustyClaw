@@ -854,6 +854,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                     provider,
                                     model,
                                     thread_id,
+                                    clear_thread,
                                 } => {
                                     client
                                         .send(GatewayCommand::CronUpsert {
@@ -868,6 +869,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                             provider,
                                             model,
                                             thread_id,
+                                            clear_thread,
                                         })
                                         .await
                                         .context("sending CronUpsert")?;

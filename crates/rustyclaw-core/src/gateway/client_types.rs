@@ -763,17 +763,26 @@ pub enum GatewayCommand {
         /// The payload is a scheduled agent turn (prompt), not a note.
         #[serde(default)]
         agent_turn: bool,
-        /// Provider the pinned model belongs to. `None` follows whichever
-        /// provider the gateway is on, which is what jobs did before this
-        /// field existed.
-        #[serde(default)]
-        provider: Option<String>,
         /// Model override for the scheduled turn.
         #[serde(default)]
         model: Option<String>,
         /// Thread the wake uses for context and lands its response in.
         #[serde(default)]
         thread_id: Option<u64>,
+        /// Provider the pinned model belongs to. `None` follows whichever
+        /// provider the gateway is on, which is what jobs did before this
+        /// field existed.
+        #[serde(default)]
+        provider: Option<String>,
+        /// Unpin the wake from its thread, returning it to the foreground.
+        ///
+        /// Needed because `thread_id: None` already means "leave the thread
+        /// as it is" — the only thing an older client can say. Without a
+        /// separate signal, deliberately choosing "foreground" for a job
+        /// currently pinned to a thread is indistinguishable from not
+        /// mentioning the thread at all, and the pin silently survives.
+        #[serde(default)]
+        clear_thread: bool,
     },
 
     /// Pause/resume/run/remove a cron job.
@@ -1381,9 +1390,10 @@ impl GatewayCommand {
                 payload,
                 paused,
                 agent_turn,
-                provider,
                 model,
                 thread_id,
+                provider,
+                clear_thread,
             } => ClientFrame {
                 frame_type: ClientFrameType::CronUpsertRequest,
                 payload: ClientPayload::CronUpsertRequest {
@@ -1393,9 +1403,10 @@ impl GatewayCommand {
                     payload,
                     paused,
                     agent_turn,
-                    provider,
                     model,
                     thread_id,
+                    provider,
+                    clear_thread,
                 },
             },
             GatewayCommand::CronAction { id, action } => ClientFrame {
