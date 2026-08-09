@@ -654,7 +654,16 @@ impl SkillManager {
             upload_target_is_acceptable(&registry, &upload).map_err(SkillError::msg)?;
         }
 
-        let stored: StoredUpload = client
+        // A checked URL that 30x-redirects is an unchecked URL: reqwest
+        // follows up to ten by default, and the destination is never
+        // re-examined. Refusing to follow keeps the check meaningful — the
+        // upload URL is one-shot and issued for this request, so there is no
+        // legitimate reason for it to bounce.
+        let upload_client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| SkillError::context("Failed to build the upload client", e))?;
+        let stored: StoredUpload = upload_client
             .post(&ticket.upload_url)
             .header(reqwest::header::CONTENT_TYPE, "text/markdown")
             .body(content.clone())
