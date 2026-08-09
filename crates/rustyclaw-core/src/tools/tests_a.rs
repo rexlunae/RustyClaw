@@ -1229,7 +1229,11 @@ fn attach_run(key: &str) {
 fn spawned(task: &str, parent: Option<String>) -> String {
     let key = {
         let mut mgr = crate::sessions::session_manager().lock().unwrap();
-        mgr.spawn_subagent("main", task, None, parent)
+        let key = mgr.spawn_subagent("main", task, None, parent);
+        if let Some(session) = mgr.get_mut(&key) {
+            session.background = true;
+        }
+        key
     };
     attach_run(&key);
     key
@@ -1355,6 +1359,63 @@ async fn test_sessions_kill_leaves_a_siblings_subtree_alone() {
         crate::sessions::SessionStatus::Active,
         "another run's children must not be swept up"
     );
+}
+
+#[test]
+fn test_sessions_kill_clears_a_run_that_died_without_recording() {
+    // A panicking task never writes its ending, and its registry entry is
+    // reaped — so the record sits Active with nothing attached. Refusing here
+    // would leave a phantom running job that nobody can clear and that eats
+    // one of the caller's sub-agent slots forever.
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        let key = mgr.spawn_subagent("main", "died mid-run", None, None);
+        // Started as a background run, but no live task remains.
+        mgr.get_mut(&key).unwrap().background = true;
+        key
+    };
+
+    let out = exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws()).unwrap();
+    assert!(out.contains("Cleared"), "{out}");
+    assert!(out.contains("without recording an outcome"), "{out}");
+
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    let session = mgr.get(&key).unwrap();
+    assert_ne!(
+        session.status,
+        crate::sessions::SessionStatus::Active,
+        "the zombie must not keep consuming a delegation slot"
+    );
+    assert!(session.finished_ms.is_some());
+}
+
+#[test]
+fn test_a_cleared_zombie_frees_its_delegation_slot() {
+    // The fan-out ceiling counts Active sub-agents, so a record stuck Active
+    // is a permanently spent slot.
+    let parent = "thread:slot-test";
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        let key = mgr.spawn_subagent("main", "zombie", None, Some(parent.to_string()));
+        mgr.get_mut(&key).unwrap().background = true;
+        key
+    };
+    let before = crate::sessions::session_manager()
+        .lock()
+        .unwrap()
+        .active_subagents_of(parent);
+    assert_eq!(before, 1);
+
+    // Owned by `thread:slot-test`, so run the kill under that identity.
+    crate::tool_caller::with_caller_blocking(Some(parent.to_string()), || {
+        exec_sessions_kill(&json!({"sessionKey": key}), ws()).unwrap()
+    });
+
+    let after = crate::sessions::session_manager()
+        .lock()
+        .unwrap()
+        .active_subagents_of(parent);
+    assert_eq!(after, 0, "clearing the zombie must free the slot");
 }
 
 #[tokio::test]
