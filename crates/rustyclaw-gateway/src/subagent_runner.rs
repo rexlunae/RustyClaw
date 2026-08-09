@@ -89,11 +89,22 @@ async fn run_inner(
     // ── Record the run as a session (visible via sessions_list) ─────────
     let agent_id =
         rustyclaw_core::runtime_ctx::get_active_agent().unwrap_or_else(|| "main".to_string());
+    // Whoever asked for this run. Recorded as the parent so the fan-out
+    // ceiling can count a caller's children — including a sub-agent's own,
+    // since a sub-agent spawning sub-agents is how a single prompt turns
+    // into an unbounded tree.
+    let parent_caller = rustyclaw_core::tool_caller::current();
     let session_key = {
         let mut mgr = session_manager()
             .lock()
             .map_err(|_| anyhow::anyhow!("Session manager lock poisoned"))?;
-        let key = mgr.spawn_subagent(&agent_id, task, label.clone(), None);
+        if let Some(parent_key) = parent_caller.as_deref() {
+            let running = mgr.active_subagents_of(parent_key);
+            if let Err(e) = rustyclaw_core::tool_limits::check_subagent(running) {
+                anyhow::bail!("{e}");
+            }
+        }
+        let key = mgr.spawn_subagent(&agent_id, task, label.clone(), parent_caller.clone());
         if let Some(session) = mgr.get_mut(&key) {
             session.add_message("system", &format!("subagent profile: {}", profile.id));
             session.add_message("user", task);

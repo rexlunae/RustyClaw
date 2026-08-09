@@ -905,6 +905,21 @@ impl ProcessManager {
             .filter(|s| Self::accessible(s, caller_id))
     }
 
+    /// How many still-running sessions `caller_id` owns.
+    ///
+    /// Counts only sessions *stamped* with this caller, not the unowned ones
+    /// it can also reach: a concurrency ceiling should bound what a caller has
+    /// started, and charging it for shared legacy sessions it did not create
+    /// would lock it out for someone else's work.
+    pub fn running_owned_by(&self, caller_id: &str) -> usize {
+        self.sessions
+            .values()
+            .filter(|s| {
+                s.status == SessionStatus::Running && s.owner_id.as_deref() == Some(caller_id)
+            })
+            .count()
+    }
+
     /// List the sessions `caller_id` may see.
     pub fn list_owned(&self, caller_id: Option<&str>) -> Vec<&ExecSession> {
         self.sessions

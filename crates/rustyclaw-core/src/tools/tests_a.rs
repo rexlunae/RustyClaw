@@ -1522,3 +1522,99 @@ async fn unidentified_callers_still_share_unowned_processes() {
         .await
         .expect("cleanup");
 }
+
+// ── Concurrency ceilings (issue #232) ───────────────────────────────────────
+
+/// A caller cannot accumulate background processes without limit.
+///
+/// The rate limit bounds how fast they start; this is the separate ceiling on
+/// how many may be running at once, which is what a slow loop would otherwise
+/// walk straight past.
+#[tokio::test]
+#[cfg(unix)]
+async fn background_processes_are_capped_per_caller() {
+    use crate::tool_caller::with_caller;
+    use crate::tool_limits::{self, ToolLimitsConfig};
+    use crate::tools::runtime::{exec_execute_command_streaming, exec_process_async};
+
+    tool_limits::install(ToolLimitsConfig {
+        max_background_processes: 2,
+        ..Default::default()
+    });
+
+    async fn spawn_as(caller: &'static str) -> Result<String, crate::tools::error::ToolError> {
+        with_caller(
+            caller,
+            exec_execute_command_streaming(
+                &json!({"command": "sleep 30", "background": true}),
+                ws(),
+                None,
+            ),
+        )
+        .await
+    }
+
+    fn session_id_of(out: &str) -> String {
+        serde_json::from_str::<Value>(out)
+            .ok()
+            .and_then(|v| v["sessionId"].as_str().map(String::from))
+            .expect("sessionId in spawn result")
+    }
+
+    // Every id this test creates, so cleanup touches only its own. Removing
+    // whatever `list` returns would reach unowned sessions belonging to other
+    // tests — those are shared by design.
+    let mut mine: Vec<(&'static str, String)> = Vec::new();
+
+    for _ in 0..2 {
+        let out = spawn_as("thread:capped").await.expect("within the ceiling");
+        mine.push(("thread:capped", session_id_of(&out)));
+    }
+
+    let err = spawn_as("thread:capped")
+        .await
+        .expect_err("a third background process must be refused")
+        .to_string();
+    assert!(
+        err.contains("Too many background processes"),
+        "refusal should say why, got: {err}"
+    );
+
+    // The ceiling is per caller: another caller is unaffected by this one
+    // having filled its quota.
+    let other = spawn_as("thread:elsewhere")
+        .await
+        .expect("another caller has its own ceiling");
+    mine.push(("thread:elsewhere", session_id_of(&other)));
+
+    // Freeing a slot lets the original caller start another.
+    let (owner, first) = mine[0].clone();
+    with_caller(
+        owner,
+        exec_process_async(&json!({"action": "remove", "sessionId": first}), ws()),
+    )
+    .await
+    .expect("owner removes its own session");
+    mine.remove(0);
+
+    let after_free = spawn_as("thread:capped").await;
+    assert!(
+        after_free.is_ok(),
+        "removing one should free a slot: {after_free:?}"
+    );
+    mine.push((
+        "thread:capped",
+        session_id_of(&after_free.expect("spawned")),
+    ));
+
+    for (caller, id) in mine {
+        with_caller(
+            caller,
+            exec_process_async(&json!({"action": "remove", "sessionId": id}), ws()),
+        )
+        .await
+        .ok();
+    }
+
+    tool_limits::install(ToolLimitsConfig::default());
+}

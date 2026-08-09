@@ -266,15 +266,18 @@ async fn run_inner(
             } else {
                 // Scoped to this trigger's session, so a process it leaves
                 // running is not reachable from another trigger or from a
-                // user conversation.
-                match rustyclaw_core::tool_caller::with_caller(
-                    session_key.clone(),
-                    tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
-                )
-                .await
-                {
-                    Ok(text) => (text, false),
+                // user conversation, and its tool budget is its own.
+                match rustyclaw_core::tool_limits::check_rate(Some(&session_key), &tc.name) {
                     Err(err) => (err.to_string(), true),
+                    Ok(()) => match rustyclaw_core::tool_caller::with_caller(
+                        session_key.clone(),
+                        tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                    )
+                    .await
+                    {
+                        Ok(text) => (text, false),
+                        Err(err) => (err.to_string(), true),
+                    },
                 }
             };
             tool_results.push(ToolCallResult {

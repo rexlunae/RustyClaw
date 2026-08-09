@@ -911,15 +911,22 @@ async fn process_incoming_message(
 
                 // Scoped to the conversation, so a process backgrounded for
                 // one chat is not reachable from another chat or from the
-                // TUI's threads.
-                let result = rustyclaw_core::tool_caller::with_caller(
-                    format!("messenger:{conv_key}"),
-                    rustyclaw_core::downloads::with_origin(
-                        rustyclaw_core::downloads::headless_origin(&agent_id),
-                        tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
-                    ),
-                )
-                .await;
+                // TUI's threads, and its tool budget is its own.
+                let caller = format!("messenger:{conv_key}");
+                let result = match rustyclaw_core::tool_limits::check_rate(Some(&caller), &tc.name)
+                {
+                    Err(err) => Err(err.to_string().into()),
+                    Ok(()) => {
+                        rustyclaw_core::tool_caller::with_caller(
+                            caller,
+                            rustyclaw_core::downloads::with_origin(
+                                rustyclaw_core::downloads::headless_origin(&agent_id),
+                                tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                            ),
+                        )
+                        .await
+                    }
+                };
 
                 match result {
                     Ok(output) => {
@@ -959,17 +966,23 @@ async fn process_incoming_message(
                     Err(err) => (err.to_string(), true),
                 }
             } else {
-                match rustyclaw_core::tool_caller::with_caller(
-                    format!("messenger:{conv_key}"),
-                    rustyclaw_core::downloads::with_origin(
-                        rustyclaw_core::downloads::headless_origin(&agent_id),
-                        tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
-                    ),
-                )
-                .await
                 {
-                    Ok(text) => (text, false),
-                    Err(err) => (err.to_string(), true),
+                    let caller = format!("messenger:{conv_key}");
+                    match rustyclaw_core::tool_limits::check_rate(Some(&caller), &tc.name) {
+                        Err(err) => (err.to_string(), true),
+                        Ok(()) => match rustyclaw_core::tool_caller::with_caller(
+                            caller,
+                            rustyclaw_core::downloads::with_origin(
+                                rustyclaw_core::downloads::headless_origin(&agent_id),
+                                tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(text) => (text, false),
+                            Err(err) => (err.to_string(), true),
+                        },
+                    }
                 }
             };
 
