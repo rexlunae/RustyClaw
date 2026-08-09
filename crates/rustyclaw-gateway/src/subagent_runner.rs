@@ -22,7 +22,7 @@ use std::path::Path;
 
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{ChatMessage, ProviderRequest, ToolCallResult};
-use rustyclaw_core::sessions::session_manager;
+use rustyclaw_core::sessions::{SessionStatus, session_manager};
 use rustyclaw_core::subagents::{SubagentProfile, SubagentRegistry};
 use rustyclaw_core::tools::{self, ToolPermission};
 use rustyclaw_core::workspace_context::{SessionType, SubagentInfo, WorkspaceContext};
@@ -140,18 +140,26 @@ async fn run_inner(
     .await;
 
     // ── Close the session record ────────────────────────────────────────
+    //
+    // Through `settle`, which leaves an already-ended record alone. A
+    // subagent runs inside its caller's task, so when `sessions_kill` stops a
+    // background run it marks this record Stopped too — correctly, since
+    // aborting the ancestor ends this run with it. If the synchronous run
+    // happened to return inside the stop's grace window, an unconditional
+    // `complete()` here would flip that Stopped back to Completed and report
+    // cancelled work as having succeeded.
     if let Ok(mut mgr) = session_manager().lock() {
         if let Some(session) = mgr.get_mut(&session_key) {
             match &result {
                 Ok(text) => {
                     session.add_message("assistant", text);
-                    session.complete();
+                    session.settle(SessionStatus::Completed);
                 }
                 Err(e) => {
                     session.add_message("assistant", &format!("error: {:#}", e));
-                    session.error();
+                    session.settle(SessionStatus::Error);
                 }
-            }
+            };
         }
     }
 

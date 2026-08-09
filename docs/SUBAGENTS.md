@@ -29,8 +29,43 @@ tool registry.
    `sessions_list` and `sessions_history` show it.
 
 The run is synchronous from the parent's perspective — the parent's tool
-call blocks until the subagent finishes. For coarse, asynchronous
-delegation to full agents, `sessions_spawn` remains available.
+call blocks until the subagent finishes.
+
+## Background runs: `sessions_spawn` and `sessions_kill`
+
+When the parent should *not* wait, `sessions_spawn` starts a full agent in
+the background and returns a `sessionKey` immediately. The parent keeps
+working and polls with `sessions_history` or `session_status`.
+
+Because the turn that started it has long since returned, a background run
+plays by stricter rules than a `subagent_run`:
+
+- **Nothing else will stop it.** `sessions_kill(sessionKey=…)` — or
+  `label=…` — is the only thing that ends a run before it finishes. It
+  stops the whole subtree: a spawned run's own spawns are owned by an
+  identity that disappears with it, so leaving them behind would make them
+  unstoppable. The session history stays readable afterwards.
+- **It cannot ask you anything.** No user is attached, so any tool your
+  permission policy does not set to `Allow` is refused rather than left
+  waiting for an approval that can never arrive. Do not delegate work that
+  needs an approval or an answer.
+- **It is bounded.** 25 tool rounds, 300s per model call, and an optional
+  `runTimeoutSeconds`. Across the whole process,
+  `tool_limits.max_background_sessions` (default 32) caps how many runs can
+  be alive at once — a per-caller limit cannot bound depth, since each
+  spawned run is a caller in its own right.
+
+A run's history records which tools it called and whether they succeeded,
+but never their output: session records are broadly readable, and tool
+results and error messages can carry secrets.
+
+Only a background run can be stopped this way. `sessions_kill` refuses a
+main session or a synchronous `subagent_run`, rather than reporting
+success for work it cannot actually interrupt.
+
+`sessions_spawn` takes `task`, and optionally `label`, `agentId`, `model`,
+and `runTimeoutSeconds`. (`thinking` and `cleanup` were previously listed
+but never implemented; they have been removed.)
 
 ## Built-in profiles
 
