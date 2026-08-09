@@ -217,6 +217,46 @@ struct RunningTurn {
     stream_id: u64,
     handle: tokio::task::JoinHandle<()>,
     cancel: crate::ToolCancelFlag,
+    /// Direction the user added after this turn started, waiting to be read
+    /// at the turn's next round.
+    steers: SteerQueue,
+}
+
+/// Messages the user sent while a turn was already running.
+///
+/// A turn used to be a closed loop: once it started, nothing the user typed
+/// could reach it until it finished. This is the side channel that lets them
+/// redirect work in progress instead of waiting to correct it afterwards.
+///
+/// A plain mutex rather than a channel because both ends want the *set* of
+/// pending messages, not a stream: the reader task appends, and the turn
+/// takes everything at once between rounds.
+pub type SteerQueue = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// Append one message, reporting whether it landed.
+///
+/// A poisoned lock drops it and says so, so the caller can tell the user it
+/// did not land rather than leaving them to wonder why nothing changed.
+fn push_steer(queue: &SteerQueue, text: String) -> bool {
+    match queue.lock() {
+        Ok(mut q) => {
+            q.push(text);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Take everything queued, leaving the queue empty.
+///
+/// A poisoned lock yields nothing rather than failing the turn: losing a
+/// steering message is bad, but killing the turn the user was trying to
+/// steer is worse.
+pub fn drain_steers(queue: &SteerQueue) -> Vec<String> {
+    queue
+        .lock()
+        .map(|mut q| std::mem::take(&mut *q))
+        .unwrap_or_default()
 }
 
 /// Tracks active model tasks per thread.
@@ -247,6 +287,7 @@ impl ActiveTasks {
         stream_id: u64,
         handle: tokio::task::JoinHandle<()>,
         cancel: crate::ToolCancelFlag,
+        steers: SteerQueue,
     ) {
         if let Some(old) = self.tasks.insert(
             thread_id,
@@ -255,6 +296,7 @@ impl ActiveTasks {
                 stream_id,
                 handle,
                 cancel,
+                steers,
             },
         ) {
             old.handle.abort();
@@ -353,6 +395,29 @@ impl ActiveTasks {
         }
     }
 
+    /// Hand `text` to this thread's running turn, to be read at its next
+    /// round. Returns whether there was a turn to hand it to.
+    pub fn queue_steer(&self, thread_id: &ThreadId, text: String) -> bool {
+        match self.tasks.get(thread_id) {
+            Some(turn) => push_steer(&turn.steers, text),
+            None => false,
+        }
+    }
+
+    /// Hand `text` to the only running turn, if exactly one is running.
+    ///
+    /// Mirrors [`request_cancel_sole`](Self::request_cancel_sole): a client
+    /// that names no thread means the turn it can see, which is unambiguous
+    /// only while one is running. With several, this declines rather than
+    /// steering the wrong conversation — which here would put words into a
+    /// transcript the user was not looking at.
+    pub fn queue_steer_sole(&self, text: String) -> bool {
+        match self.tasks.values().next() {
+            Some(turn) if self.tasks.len() == 1 => push_steer(&turn.steers, text),
+            _ => false,
+        }
+    }
+
     /// Stop every running turn outright.
     ///
     /// Dropping a `JoinHandle` detaches its task rather than ending it, so a
@@ -431,6 +496,10 @@ mod tests {
         Arc::new(AtomicBool::new(false))
     }
 
+    fn queue() -> SteerQueue {
+        Arc::new(std::sync::Mutex::new(Vec::new()))
+    }
+
     /// Open a turn through a sink and read back the thread it announced.
     async fn announced_thread_of(turn_thread: ThreadId) -> Option<u64> {
         let (tx, mut rx) = channel();
@@ -449,6 +518,111 @@ mod tests {
             ServerPayload::StreamStart { thread_id } => thread_id,
             other => panic!("Expected StreamStart, got {other:?}"),
         }
+    }
+
+    /// A steer reaches the turn running for the thread it names, and the
+    /// turn takes it whole at its next round.
+    #[tokio::test]
+    async fn a_steer_reaches_the_named_turn() {
+        let mut tasks = ActiveTasks::new();
+        let (a, b) = (ThreadId(1), ThreadId(2));
+        let (qa, qb) = (queue(), queue());
+        tasks.register(
+            a,
+            1,
+            1,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            qa.clone(),
+        );
+        tasks.register(
+            b,
+            2,
+            2,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            qb.clone(),
+        );
+
+        assert!(tasks.queue_steer(&a, "actually use sqlite".into()));
+        assert_eq!(drain_steers(&qa), vec!["actually use sqlite".to_string()]);
+        assert!(
+            drain_steers(&qb).is_empty(),
+            "the other conversation must not receive it"
+        );
+    }
+
+    /// Draining empties the queue, so the next round does not re-read
+    /// direction the model has already been given.
+    #[tokio::test]
+    async fn draining_consumes_the_queue() {
+        let mut tasks = ActiveTasks::new();
+        let thread = ThreadId(3);
+        let q = queue();
+        tasks.register(
+            thread,
+            1,
+            1,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            q.clone(),
+        );
+
+        tasks.queue_steer(&thread, "first".into());
+        tasks.queue_steer(&thread, "second".into());
+        // Order matters: these are sentences the user typed in sequence.
+        assert_eq!(
+            drain_steers(&q),
+            vec!["first".to_string(), "second".to_string()]
+        );
+        assert!(drain_steers(&q).is_empty(), "a drained queue stays drained");
+    }
+
+    /// Steering a thread with nothing running reports that it did not land,
+    /// rather than silently dropping the user's words.
+    #[tokio::test]
+    async fn steering_an_idle_thread_reports_failure() {
+        let tasks = ActiveTasks::new();
+        assert!(!tasks.queue_steer(&ThreadId(9), "hello".into()));
+    }
+
+    /// An unaddressed steer goes to the only running turn, and declines when
+    /// that is ambiguous — the same rule Stop follows, and for a sharper
+    /// reason: guessing here types the user's words into a conversation they
+    /// were not looking at.
+    #[tokio::test]
+    async fn an_unaddressed_steer_needs_exactly_one_turn() {
+        let mut tasks = ActiveTasks::new();
+        assert!(
+            !tasks.queue_steer_sole("nobody home".into()),
+            "no turns means nothing to steer"
+        );
+
+        let q = queue();
+        tasks.register(
+            ThreadId(1),
+            1,
+            1,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            q.clone(),
+        );
+        assert!(tasks.queue_steer_sole("the only one".into()));
+        assert_eq!(drain_steers(&q), vec!["the only one".to_string()]);
+
+        tasks.register(
+            ThreadId(2),
+            2,
+            2,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            queue(),
+        );
+        assert!(
+            !tasks.queue_steer_sole("which one?".into()),
+            "with two running turns this must decline rather than guess"
+        );
+        assert!(drain_steers(&q).is_empty(), "and must not have picked one");
     }
 
     /// A turn with no thread announces no thread.
@@ -484,7 +658,14 @@ mod tests {
     async fn displacing_a_running_turn_returns_its_stream() {
         let mut tasks = ActiveTasks::new();
         let thread = ThreadId(1);
-        tasks.register(thread, 1, 41, tokio::spawn(std::future::pending()), flag());
+        tasks.register(
+            thread,
+            1,
+            41,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            queue(),
+        );
         assert_eq!(
             tasks.displace(&thread),
             Some(41),
@@ -492,7 +673,7 @@ mod tests {
         );
         assert_eq!(tasks.displace(&thread), None, "nothing is left to displace");
 
-        tasks.register(thread, 2, 42, tokio::spawn(async {}), flag());
+        tasks.register(thread, 2, 42, tokio::spawn(async {}), flag(), queue());
         while !tasks.is_finished_for_test(&thread) {
             tokio::task::yield_now().await;
         }
@@ -515,10 +696,24 @@ mod tests {
     async fn a_stale_completion_gets_no_licence() {
         let mut tasks = ActiveTasks::new();
         let thread = ThreadId(1);
-        tasks.register(thread, 1, 1, tokio::spawn(std::future::pending()), flag());
+        tasks.register(
+            thread,
+            1,
+            1,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            queue(),
+        );
         // The thread's next turn displaces the first and registers itself.
         tasks.displace(&thread);
-        tasks.register(thread, 2, 3, tokio::spawn(std::future::pending()), flag());
+        tasks.register(
+            thread,
+            2,
+            3,
+            tokio::spawn(std::future::pending()),
+            flag(),
+            queue(),
+        );
 
         assert!(
             !tasks.remove_if(&thread, 1),
@@ -538,7 +733,7 @@ mod tests {
     async fn a_reaped_completion_keeps_its_licence() {
         let mut tasks = ActiveTasks::new();
         let thread = ThreadId(1);
-        tasks.register(thread, 1, 1, tokio::spawn(async {}), flag());
+        tasks.register(thread, 1, 1, tokio::spawn(async {}), flag(), queue());
         while !tasks.is_finished_for_test(&thread) {
             tokio::task::yield_now().await;
         }
@@ -566,6 +761,7 @@ mod tests {
             1,
             tokio::spawn(std::future::pending()),
             flag_a.clone(),
+            queue(),
         );
         tasks.register(
             b,
@@ -573,6 +769,7 @@ mod tests {
             2,
             tokio::spawn(std::future::pending()),
             flag_b.clone(),
+            queue(),
         );
 
         assert!(tasks.request_cancel(&a));
@@ -586,7 +783,7 @@ mod tests {
         );
 
         // Starting a third turn cannot disturb the Stop already recorded.
-        tasks.register(ThreadId(3), 3, 3, tokio::spawn(async {}), flag());
+        tasks.register(ThreadId(3), 3, 3, tokio::spawn(async {}), flag(), queue());
         assert!(flag_a.load(Ordering::Relaxed));
 
         assert!(
@@ -613,7 +810,7 @@ mod tests {
         let thread = ThreadId(7);
 
         // Turn A finishes and is reaped when the follow-up message arrives.
-        tasks.register(thread, 1, 1, tokio::spawn(async {}), flag());
+        tasks.register(thread, 1, 1, tokio::spawn(async {}), flag(), queue());
         while !tasks.is_finished_for_test(&thread) {
             tokio::task::yield_now().await;
         }
@@ -627,6 +824,7 @@ mod tests {
             2,
             tokio::spawn(std::future::pending()),
             b_cancel.clone(),
+            queue(),
         );
 
         // Only now does A's queued completion get drained.
@@ -652,7 +850,7 @@ mod tests {
         let handle = tokio::spawn(std::future::pending::<()>());
         let watch = tokio::spawn(async {});
         drop(watch);
-        tasks.register(ThreadId(1), 1, 1, handle, flag());
+        tasks.register(ThreadId(1), 1, 1, handle, flag(), queue());
 
         tasks.abort_all();
 
@@ -675,7 +873,7 @@ mod tests {
         });
 
         let mut tasks = ActiveTasks::new();
-        tasks.register(ThreadId(1), 1, 1, handle, flag());
+        tasks.register(ThreadId(1), 1, 1, handle, flag(), queue());
         drop(tasks);
 
         let closed = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -691,7 +889,7 @@ mod tests {
     async fn starting_a_turn_displaces_a_finished_one_on_another_thread() {
         let mut tasks = ActiveTasks::new();
         let stale = flag();
-        tasks.register(ThreadId(1), 1, 1, tokio::spawn(async {}), stale);
+        tasks.register(ThreadId(1), 1, 1, tokio::spawn(async {}), stale, queue());
 
         // What the spawn path does before registering.
         tasks.abort_all();
@@ -702,6 +900,7 @@ mod tests {
             2,
             tokio::spawn(std::future::pending()),
             fresh.clone(),
+            queue(),
         );
 
         assert_eq!(tasks.running_threads().len(), 1);
@@ -724,6 +923,7 @@ mod tests {
             1,
             tokio::spawn(std::future::pending()),
             only.clone(),
+            queue(),
         );
 
         assert!(
@@ -741,6 +941,7 @@ mod tests {
             2,
             tokio::spawn(std::future::pending()),
             second.clone(),
+            queue(),
         );
         assert!(!tasks.request_cancel_sole());
         assert!(!second.load(Ordering::Relaxed));
@@ -755,7 +956,7 @@ mod tests {
         let mut tasks = ActiveTasks::new();
         let thread = ThreadId(7);
         let handle = tokio::spawn(async {});
-        tasks.register(thread, 1, 1, handle, flag());
+        tasks.register(thread, 1, 1, handle, flag(), queue());
 
         // Let the task run to completion without touching the channel the
         // connection loop would normally drain.

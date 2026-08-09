@@ -497,6 +497,9 @@ pub(crate) async fn dispatch_text_message(
     // a sidebar update tells the client which conversation to display, and
     // that is wherever the user has since moved to.
     foreground: &crate::ForegroundCell,
+    // Direction the user added after this turn started. Drained between
+    // rounds below.
+    steers: &crate::concurrent::SteerQueue,
 ) -> Result<()> {
     // Identity every tool in this turn runs under. Threads are the isolation
     // boundary here: two conversations on one gateway must not be able to
@@ -603,6 +606,37 @@ pub(crate) async fn dispatch_text_message(
             protocol::server::send_info(writer, "Tool loop cancelled by user.").await?;
             providers::send_response_done(writer).await?;
             return Ok(());
+        }
+
+        // ── Take any direction added since the last round ───────────
+        //
+        // Deliberately alongside the cancellation check: this is the point
+        // where the turn looks up to see whether the user has said anything
+        // while it was working. Appended as ordinary user messages, so the
+        // model reads mid-turn direction exactly as it would have read it
+        // at the start — no special casing in the prompt.
+        let queued_steers = crate::concurrent::drain_steers(steers);
+        if !queued_steers.is_empty() {
+            debug!(
+                count = queued_steers.len(),
+                "Folding mid-turn steering into the conversation"
+            );
+            {
+                let mut tm = thread_mgr.lock().await;
+                if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
+                    for text in &queued_steers {
+                        // Recorded in the thread as well as the request, or
+                        // the message would vanish on reload and the
+                        // transcript would show the model reacting to
+                        // something nobody said.
+                        thread.add_message(rustyclaw_core::threads::MessageRole::User, text);
+                    }
+                }
+                crate::helpers::persist_threads(&mut tm, threads_path);
+            }
+            for text in queued_steers {
+                resolved.messages.push(ChatMessage::text("user", &text));
+            }
         }
 
         // Refresh the bearer token before each model call.

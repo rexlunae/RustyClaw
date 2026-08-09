@@ -103,6 +103,12 @@ pub(crate) enum UserInput {
         name: String,
         code: Option<String>,
     },
+    /// Extra direction for a turn that is already running, rather than a new
+    /// turn of its own.
+    Steer {
+        text: String,
+        thread_id: Option<u64>,
+    },
     /// Re-request secrets list from gateway (after a mutation)
     RefreshSecrets,
     /// Re-request a gateway panel's data (after a mutation)
@@ -403,6 +409,13 @@ impl App {
                         })
                         .await
                         .context("sending Chat")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
+                }
+                Ok(UserInput::Steer { text, thread_id }) => {
+                    client
+                        .send(GatewayCommand::Steer { thread_id, text })
+                        .await
+                        .context("sending Steer")
                         .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::AuthResponse(code)) => {

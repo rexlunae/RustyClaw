@@ -1357,6 +1357,28 @@ pub(super) fn handle_normal_key(
                                 tx,
                                 UserInput::Command(val.trim_start_matches('/').to_string()),
                             );
+                        } else if foreground_thread_id
+                            .get()
+                            .is_some_and(|t| in_flight.read().contains(&t))
+                        {
+                            // The thread is already working. Rather than
+                            // making the user wait to correct it, hand the
+                            // text to the running turn — it reads it at its
+                            // next step. No new turn, so the spinner and the
+                            // in-flight marker stay exactly as they are.
+                            let mut m = messages.read().clone();
+                            m.push(DisplayMessage::user(&val));
+                            m.push(DisplayMessage::info(
+                                "Queued — the agent will read this at its next step.",
+                            ));
+                            messages.set(m);
+                            crate::app::events::submit(
+                                tx,
+                                UserInput::Steer {
+                                    text: val,
+                                    thread_id: foreground_thread_id.get(),
+                                },
+                            );
                         } else {
                             let mut m = messages.read().clone();
                             m.push(DisplayMessage::user(&val));

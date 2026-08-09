@@ -590,6 +590,18 @@ pub enum GatewayCommand {
     #[serde(rename = "cancel")]
     Cancel { thread_id: Option<u64> },
 
+    /// Add direction to a turn that is already running, without stopping it.
+    ///
+    /// The running turn picks this up between rounds, so the model reads it
+    /// on its next pass rather than after the whole turn finishes. Aimed like
+    /// [`Cancel`](Self::Cancel): naming no thread targets the sole running
+    /// turn.
+    #[serde(rename = "steer")]
+    Steer {
+        thread_id: Option<u64>,
+        text: String,
+    },
+
     /// Control a running exec process (pause/resume/stop/kill)
     #[serde(rename = "process_control")]
     ProcessControl {
@@ -1175,6 +1187,10 @@ impl GatewayCommand {
             GatewayCommand::Cancel { thread_id } => ClientFrame {
                 frame_type: ClientFrameType::Cancel,
                 payload: ClientPayload::Cancel { thread_id },
+            },
+            GatewayCommand::Steer { thread_id, text } => ClientFrame {
+                frame_type: ClientFrameType::Steer,
+                payload: ClientPayload::Steer { thread_id, text },
             },
             GatewayCommand::ProcessControl { pid, action } => ClientFrame {
                 frame_type: ClientFrameType::ProcessControl,

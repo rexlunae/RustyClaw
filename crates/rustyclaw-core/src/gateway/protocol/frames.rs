@@ -199,6 +199,8 @@ pub enum ClientFrameType {
     ThreadMove = 96,
     /// Export a thread's transcript as a Markdown file.
     ThreadExport = 97,
+    /// Add a steering message to a turn that is already running.
+    Steer = 98,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -992,6 +994,18 @@ pub enum ClientPayload {
     Cancel {
         #[serde(default)]
         thread_id: Option<u64>,
+    },
+    /// Extra direction for a turn that is already running.
+    ///
+    /// Aimed the same way `Cancel` is: the client names the turn it means,
+    /// because with turns running per thread the gateway cannot resolve
+    /// "the running turn" on the user's behalf. A client that names nothing
+    /// gets the sole running turn, which is unambiguous exactly while one
+    /// is running.
+    Steer {
+        #[serde(default)]
+        thread_id: Option<u64>,
+        text: String,
     },
 
     // NOTE: everything below is appended after `Cancel` on purpose. bincode
