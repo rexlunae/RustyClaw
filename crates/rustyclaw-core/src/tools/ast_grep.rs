@@ -491,10 +491,10 @@ pub fn ast_grep_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
             name: "action".into(),
-            description: "Action: 'setup' (install ast-grep), 'search' / 'run' (match or \
-                          rewrite by AST pattern), 'scan' (run lint rules from a config), \
-                          'test' (test rules), 'new' (create a rule, test, or project), \
-                          'version', 'help'."
+            description: "Action: 'setup' (or 'install' — install ast-grep), 'search' \
+                          (match by AST pattern), 'run' (match and rewrite), 'scan' (run \
+                          lint rules from a config), 'test' (test rules), 'new' (create a \
+                          rule, test, or project), 'version', 'help'."
                 .into(),
             param_type: "string".into(),
             required: true,
@@ -509,7 +509,11 @@ pub fn ast_grep_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "rewrite".into(),
-            description: "Replacement pattern for 'run'. Omit to search without rewriting.".into(),
+            // Not marked `required`, because most actions do not take it —
+            // but 'run' refuses without it, and searching without rewriting
+            // is the separate 'search' action, not an omission here.
+            description: "Replacement pattern. Required by 'run'; unused by every other action."
+                .into(),
             param_type: "string".into(),
             required: false,
         },
@@ -527,7 +531,9 @@ pub fn ast_grep_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "context".into(),
-            description: "Lines of context to show around each match (default: 0).".into(),
+            description: "Lines of context to show around each match, for 'search' \
+                          (default: 0)."
+                .into(),
             param_type: "integer".into(),
             required: false,
         },
