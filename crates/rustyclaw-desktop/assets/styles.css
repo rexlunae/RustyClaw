@@ -107,6 +107,59 @@
     --bulma-text-weak-l: 62%;
     /* Slightly lift primary for contrast on dark */
     --bulma-primary-l: 60%;
+
+    /* The `is-light` variants do not follow the scheme on their own.
+     *
+     * Bulma 1.x builds every light chip — `tag is-info is-light`, the
+     * notifications, the light buttons and selects — out of two lightness
+     * tokens it declares only for the light scheme: a 90% background and a
+     * ~15% foreground. Its `[data-theme="dark"]` block leaves both alone, so
+     * a pill that reads as a soft tint on white stays a near-white slab on a
+     * 7% shell — bright enough to pull the eye off whatever the dialog is
+     * actually saying.
+     *
+     * Inverting the pair here fixes every one of them at once, and keeps the
+     * markup on stock Bulma classes rather than bespoke per-dialog styling.
+     * The hue and saturation still come from the colour itself, so an info
+     * chip stays blue and a danger chip stays red; only the lightnesses
+     * swap ends. 22% against the 80% steps below clears WCAG AA (5.9:1 at
+     * the worst pairing, warning) for every colour in the palette. */
+    --bulma-light-l: 22%;
+    --bulma-light-invert-l: 80%;
+    --bulma-primary-light-invert-l: var(--bulma-primary-80-l);
+    --bulma-link-light-invert-l: var(--bulma-link-80-l);
+    --bulma-info-light-invert-l: var(--bulma-info-80-l);
+    --bulma-success-light-invert-l: var(--bulma-success-80-l);
+    --bulma-warning-light-invert-l: var(--bulma-warning-80-l);
+    --bulma-danger-light-invert-l: var(--bulma-danger-80-l);
+}
+
+/* Notifications need the rule, not the token: Bulma writes the 90% into
+ * `.notification.is-<colour>.is-light` literally instead of reading
+ * `--bulma-light-l`, so the override above cannot reach them. The
+ * three-class selectors below outrank it; the bare one is listed last for
+ * `notification is-light` on its own. */
+[data-theme="dark"] .notification.is-primary.is-light,
+[data-theme="dark"] .notification.is-link.is-light,
+[data-theme="dark"] .notification.is-info.is-light,
+[data-theme="dark"] .notification.is-success.is-light,
+[data-theme="dark"] .notification.is-warning.is-light,
+[data-theme="dark"] .notification.is-danger.is-light,
+[data-theme="dark"] .notification.is-white.is-light,
+[data-theme="dark"] .notification.is-black.is-light,
+[data-theme="dark"] .notification.is-dark.is-light,
+[data-theme="dark"] .notification.is-text.is-light,
+[data-theme="dark"] .notification.is-light {
+    --bulma-notification-background-l: var(--bulma-light-l);
+}
+
+/* `.has-text-grey` is a hard-coded `#69748c !important` in Bulma, with no
+ * dark variant — 4.0:1 on the shell and 3.5:1 on a raised panel, under AA
+ * for the small print it is mostly used on (field hints, timestamps, empty
+ * states). Point it at the scheme's weak text instead, which the block
+ * above already tunes for this background. */
+[data-theme="dark"] .has-text-grey {
+    color: var(--bulma-text-weak) !important;
 }
 
 [data-theme="light"] {
