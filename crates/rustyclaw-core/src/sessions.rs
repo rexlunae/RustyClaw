@@ -152,6 +152,16 @@ impl Session {
         self.finished_ms = Some(now_millis());
     }
 
+    /// Mark session as stopped before it finished its task.
+    ///
+    /// Stamping `finished_ms` is the point: [`runtime_secs`](Self::runtime_secs)
+    /// measures to *now* while it is unset, so a stopped run would otherwise
+    /// keep reporting a growing runtime as though it were still working.
+    pub fn stop(&mut self) {
+        self.status = SessionStatus::Stopped;
+        self.finished_ms = Some(now_millis());
+    }
+
     /// Get runtime in seconds.
     pub fn runtime_secs(&self) -> u64 {
         let end = self.finished_ms.unwrap_or_else(now_millis);
@@ -321,8 +331,7 @@ impl SessionManager {
             .sessions
             .get_mut(key)
             .ok_or_else(|| SessionError::NotFound(key.to_string()))?;
-        session.status = SessionStatus::Stopped;
-        session.finished_ms = Some(now_millis());
+        session.stop();
         Ok(())
     }
 }
