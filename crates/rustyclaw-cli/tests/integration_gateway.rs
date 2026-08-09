@@ -21,21 +21,13 @@ fn find_port() -> u16 {
         .port()
 }
 
-/// Find the rustyclaw binary
-fn find_binary() -> Option<PathBuf> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-
-    let debug = PathBuf::from(&manifest_dir).join("target/debug/rustyclaw");
-    if debug.exists() {
-        return Some(debug);
-    }
-
-    let release = PathBuf::from(&manifest_dir).join("target/release/rustyclaw");
-    if release.exists() {
-        return Some(release);
-    }
-
-    which::which("rustyclaw").ok()
+/// The binary under test.
+///
+/// Cargo builds it as a dependency of this test and passes the path in. The
+/// old lookup fell back to `which`, which would have run whatever version
+/// happened to be installed on the machine rather than the one being tested.
+fn find_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyclaw"))
 }
 
 /// Test gateway process wrapper
@@ -47,22 +39,29 @@ struct TestGateway {
 
 impl TestGateway {
     async fn start() -> Option<Self> {
-        let binary = find_binary()?;
+        let binary = find_binary();
         let port = find_port();
-        let workspace = std::env::temp_dir().join(format!("rustyclaw-test-{}-{}", std::process::id(), port));
+        let workspace =
+            std::env::temp_dir().join(format!("rustyclaw-test-{}-{}", std::process::id(), port));
 
         std::fs::create_dir_all(&workspace).ok()?;
 
         // Write minimal config
         let config_path = workspace.join("config.toml");
-        std::fs::write(&config_path, format!(r#"
+        std::fs::write(
+            &config_path,
+            format!(
+                r#"
 [gateway]
 port = {port}
 host = "127.0.0.1"
 
 [provider]
 kind = "mock"
-"#)).ok()?;
+"#
+            ),
+        )
+        .ok()?;
 
         let process = Command::new(&binary)
             .arg("gateway")
@@ -75,7 +74,11 @@ kind = "mock"
             .spawn()
             .ok()?;
 
-        let gateway = Self { process, port, workspace };
+        let gateway = Self {
+            process,
+            port,
+            workspace,
+        };
 
         // Wait for gateway to start
         for _ in 0..50 {
@@ -95,9 +98,9 @@ kind = "mock"
 
 impl Drop for TestGateway {
     fn drop(&mut self) {
-        let _ = self.process.kill();
-        let _ = self.process.wait();
-        let _ = std::fs::remove_dir_all(&self.workspace);
+        self.process.kill().ok();
+        self.process.wait().ok();
+        std::fs::remove_dir_all(&self.workspace).ok();
     }
 }
 
@@ -112,8 +115,9 @@ async fn test_gateway_websocket_connect() {
 
     let result = timeout(
         Duration::from_secs(5),
-        tokio_tungstenite::connect_async(&gateway.ws_url())
-    ).await;
+        tokio_tungstenite::connect_async(&gateway.ws_url()),
+    )
+    .await;
 
     assert!(result.is_ok(), "Should connect within timeout");
     let (ws, _) = result.unwrap().expect("Should connect successfully");
@@ -138,8 +142,10 @@ async fn test_gateway_chat_message() {
         "type": "chat",
         "content": "Hello, test!"
     });
-    use tokio_tungstenite::tungstenite::{Utf8Bytes, Bytes};
-    ws.send(Message::Text(Utf8Bytes::from(msg.to_string()))).await.expect("Should send");
+    use tokio_tungstenite::tungstenite::Utf8Bytes;
+    ws.send(Message::Text(Utf8Bytes::from(msg.to_string())))
+        .await
+        .expect("Should send");
 
     // Wait for any response
     let response = timeout(Duration::from_secs(10), ws.next()).await;
@@ -161,7 +167,9 @@ async fn test_gateway_ping_pong() {
 
     // Send ping
     use tokio_tungstenite::tungstenite::Bytes;
-    ws.send(Message::Ping(Bytes::from(vec![1, 2, 3]))).await.expect("Should send ping");
+    ws.send(Message::Ping(Bytes::from(vec![1, 2, 3])))
+        .await
+        .expect("Should send ping");
 
     // Wait for pong
     let response = timeout(Duration::from_secs(5), ws.next()).await;
@@ -186,7 +194,9 @@ async fn test_gateway_graceful_close() {
         .expect("Should connect");
 
     // Send close
-    ws.send(Message::Close(None)).await.expect("Should send close");
+    ws.send(Message::Close(None))
+        .await
+        .expect("Should send close");
 
     // Should receive close back
     let response = timeout(Duration::from_secs(5), ws.next()).await;

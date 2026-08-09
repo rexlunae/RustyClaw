@@ -1,10 +1,10 @@
-Launch the desktop UI
+Start the gateway (daemon/background)
 
-Usage: rustyclaw desktop [OPTIONS]
+Usage: rustyclaw gateway start [OPTIONS]
 
 Options:
   -c, --config <PATH>       Path to a config.toml file [env: RUSTYCLAW_CONFIG=]
-      --url <URL>           Gateway URL (overrides config)
+      --log-level <LEVEL>   Log level filter for the gateway (e.g., "debug", "rustyclaw=debug,info")
       --settings-dir <DIR>  Settings directory (default: ~/.rustyclaw) [env: RUSTYCLAW_SETTINGS_DIR=]
       --profile <PROFILE>   Isolate state under ~/.rustyclaw-<PROFILE> [env: RUSTYCLAW_PROFILE=]
       --no-color            Disable coloured terminal output [env: NO_COLOR=]

@@ -13,6 +13,7 @@ Options:
       --session <KEY>        Session key to resume
       --message <TEXT>       Send an initial message instead of entering interactive mode
       --soul <PATH>          Path to SOUL.md [env: RUSTYCLAW_SOUL=]
+      --no-dialog            Skip the interactive connection dialog and use the saved/default gateway URL when --url is not provided
       --skills <DIR>         Skills directory [env: RUSTYCLAW_SKILLS=]
       --no-secrets           Disable secrets storage
       --gateway <WS_URL>     Gateway WebSocket URL (ws://…) [env: RUSTYCLAW_GATEWAY=]

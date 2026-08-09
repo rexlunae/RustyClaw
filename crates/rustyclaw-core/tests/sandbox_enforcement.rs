@@ -3,14 +3,14 @@
 //! These tests verify that the C1 security fix properly enforces
 //! sandbox restrictions and prevents unauthorized access to protected paths.
 
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Test that PathValidation mode blocks access to deny_read paths
 #[test]
 fn test_path_validation_blocks_deny_read() {
-    use rustyclaw::sandbox::{run_sandboxed, SandboxMode, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxMode, SandboxPolicy, run_sandboxed};
 
     let temp_workspace = TempDir::new().unwrap();
     let temp_credentials = TempDir::new().unwrap();
@@ -35,7 +35,9 @@ fn test_path_validation_blocks_deny_read() {
         result.is_err(),
         "PathValidation should block access to deny_read paths"
     );
-    let error = result.unwrap_err();
+    // `SandboxError` is a typed enum now; assert on how it reads, since the
+    // message is what a user of the tool actually sees.
+    let error = result.unwrap_err().to_string();
     assert!(
         error.contains("Access denied") || error.contains("protected"),
         "Error message should indicate access denial, got: {}",
@@ -46,7 +48,7 @@ fn test_path_validation_blocks_deny_read() {
 /// Test that PathValidation mode allows access to workspace
 #[test]
 fn test_path_validation_allows_workspace() {
-    use rustyclaw::sandbox::{run_sandboxed, SandboxMode, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxMode, SandboxPolicy, run_sandboxed};
 
     let temp_workspace = TempDir::new().unwrap();
     let temp_credentials = TempDir::new().unwrap();
@@ -78,7 +80,7 @@ fn test_path_validation_allows_workspace() {
 /// Test that deny_exec prevents execution from protected paths
 #[test]
 fn test_path_validation_blocks_deny_exec() {
-    use rustyclaw::sandbox::{run_sandboxed, SandboxMode, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxMode, SandboxPolicy, run_sandboxed};
 
     let temp_workspace = TempDir::new().unwrap();
     let temp_scripts = TempDir::new().unwrap();
@@ -112,7 +114,7 @@ fn test_path_validation_blocks_deny_exec() {
         result.is_err(),
         "PathValidation should block execution from deny_exec paths"
     );
-    let error = result.unwrap_err();
+    let error = result.unwrap_err().to_string();
     assert!(
         error.contains("Execution denied") || error.contains("deny_exec"),
         "Error message should indicate execution denial, got: {}",
@@ -123,7 +125,7 @@ fn test_path_validation_blocks_deny_exec() {
 /// Test that extract_paths_from_command correctly identifies paths
 #[test]
 fn test_extract_paths_basic() {
-    use rustyclaw::sandbox::extract_paths_from_command;
+    use rustyclaw_core::sandbox::extract_paths_from_command;
 
     // Test absolute paths
     let paths = extract_paths_from_command("cat /etc/passwd");
@@ -148,7 +150,7 @@ fn test_extract_paths_basic() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_bubblewrap_respects_deny_read() {
-    use rustyclaw::sandbox::{wrap_with_bwrap, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxPolicy, wrap_with_bwrap};
 
     let temp_workspace = TempDir::new().unwrap();
     let credentials_path = PathBuf::from("/credentials");
@@ -183,7 +185,7 @@ fn test_bubblewrap_respects_deny_read() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_bubblewrap_respects_deny_write() {
-    use rustyclaw::sandbox::{wrap_with_bwrap, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxPolicy, wrap_with_bwrap};
 
     let temp_workspace = TempDir::new().unwrap();
 
@@ -200,13 +202,13 @@ fn test_bubblewrap_respects_deny_write() {
     let workspace_str = temp_workspace.path().to_str().unwrap();
 
     // Find the workspace mount arguments
-    let has_ro_bind = args.windows(3).any(|w| {
-        w[0] == "--ro-bind" && w[1] == workspace_str && w[2] == workspace_str
-    });
+    let has_ro_bind = args
+        .windows(3)
+        .any(|w| w[0] == "--ro-bind" && w[1] == workspace_str && w[2] == workspace_str);
 
-    let has_rw_bind = args.windows(3).any(|w| {
-        w[0] == "--bind" && w[1] == workspace_str && w[2] == workspace_str
-    });
+    let has_rw_bind = args
+        .windows(3)
+        .any(|w| w[0] == "--bind" && w[1] == workspace_str && w[2] == workspace_str);
 
     assert!(
         has_ro_bind || !has_rw_bind,
@@ -218,7 +220,7 @@ fn test_bubblewrap_respects_deny_write() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_bubblewrap_respects_deny_exec() {
-    use rustyclaw::sandbox::{wrap_with_bwrap, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxPolicy, wrap_with_bwrap};
 
     let temp_workspace = TempDir::new().unwrap();
 
@@ -245,7 +247,7 @@ fn test_bubblewrap_respects_deny_exec() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_macos_sandbox_deny_exec() {
-    use rustyclaw::sandbox::{wrap_with_macos_sandbox, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxPolicy, wrap_with_macos_sandbox};
 
     let temp_workspace = TempDir::new().unwrap();
 
@@ -279,7 +281,7 @@ fn test_macos_sandbox_deny_exec() {
 /// Test fail-closed behavior: sandbox setup failure prevents execution
 #[test]
 fn test_fail_closed_behavior() {
-    use rustyclaw::sandbox::{validate_path, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxPolicy, validate_path};
 
     // Create temporary directories
     let temp_protected = TempDir::new().unwrap();
@@ -307,10 +309,10 @@ fn test_fail_closed_behavior() {
 /// Test that sandbox modes gracefully degrade
 #[test]
 fn test_sandbox_mode_detection() {
-    use rustyclaw::sandbox::{Sandbox, SandboxMode};
+    use rustyclaw_core::sandbox::{Sandbox, SandboxMode};
 
     // Test that Auto mode can be created
-    let policy = rustyclaw::sandbox::SandboxPolicy::default();
+    let policy = rustyclaw_core::sandbox::SandboxPolicy::default();
     let sandbox = Sandbox::with_mode(SandboxMode::Auto, policy);
 
     // Effective mode should be one of the supported modes
@@ -318,7 +320,11 @@ fn test_sandbox_mode_detection() {
     assert!(
         matches!(
             effective,
-            SandboxMode::Landlock | SandboxMode::Bubblewrap | SandboxMode::MacOSSandbox | SandboxMode::PathValidation | SandboxMode::None
+            SandboxMode::Landlock
+                | SandboxMode::Bubblewrap
+                | SandboxMode::MacOSSandbox
+                | SandboxMode::PathValidation
+                | SandboxMode::None
         ),
         "Effective mode should be a valid sandbox mode"
     );
@@ -328,7 +334,7 @@ fn test_sandbox_mode_detection() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_command_wrapping_preserves_args() {
-    use rustyclaw::sandbox::{wrap_with_bwrap, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxPolicy, wrap_with_bwrap};
 
     let temp_workspace = TempDir::new().unwrap();
 
@@ -347,7 +353,10 @@ fn test_command_wrapping_preserves_args() {
 
     // The command should be passed after "--" separator
     let separator_idx = args.iter().position(|a| a == "--");
-    assert!(separator_idx.is_some(), "Bwrap args should contain -- separator");
+    assert!(
+        separator_idx.is_some(),
+        "Bwrap args should contain -- separator"
+    );
 
     // After separator should be: sh -c "command"
     let cmd_args = &args[separator_idx.unwrap() + 1..];
@@ -360,7 +369,7 @@ fn test_command_wrapping_preserves_args() {
 /// Benchmark: Verify sandbox overhead is reasonable
 #[test]
 fn test_sandbox_performance() {
-    use rustyclaw::sandbox::{run_sandboxed, SandboxMode, SandboxPolicy};
+    use rustyclaw_core::sandbox::{SandboxMode, SandboxPolicy, run_sandboxed};
     use std::time::Instant;
 
     let temp_workspace = TempDir::new().unwrap();
@@ -375,7 +384,7 @@ fn test_sandbox_performance() {
 
     // Measure time to validate a simple command
     let start = Instant::now();
-    let _ = run_sandboxed("echo test", &policy, SandboxMode::PathValidation);
+    run_sandboxed("echo test", &policy, SandboxMode::PathValidation).ok();
     let duration = start.elapsed();
 
     // PathValidation should add minimal overhead (< 1000ms for simple command)

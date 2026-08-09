@@ -2,6 +2,24 @@
 
 use clap::Args;
 use rustyclaw_core::config::Config;
+use rustyclaw_core::daemon;
+
+/// How the local gateway is doing, in one word.
+///
+/// `status` promises gateway state in its own help text and used to print
+/// only a URL, and only when one was configured — so the most common reason
+/// to run it, "is the thing up?", was the one question it did not answer.
+/// Read from the same daemon probe `gateway status` uses, so the two cannot
+/// disagree.
+fn gateway_state(config: &Config) -> String {
+    match daemon::status(&config.settings_dir) {
+        daemon::DaemonStatus::Running { pid } => format!("running (PID {pid})"),
+        daemon::DaemonStatus::Stale { pid } => {
+            format!("not running (stale PID file for {pid})")
+        }
+        daemon::DaemonStatus::Stopped => "not running".to_string(),
+    }
+}
 
 /// Arguments for `rustyclaw status`.
 #[derive(Debug, Args, Default)]
@@ -37,8 +55,9 @@ pub(crate) fn run(config: &Config, args: &StatusArgs) {
             }
         }
         if let Some(gw) = &config.gateway_url {
-            println!("  \"gateway_url\": \"{}\"", gw);
+            println!("  \"gateway_url\": \"{}\",", gw);
         }
+        println!("  \"gateway\": \"{}\"", gateway_state(config));
         println!("}}");
     } else {
         use rustyclaw_core::theme as t;
@@ -85,6 +104,7 @@ pub(crate) fn run(config: &Config, args: &StatusArgs) {
         if let Some(gw) = &config.gateway_url {
             println!("{}", t::label_value("Gateway URL ", gw));
         }
+        println!("{}", t::label_value("Gateway     ", &gateway_state(config)));
         if args.verbose || args.all {
             println!(
                 "{}",

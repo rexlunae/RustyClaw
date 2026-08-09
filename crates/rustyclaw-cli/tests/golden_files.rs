@@ -7,29 +7,21 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+/// Relative to the crate root, which is where Cargo runs an integration test.
 const GOLDEN_DIR: &str = "tests/golden";
 
 /// Get help output for a command
 fn get_help(args: &[&str]) -> String {
-    // Try the built binary first
-    let binary_path = concat!(env!("CARGO_MANIFEST_DIR"), "/target/debug/rustyclaw");
-
     let mut all_args: Vec<&str> = args.to_vec();
     all_args.push("--help");
 
-    let output = if std::path::Path::new(binary_path).exists() {
-        Command::new(binary_path)
-            .args(&all_args)
-            .output()
-            .expect("Failed to execute rustyclaw")
-    } else {
-        let mut cmd_args = vec!["run", "--bin", "rustyclaw", "--quiet", "--"];
-        cmd_args.extend(&all_args);
-        Command::new("cargo")
-            .args(&cmd_args)
-            .output()
-            .expect("Failed to execute cargo run")
-    };
+    // Cargo builds the binary as a dependency of this test and hands over its
+    // path — no profile-directory guess, and no `cargo run` fallback that
+    // would start a build from inside one.
+    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
+        .args(&all_args)
+        .output()
+        .expect("Failed to execute rustyclaw");
 
     String::from_utf8_lossy(&output.stdout).to_string()
 }
@@ -65,12 +57,20 @@ fn check_golden(name: &str, actual: &str) {
         let expected_lines: Vec<&str> = expected.lines().collect();
 
         let mut diff = String::new();
-        diff.push_str(&format!("Golden file mismatch: {}\n", golden_path.display()));
+        diff.push_str(&format!(
+            "Golden file mismatch: {}\n",
+            golden_path.display()
+        ));
         diff.push_str("Run with UPDATE_GOLDEN=1 to update.\n\n");
 
         for (i, (a, e)) in actual_lines.iter().zip(expected_lines.iter()).enumerate() {
             if a != e {
-                diff.push_str(&format!("Line {}: \n  expected: {}\n  actual:   {}\n", i + 1, e, a));
+                diff.push_str(&format!(
+                    "Line {}: \n  expected: {}\n  actual:   {}\n",
+                    i + 1,
+                    e,
+                    a
+                ));
             }
         }
 
@@ -182,19 +182,10 @@ fn test_golden_skills_list_help() {
 
 #[test]
 fn test_golden_version() {
-    let binary_path = concat!(env!("CARGO_MANIFEST_DIR"), "/target/debug/rustyclaw");
-
-    let output = if std::path::Path::new(binary_path).exists() {
-        Command::new(binary_path)
-            .args(["--version"])
-            .output()
-            .expect("Failed to execute rustyclaw")
-    } else {
-        Command::new("cargo")
-            .args(["run", "--bin", "rustyclaw", "--quiet", "--", "--version"])
-            .output()
-            .expect("Failed to execute rustyclaw")
-    };
+    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
+        .args(["--version"])
+        .output()
+        .expect("Failed to execute rustyclaw");
 
     let version = String::from_utf8_lossy(&output.stdout).to_string();
 

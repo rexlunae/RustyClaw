@@ -7,22 +7,13 @@ use std::process::Command;
 
 /// Helper to run rustyclaw with args and capture output
 fn run_rustyclaw(args: &[&str]) -> (String, String, i32) {
-    // Try the built binary first (faster, more reliable in test context)
-    let binary_path = concat!(env!("CARGO_MANIFEST_DIR"), "/target/debug/rustyclaw");
-    
-    let output = if std::path::Path::new(binary_path).exists() {
-        Command::new(binary_path)
-            .args(args)
-            .output()
-            .expect("Failed to execute rustyclaw binary")
-    } else {
-        // Fallback to cargo run with explicit binary
-        Command::new("cargo")
-            .args(["run", "--bin", "rustyclaw", "--quiet", "--"])
-            .args(args)
-            .output()
-            .expect("Failed to execute cargo run")
-    };
+    // Cargo builds the binary as a dependency of this test and hands over its
+    // path, so there is no guessing at a profile directory and no fallback to
+    // `cargo run` (which would recurse into a fresh build from inside one).
+    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
+        .args(args)
+        .output()
+        .expect("Failed to execute rustyclaw binary");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -36,7 +27,7 @@ fn run_rustyclaw(args: &[&str]) -> (String, String, i32) {
 #[test]
 fn test_help_shows_usage() {
     let (stdout, _, code) = run_rustyclaw(&["--help"]);
-    
+
     assert_eq!(code, 0, "Help should exit with code 0");
     assert!(stdout.contains("RustyClaw"), "Should contain app name");
     assert!(stdout.contains("Usage:"), "Should contain usage section");
@@ -45,7 +36,7 @@ fn test_help_shows_usage() {
 #[test]
 fn test_help_shows_subcommands() {
     let (stdout, _, _) = run_rustyclaw(&["--help"]);
-    
+
     // All expected subcommands
     let expected_commands = [
         "setup",
@@ -57,7 +48,7 @@ fn test_help_shows_subcommands() {
         "gateway",
         "skills",
     ];
-    
+
     for cmd in expected_commands {
         assert!(
             stdout.to_lowercase().contains(cmd),
@@ -70,9 +61,12 @@ fn test_help_shows_subcommands() {
 #[test]
 fn test_help_shows_global_options() {
     let (stdout, _, _) = run_rustyclaw(&["--help"]);
-    
+
     // Global options matching OpenClaw
-    assert!(stdout.contains("--config") || stdout.contains("-c"), "Should have --config/-c");
+    assert!(
+        stdout.contains("--config") || stdout.contains("-c"),
+        "Should have --config/-c"
+    );
     assert!(stdout.contains("--profile"), "Should have --profile");
     assert!(stdout.contains("--no-color"), "Should have --no-color");
 }
@@ -80,11 +74,17 @@ fn test_help_shows_global_options() {
 #[test]
 fn test_version_output() {
     let (stdout, _, code) = run_rustyclaw(&["--version"]);
-    
+
     assert_eq!(code, 0, "Version should exit with code 0");
-    assert!(stdout.contains("rustyclaw") || stdout.contains("RustyClaw"), "Should contain app name");
+    assert!(
+        stdout.contains("rustyclaw") || stdout.contains("RustyClaw"),
+        "Should contain app name"
+    );
     // Version format: rustyclaw X.Y.Z
-    assert!(stdout.contains('.'), "Should contain version number with dots");
+    assert!(
+        stdout.contains('.'),
+        "Should contain version number with dots"
+    );
 }
 
 // ── Subcommand Help Tests ───────────────────────────────────────────────────
@@ -92,15 +92,18 @@ fn test_version_output() {
 #[test]
 fn test_setup_help() {
     let (stdout, _, code) = run_rustyclaw(&["setup", "--help"]);
-    
+
     assert_eq!(code, 0);
-    assert!(stdout.contains("workspace") || stdout.contains("wizard"), "Setup should mention workspace or wizard");
+    assert!(
+        stdout.contains("workspace") || stdout.contains("wizard"),
+        "Setup should mention workspace or wizard"
+    );
 }
 
 #[test]
 fn test_gateway_help() {
     let (stdout, _, code) = run_rustyclaw(&["gateway", "--help"]);
-    
+
     assert_eq!(code, 0);
     // Gateway subcommands
     let expected = ["start", "stop", "status"];
@@ -116,28 +119,34 @@ fn test_gateway_help() {
 #[test]
 fn test_skills_help() {
     let (stdout, _, code) = run_rustyclaw(&["skills", "--help"]);
-    
+
     assert_eq!(code, 0);
-    assert!(stdout.to_lowercase().contains("list") || stdout.to_lowercase().contains("skill"),
-            "Skills help should mention list or skill management");
+    assert!(
+        stdout.to_lowercase().contains("list") || stdout.to_lowercase().contains("skill"),
+        "Skills help should mention list or skill management"
+    );
 }
 
 #[test]
 fn test_doctor_help() {
     let (stdout, _, code) = run_rustyclaw(&["doctor", "--help"]);
-    
+
     assert_eq!(code, 0);
-    assert!(stdout.contains("repair") || stdout.contains("check") || stdout.contains("health"),
-            "Doctor should mention repair/check/health");
+    assert!(
+        stdout.contains("repair") || stdout.contains("check") || stdout.contains("health"),
+        "Doctor should mention repair/check/health"
+    );
 }
 
 #[test]
 fn test_command_help() {
     let (stdout, _, code) = run_rustyclaw(&["command", "--help"]);
-    
+
     assert_eq!(code, 0);
-    assert!(stdout.contains("message") || stdout.contains("send") || stdout.contains("command"),
-            "Command should describe sending messages");
+    assert!(
+        stdout.contains("message") || stdout.contains("send") || stdout.contains("command"),
+        "Command should describe sending messages"
+    );
 }
 
 // ── Exit Code Tests ─────────────────────────────────────────────────────────
@@ -145,7 +154,7 @@ fn test_command_help() {
 #[test]
 fn test_unknown_command_exits_nonzero() {
     let (_, stderr, code) = run_rustyclaw(&["nonexistent-command-12345"]);
-    
+
     assert_ne!(code, 0, "Unknown command should exit with non-zero code");
     assert!(
         stderr.contains("error") || stderr.contains("unrecognized") || stderr.contains("invalid"),
@@ -156,7 +165,7 @@ fn test_unknown_command_exits_nonzero() {
 #[test]
 fn test_invalid_flag_exits_nonzero() {
     let (_, stderr, code) = run_rustyclaw(&["--nonexistent-flag-12345"]);
-    
+
     assert_ne!(code, 0, "Invalid flag should exit with non-zero code");
     assert!(
         stderr.contains("error") || stderr.contains("unexpected") || stderr.contains("invalid"),
@@ -170,7 +179,7 @@ fn test_invalid_flag_exits_nonzero() {
 fn test_env_var_config_recognized() {
     // This test verifies the env var is documented in help
     let (stdout, _, _) = run_rustyclaw(&["--help"]);
-    
+
     // The help should mention RUSTYCLAW_CONFIG or similar
     // (clap shows env vars in help when configured)
     assert!(
@@ -184,12 +193,15 @@ fn test_env_var_config_recognized() {
 #[test]
 fn test_status_runs_without_gateway() {
     let (stdout, stderr, code) = run_rustyclaw(&["status"]);
-    
+
     // Status should work even without a running gateway
     // It might show "not connected" or similar, but shouldn't crash
     let combined = format!("{}{}", stdout, stderr);
     assert!(
-        code == 0 || combined.contains("not") || combined.contains("error") || combined.contains("offline"),
+        code == 0
+            || combined.contains("not")
+            || combined.contains("error")
+            || combined.contains("offline"),
         "Status should either succeed or show meaningful error"
     );
 }
@@ -199,7 +211,7 @@ fn test_status_runs_without_gateway() {
 #[test]
 fn test_config_get_help() {
     let (stdout, _, code) = run_rustyclaw(&["config", "--help"]);
-    
+
     // Config should have get/set subcommands
     assert!(code == 0 || code == 2, "Config help should work");
     let combined = stdout.to_lowercase();

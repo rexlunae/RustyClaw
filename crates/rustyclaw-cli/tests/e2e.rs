@@ -7,16 +7,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Get the rustyclaw binary path
+/// The binary under test.
+///
+/// Cargo builds it as a dependency of this test and passes the path in, so
+/// the tests cannot silently run against a stale build — or none at all,
+/// which is what the old profile-directory guess did.
 fn binary_path() -> PathBuf {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-
-    let debug = PathBuf::from(&manifest_dir).join("target/debug/rustyclaw");
-    if debug.exists() {
-        return debug;
-    }
-
-    PathBuf::from(&manifest_dir).join("target/release/rustyclaw")
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyclaw"))
 }
 
 /// Create a temporary workspace
@@ -28,7 +25,6 @@ fn temp_workspace() -> PathBuf {
 
 /// E2E: Fresh setup and first run
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_fresh_setup() {
     let binary = binary_path();
     let workspace = temp_workspace();
@@ -48,7 +44,6 @@ fn test_e2e_fresh_setup() {
 
 /// E2E: CLI help works
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_help_works() {
     let binary = binary_path();
 
@@ -66,7 +61,6 @@ fn test_e2e_help_works() {
 
 /// E2E: Version command
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_version() {
     let binary = binary_path();
 
@@ -87,7 +81,6 @@ fn test_e2e_version() {
 
 /// E2E: Status command without gateway
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_status_no_gateway() {
     let binary = binary_path();
     let workspace = temp_workspace();
@@ -103,14 +96,15 @@ fn test_e2e_status_no_gateway() {
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    ).to_lowercase();
+    )
+    .to_lowercase();
 
     assert!(
-        combined.contains("not running") ||
-        combined.contains("offline") ||
-        combined.contains("stopped") ||
-        combined.contains("no gateway") ||
-        !output.status.success(), // Or just fail gracefully
+        combined.contains("not running")
+            || combined.contains("offline")
+            || combined.contains("stopped")
+            || combined.contains("no gateway")
+            || !output.status.success(), // Or just fail gracefully
         "Should indicate gateway not running: {combined}"
     );
 
@@ -119,7 +113,6 @@ fn test_e2e_status_no_gateway() {
 
 /// E2E: Gateway subcommand help
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_gateway_help() {
     let binary = binary_path();
 
@@ -137,7 +130,6 @@ fn test_e2e_gateway_help() {
 
 /// E2E: Skills list command
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_skills_list() {
     let binary = binary_path();
     let workspace = temp_workspace();
@@ -161,7 +153,6 @@ fn test_e2e_skills_list() {
 
 /// E2E: Config generation
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_config_generation() {
     let binary = binary_path();
     let workspace = temp_workspace();
@@ -171,10 +162,14 @@ fn test_e2e_config_generation() {
     // Or just verify we can read a config
 
     // Create a minimal config
-    fs::write(&config_path, r#"
+    fs::write(
+        &config_path,
+        r#"
 [provider]
 kind = "mock"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let _ = Command::new(&binary)
         .args(["doctor", "--config"])
@@ -216,7 +211,6 @@ async fn test_e2e_error_recovery() -> Result<()> {
 
 /// E2E: Workspace file operations
 #[test]
-#[ignore = "requires built binary"]
 fn test_e2e_workspace_operations() {
     let binary = binary_path();
     let workspace = temp_workspace();

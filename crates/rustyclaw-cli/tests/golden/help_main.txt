@@ -1,7 +1,6 @@
 RustyClaw — a super-lightweight super-capable agentic tool with improved security.
 
-Run without a subcommand to launch the TUI.
-Use `rustyclaw desktop` for the desktop client.
+Run without a subcommand to launch the TUI. Use `rustyclaw desktop` for the desktop client.
 
 Usage: rustyclaw [OPTIONS] [COMMAND]
 
@@ -13,45 +12,46 @@ Commands:
   config         Config helpers: get / set / unset
   doctor         Health checks + quick fixes for gateway and configuration
   tui            Launch the terminal UI
-    desktop        Launch the desktop UI
+  desktop        Launch the desktop UI
   command        Send a one-shot message / slash-command
-    ask            Send a prompt to the model and print the response (headless mode)
+  ask            Send a prompt to the model and print the response (headless mode)
   status         Show system status (gateway, model, workspace)
   gateway        Gateway management (start / stop / restart / status)
   skills         List / manage skills
   refresh-token  Refresh the GitHub Copilot session token from OpenClaw
   clawhub        ClawHub skill registry commands (search, install, publish, …)
+  swarm          Multi-agent swarm management (create, list, status, send, stop)
   help           Print this message or the help of the given subcommand(s)
 
 Options:
   -c, --config <PATH>
           Path to a config.toml file
-
+          
           [env: RUSTYCLAW_CONFIG=]
 
       --settings-dir <DIR>
           Settings directory (default: ~/.rustyclaw)
-
+          
           [env: RUSTYCLAW_SETTINGS_DIR=]
 
       --profile <PROFILE>
           Isolate state under ~/.rustyclaw-<PROFILE>
-
+          
           [env: RUSTYCLAW_PROFILE=]
 
       --no-color
           Disable coloured terminal output
-
+          
           [env: NO_COLOR=]
 
       --soul <PATH>
           Path to SOUL.md
-
+          
           [env: RUSTYCLAW_SOUL=]
 
       --skills <DIR>
           Skills directory
-
+          
           [env: RUSTYCLAW_SKILLS=]
 
       --no-secrets
@@ -59,7 +59,7 @@ Options:
 
       --gateway <WS_URL>
           Gateway WebSocket URL (ws://…)
-
+          
           [env: RUSTYCLAW_GATEWAY=]
 
   -h, --help
