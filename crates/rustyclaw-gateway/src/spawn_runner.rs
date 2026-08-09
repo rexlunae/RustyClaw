@@ -26,7 +26,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{ChatMessage, ProviderRequest, ToolCallResult};
-use rustyclaw_core::sessions::{SpawnRequest, SpawnRunner, running_sessions, session_manager};
+use rustyclaw_core::sessions::{
+    SessionStatus, SpawnRequest, SpawnRunner, running_sessions, session_manager,
+};
 use rustyclaw_core::tools;
 use tracing::{debug, info, warn};
 
@@ -215,13 +217,13 @@ impl SpawnRunner for GatewaySpawnRunner {
 /// A cancelled run is recorded as Stopped rather than Error: the parent
 /// polling it needs to tell "someone stopped this" from "this broke".
 ///
-/// One rule governs the whole function: **a record that has already ended
-/// keeps its ending.** A stop stamps the record and tells the caller so
-/// immediately, but the run then has [`STOP_GRACE`] to unwind — long enough
+/// The verdict is written through [`Session::settle`], which leaves an
+/// already-ended record alone. A stop stamps the record and tells the caller
+/// so immediately, but the run then has [`STOP_GRACE`] to unwind — long enough
 /// that a model call already in flight can come back with an answer. Letting
-/// that answer call `complete()` would flip Stopped to Completed and tell the
-/// parent that work the user cancelled had in fact succeeded. Whatever the run
-/// produces after the ending is written is a note on it, never a new verdict.
+/// that answer mark the run Completed would tell the parent that work the user
+/// cancelled had in fact succeeded. Whatever the run produces after the ending
+/// is written is appended as a note, never a new verdict.
 fn record_outcome(key: &str, outcome: anyhow::Result<String>, cancelled: bool) {
     let Ok(mut mgr) = session_manager().lock() else {
         return;
@@ -229,7 +231,7 @@ fn record_outcome(key: &str, outcome: anyhow::Result<String>, cancelled: bool) {
     let Some(session) = mgr.get_mut(key) else {
         return;
     };
-    let settled = session.status != rustyclaw_core::sessions::SessionStatus::Active;
+    let settled = session.status != SessionStatus::Active;
 
     match &outcome {
         Ok(text) => session.add_message("assistant", text),
@@ -237,20 +239,16 @@ fn record_outcome(key: &str, outcome: anyhow::Result<String>, cancelled: bool) {
         Err(e) => session.add_message("assistant", &format!("error: {e:#}")),
     }
 
-    if settled {
-        return;
-    }
-    // Through `stop()` rather than assigning the status, so the record gets an
-    // end time — `runtime_secs` measures to *now* while `finished_ms` is
-    // unset, and a stopped run would keep reporting a growing runtime as
-    // though it were still working.
-    if cancelled {
-        session.stop();
+    // `settle` stamps `finished_ms` alongside the status — `runtime_secs`
+    // measures to *now* while it is unset, so an unstamped record reports a
+    // runtime that keeps growing as though it were still working.
+    session.settle(if cancelled {
+        SessionStatus::Stopped
     } else if outcome.is_err() {
-        session.error();
+        SessionStatus::Error
     } else {
-        session.complete();
-    }
+        SessionStatus::Completed
+    });
 }
 
 /// Everything one run needs, owned so it can outlive the turn that started it.

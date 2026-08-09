@@ -162,6 +162,30 @@ impl Session {
         self.finished_ms = Some(now_millis());
     }
 
+    /// Record a terminal status, but only if the session has not already
+    /// ended. Returns whether it was applied.
+    ///
+    /// **A record that has already ended keeps its ending.** A run can be
+    /// stopped while still winding down — `sessions_kill` writes the ending
+    /// and tells the caller immediately, and the run may only notice seconds
+    /// later. If whatever it produces in that window could still call
+    /// [`complete`](Self::complete), a job the user cancelled would report
+    /// itself as having succeeded, and the agent that spawned it would act on
+    /// results that were never meant to exist.
+    ///
+    /// Use this from anywhere that closes a run it does not exclusively own.
+    /// [`complete`](Self::complete), [`error`](Self::error) and
+    /// [`stop`](Self::stop) stay unconditional for callers that are the sole
+    /// authority on a record's fate.
+    pub fn settle(&mut self, status: SessionStatus) -> bool {
+        if self.status != SessionStatus::Active {
+            return false;
+        }
+        self.status = status;
+        self.finished_ms = Some(now_millis());
+        true
+    }
+
     /// Get runtime in seconds.
     pub fn runtime_secs(&self) -> u64 {
         let end = self.finished_ms.unwrap_or_else(now_millis);

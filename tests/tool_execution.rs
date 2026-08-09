@@ -291,11 +291,46 @@ mod session_tools {
         let args = json!({
             "task": "Research and summarize topic X",
             "model": "gpt-4",
-            "timeoutSeconds": 300,
-            "cleanup": "delete"
+            "label": "research",
+            "runTimeoutSeconds": 300
         });
 
         assert!(args["task"].is_string());
+        assert!(args["runTimeoutSeconds"].is_number());
+    }
+
+    #[test]
+    fn test_sessions_kill_args() {
+        // Either identifier stops a background run; the tool requires one.
+        let by_key = json!({ "sessionKey": "agent:main:subagent:abc123" });
+        assert!(by_key["sessionKey"].is_string());
+
+        let by_label = json!({ "label": "research" });
+        assert!(by_label["label"].is_string());
+    }
+
+    #[test]
+    fn test_sessions_kill_reaches_the_model_with_its_schema() {
+        // Parameters are resolved lazily from a separate match, so a tool can
+        // be registered and still reach the model with an empty schema — it
+        // would then be uncallable. Check the schema the provider actually
+        // receives rather than the registry entry.
+        let tools = rustyclaw_core::tools::tools_openai();
+        let kill = tools
+            .iter()
+            .find(|t| t["function"]["name"] == "sessions_kill")
+            .expect("sessions_kill must be offered to the model");
+
+        let properties = &kill["function"]["parameters"]["properties"];
+        assert!(properties["sessionKey"].is_object());
+        assert!(properties["label"].is_object());
+        // Neither is required on its own — the tool accepts one or the other.
+        assert_eq!(
+            kill["function"]["parameters"]["required"]
+                .as_array()
+                .map(|r| r.len()),
+            Some(0)
+        );
     }
 
     #[test]
@@ -630,8 +665,8 @@ fn test_all_30_tools_have_tests() {
         "memory_search", "memory_get",
         // Cron (1)
         "cron",
-        // Sessions (6)
-        "sessions_list", "sessions_spawn", "sessions_send", "sessions_history", "session_status", "agents_list",
+        // Sessions (7)
+        "sessions_list", "sessions_spawn", "sessions_kill", "sessions_send", "sessions_history", "session_status", "agents_list",
         // Editing (1)
         "apply_patch",
         // Secrets (3)
@@ -658,5 +693,5 @@ fn test_all_30_tools_have_tests() {
         "ask_user",
     ];
 
-    assert_eq!(tools.len(), 55, "Should have exactly 55 tools");
+    assert_eq!(tools.len(), 56, "Should have exactly 56 tools");
 }
