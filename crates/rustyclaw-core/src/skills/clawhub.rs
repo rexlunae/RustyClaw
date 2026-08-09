@@ -229,8 +229,16 @@ struct StoredUpload {
 /// `/api/cli/publish` reply.
 #[derive(Debug, Clone, Deserialize)]
 struct PublishAccepted {
+    /// `None` when the reply omitted the flag.
+    ///
+    /// Not `false`. The HTTP status is the primary success signal, and the
+    /// registry's schema declares this field — but that schema has not been
+    /// confirmed against the live service, and defaulting a missing flag to
+    /// "rejected" would report a stored skill as unpublished and send the
+    /// user into a re-publish that then collides as a duplicate version.
+    /// Only an explicit `false` is a rejection.
     #[serde(default)]
-    ok: bool,
+    ok: Option<bool>,
     #[serde(rename = "skillId", default)]
     skill_id: String,
 }
@@ -277,7 +285,21 @@ fn is_local_host(u: &url::Url) -> bool {
         Some(url::Host::Ipv4(ip)) => {
             ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
         }
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => {
+            // `is_unique_local` and `is_unicast_link_local` are still
+            // unstable, so the ranges are matched by prefix: fc00::/7 for
+            // unique-local (fd00::/8 in practice) and fe80::/10 for
+            // link-local. Without these, `https://[fd00::1]/x` walked
+            // straight through a check written to stop exactly that.
+            let first = ip.segments()[0];
+            let unique_local = (first & 0xfe00) == 0xfc00;
+            let link_local = (first & 0xffc0) == 0xfe80;
+            // An IPv4 address wearing an IPv6 hat is still that address.
+            let mapped_v4 = ip
+                .to_ipv4_mapped()
+                .is_some_and(|v4| v4.is_loopback() || v4.is_private() || v4.is_link_local());
+            ip.is_loopback() || ip.is_unspecified() || unique_local || link_local || mapped_v4
+        }
         None => false,
     }
 }
@@ -680,7 +702,7 @@ impl SkillManager {
         let done: PublishAccepted = resp.json().map_err(|e| {
             SkillError::context("ClawHub returned an unrecognised publish reply", e)
         })?;
-        if !done.ok {
+        if done.ok == Some(false) {
             return Err(SkillError::msg(
                 "ClawHub did not accept the publish".to_string(),
             ));
@@ -1193,6 +1215,32 @@ mod upload_target_tests {
                 check("https://clawhub.ai", inside).expect_err("a local target must be refused");
             assert!(err.contains("inside this"), "got: {err}");
         }
+    }
+
+    /// IPv6 has its own inside-the-network ranges, and the first version of
+    /// this guard checked only loopback — so `[fd00::1]` walked through a
+    /// check written to stop exactly that.
+    #[test]
+    fn a_remote_registry_may_not_name_a_local_ipv6_target() {
+        for inside in [
+            "https://[::1]/upload",
+            "https://[fd00::1]/upload",
+            "https://[fdff:1234::5]/upload",
+            "https://[fe80::1]/upload",
+            "https://[::ffff:127.0.0.1]/upload",
+            "https://[::ffff:10.0.0.1]/upload",
+        ] {
+            assert!(
+                check("https://clawhub.ai", inside).is_err(),
+                "{inside} should be refused"
+            );
+        }
+    }
+
+    /// A routable IPv6 address is not inside the network and must still work.
+    #[test]
+    fn a_public_ipv6_target_is_fine() {
+        assert!(check("https://clawhub.ai", "https://[2606:4700::1111]/x").is_ok());
     }
 
     /// But a developer running the registry locally is not an attack, and
