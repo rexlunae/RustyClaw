@@ -1082,6 +1082,23 @@ pub static PDF: ToolDef = ToolDef {
     execute: exec_pdf,
 };
 
+// ── Office document tool ────────────────────────────────────────────────────
+
+#[cfg(feature = "office-docs")]
+pub static DOCUMENT: ToolDef = ToolDef {
+    name: "document",
+    description: "Extract text from Office documents (.docx, .xlsx, .pptx, and their \
+                  macro-enabled variants). Actions:\n\
+                  - extract: Extract the document's text. Spreadsheets come back \
+                  tab-separated per sheet; decks are split per slide.\n\
+                  - info: Format, size, and the structural count that fits it \
+                  (paragraphs, sheets and their names, or slides).\n\n\
+                  Pure Rust, so it works on every platform. Use the pdf tool for \
+                  PDFs and read_file for plain text.",
+    parameters: vec![],
+    execute: exec_document,
+};
+
 // ── Swarm tools ─────────────────────────────────────────────────────────────
 
 pub static SWARM_CREATE: ToolDef = ToolDef {

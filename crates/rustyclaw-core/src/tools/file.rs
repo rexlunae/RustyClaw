@@ -43,6 +43,26 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> ToolRes
 
     debug!(path = %path.display(), "Reading file");
 
+    // Office documents are ZIP archives, so reading them as UTF-8 fails
+    // before any of the extraction fallbacks below get a look in. Hand them
+    // to the dedicated extractor, which works on every platform — the
+    // `textutil` path further down is macOS-only, and off macOS these files
+    // were simply unreadable.
+    #[cfg(feature = "office-docs")]
+    if crate::tools::document::is_office_document(&path) {
+        let path_clone = path.clone();
+        let args_for_doc = serde_json::json!({
+            "path": path_clone.display().to_string(),
+            "action": "extract",
+        });
+        let ws = workspace_dir.to_path_buf();
+        return tokio::task::spawn_blocking(move || {
+            crate::tools::document::exec_document(&args_for_doc, &ws)
+        })
+        .await
+        .map_err(|e| ToolError::context("Document extraction task failed", e))?;
+    }
+
     // Open with TOCTOU protection: double-canonicalize + O_NOFOLLOW + fd verification
     let (file, canonical_path) = open_file_read_safe(&path)
         .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;

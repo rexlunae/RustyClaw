@@ -15,6 +15,8 @@ mod ast_grep;
 mod browser;
 mod cron_tool;
 mod devices;
+#[cfg(feature = "office-docs")]
+pub mod document;
 pub mod exo_ai;
 mod file;
 pub mod freenet;
@@ -192,6 +194,8 @@ use sysadmin::{
 };
 
 // PDF tool
+#[cfg(feature = "office-docs")]
+use document::exec_document;
 use pdf::exec_pdf;
 
 // Exo AI tools
@@ -394,6 +398,8 @@ pub fn tool_summary(name: &str) -> &'static str {
         "npm_manage" => "Manage Node.js packages & scripts via npm",
         "agent_setup" => "Set up local model infrastructure",
         "pdf" => "Analyze PDF files (extract text, metadata, page counts)",
+        #[cfg(feature = "office-docs")]
+        "document" => "Extract text from Office documents (.docx, .xlsx, .pptx)",
         "swarm_create" => "Create a swarm of persistent registered agents",
         "swarm_list" => "List all swarms and their health",
         "swarm_status" => "Get detailed status for a swarm",
@@ -564,6 +570,8 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &ASK_USER,
         &CLIENT_DOM_QUERY,
         &PDF,
+        #[cfg(feature = "office-docs")]
+        &DOCUMENT,
         &SWARM_CREATE,
         &SWARM_LIST,
         &SWARM_STATUS,

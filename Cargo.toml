@@ -130,6 +130,11 @@ pulldown-cmark = "0.12"
 chrono = "0.4"
 zip = "8.1"
 
+# Office document text extraction (the `document` tool). Both are pure Rust
+# and cross-compile cleanly, which the format-specific alternatives do not.
+quick-xml = "0.41"
+calamine = "0.35"
+
 # Tracing for structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

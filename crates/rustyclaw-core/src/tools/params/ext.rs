@@ -836,6 +836,26 @@ pub fn agent_setup_params() -> Vec<ToolParam> {
     }]
 }
 
+pub fn document_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action to perform: 'extract' (default) to pull out the \
+                          document's text, or 'info' for format, size and the \
+                          structural count that fits it."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "path".into(),
+            description: "Path to the .docx, .xlsx or .pptx file.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+    ]
+}
+
 pub fn pdf_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
