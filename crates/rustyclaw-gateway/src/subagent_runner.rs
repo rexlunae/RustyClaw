@@ -106,18 +106,24 @@ async fn run_inner(
     // panel. Untagged it would belong to nobody — and because the write loop
     // only stops when the registry marks the transfer terminal, nothing could
     // stop it.
-    let result = rustyclaw_core::downloads::with_origin(
-        rustyclaw_core::downloads::headless_origin(&agent_id),
-        drive_tool_loop(
-            http,
-            parent,
-            &profile,
-            task,
-            context,
-            label.as_deref(),
-            model_override,
-            config,
-            workspace_dir,
+    // Scoped to this subagent's own session key, not the parent's thread: a
+    // subagent is exactly the "other session" that must not reach into the
+    // conversation that spawned it, or into a sibling subagent.
+    let result = rustyclaw_core::tool_caller::with_caller(
+        format!("subagent:{session_key}"),
+        rustyclaw_core::downloads::with_origin(
+            rustyclaw_core::downloads::headless_origin(&agent_id),
+            drive_tool_loop(
+                http,
+                parent,
+                &profile,
+                task,
+                context,
+                label.as_deref(),
+                model_override,
+                config,
+                workspace_dir,
+            ),
         ),
     )
     .await;

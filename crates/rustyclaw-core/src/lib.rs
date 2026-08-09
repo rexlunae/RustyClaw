@@ -72,6 +72,7 @@ pub mod tasks;
 pub mod text;
 pub mod theme;
 pub mod threads;
+pub mod tool_caller;
 pub mod tool_pipeline;
 pub mod tools;
 pub mod triggers;

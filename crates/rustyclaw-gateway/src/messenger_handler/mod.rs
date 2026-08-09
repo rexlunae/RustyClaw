@@ -909,9 +909,15 @@ async fn process_incoming_message(
                     crate::command_wrapper::start_command_task(task_mgr, &tc.arguments, &conv_key)
                         .await;
 
-                let result = rustyclaw_core::downloads::with_origin(
-                    rustyclaw_core::downloads::headless_origin(&agent_id),
-                    tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                // Scoped to the conversation, so a process backgrounded for
+                // one chat is not reachable from another chat or from the
+                // TUI's threads.
+                let result = rustyclaw_core::tool_caller::with_caller(
+                    format!("messenger:{conv_key}"),
+                    rustyclaw_core::downloads::with_origin(
+                        rustyclaw_core::downloads::headless_origin(&agent_id),
+                        tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                    ),
                 )
                 .await;
 
@@ -953,9 +959,12 @@ async fn process_incoming_message(
                     Err(err) => (err.to_string(), true),
                 }
             } else {
-                match rustyclaw_core::downloads::with_origin(
-                    rustyclaw_core::downloads::headless_origin(&agent_id),
-                    tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                match rustyclaw_core::tool_caller::with_caller(
+                    format!("messenger:{conv_key}"),
+                    rustyclaw_core::downloads::with_origin(
+                        rustyclaw_core::downloads::headless_origin(&agent_id),
+                        tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir),
+                    ),
                 )
                 .await
                 {

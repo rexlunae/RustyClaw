@@ -52,6 +52,7 @@ async fn execute_tool_with_live_output(
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
     started: std::time::Instant,
+    caller: Option<String>,
 ) -> Result<(String, bool)> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<tools::ToolOutputChunk>();
     let exec = tool_executor::execute_tool_by_type(
@@ -62,6 +63,10 @@ async fn execute_tool_with_live_output(
         skill_mgr,
         Some(tx),
     );
+    // Scope the tool to this turn's thread so resources it takes ownership of
+    // — a backgrounded process, say — are reachable only from this
+    // conversation and not from any other thread sharing the gateway.
+    let exec = rustyclaw_core::tool_caller::with_caller_opt(caller, exec);
     drive_tool_with_live_frames(writer, tool_id, name, started, rx, exec).await
 }
 
@@ -493,6 +498,13 @@ pub(crate) async fn dispatch_text_message(
     // that is wherever the user has since moved to.
     foreground: &crate::ForegroundCell,
 ) -> Result<()> {
+    // Identity every tool in this turn runs under. Threads are the isolation
+    // boundary here: two conversations on one gateway must not be able to
+    // reach each other's backgrounded processes. A turn with no pinned thread
+    // runs unidentified, and whatever it starts stays unowned — the behaviour
+    // that predates ownership tracking.
+    let turn_caller = turn_thread.map(|id| format!("thread:{id}"));
+
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
         Ok(r) => r,
         Err(e) => {
@@ -1113,6 +1125,7 @@ pub(crate) async fn dispatch_text_message(
                                 vault,
                                 skill_mgr,
                                 tool_start,
+                                turn_caller.clone(),
                             )
                             .await?
                         }
@@ -1154,6 +1167,7 @@ pub(crate) async fn dispatch_text_message(
                             vault,
                             skill_mgr,
                             tool_start,
+                            turn_caller.clone(),
                         )
                         .await?
                     }

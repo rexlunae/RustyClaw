@@ -1396,3 +1396,129 @@ fn an_agent_open_elsewhere_cannot_be_deleted() {
 
     std::fs::remove_dir_all(&root).ignore();
 }
+
+// ── Background-process ownership (issue #231) ───────────────────────────────
+
+/// A process one caller backgrounds is invisible and untouchable to another.
+///
+/// Exercised through the tool layer rather than `ProcessManager` directly, so
+/// the caller identity travels the same task-local route it does in the
+/// gateway — the part that was missing before.
+#[tokio::test]
+#[cfg(unix)]
+async fn backgrounded_process_is_private_to_the_caller_that_started_it() {
+    use crate::tool_caller::with_caller;
+    use crate::tools::runtime::{exec_execute_command_streaming, exec_process_async};
+
+    let spawned = with_caller("thread:owner", async {
+        exec_execute_command_streaming(
+            &json!({"command": "sleep 30", "background": true}),
+            ws(),
+            None,
+        )
+        .await
+        .expect("background spawn")
+    })
+    .await;
+
+    let session_id = serde_json::from_str::<Value>(&spawned)
+        .ok()
+        .and_then(|v| v["sessionId"].as_str().map(String::from))
+        .expect("sessionId in spawn result");
+
+    // The owner sees it listed and can address it.
+    let owner_list = with_caller(
+        "thread:owner",
+        exec_process_async(&json!({"action": "list"}), ws()),
+    )
+    .await
+    .expect("owner list");
+    assert!(
+        owner_list.contains(&session_id),
+        "owner should see its own session, got: {owner_list}"
+    );
+
+    // Another conversation must not, even holding the id.
+    let other_list = with_caller(
+        "thread:other",
+        exec_process_async(&json!({"action": "list"}), ws()),
+    )
+    .await
+    .expect("other list");
+    assert!(
+        !other_list.contains(&session_id),
+        "another thread must not see the session, got: {other_list}"
+    );
+
+    for action in ["poll", "log", "kill", "remove"] {
+        let denied = with_caller(
+            "thread:other",
+            exec_process_async(&json!({"action": action, "sessionId": session_id}), ws()),
+        )
+        .await;
+        let err = denied
+            .expect_err(&format!("{action} from another thread must be refused"))
+            .to_string();
+        assert!(
+            err.contains("No session found"),
+            "refusal must not confirm the session exists, got: {err}"
+        );
+    }
+
+    // Writing to another caller's stdin is the interference that matters most.
+    let write_denied = with_caller(
+        "thread:other",
+        exec_process_async(
+            &json!({"action": "write", "sessionId": session_id, "data": "x\n"}),
+            ws(),
+        ),
+    )
+    .await;
+    assert!(
+        write_denied.is_err(),
+        "another thread must not write to the session's stdin"
+    );
+
+    // The owner can still clean up, proving the guard is not blanket denial.
+    with_caller(
+        "thread:owner",
+        exec_process_async(&json!({"action": "remove", "sessionId": session_id}), ws()),
+    )
+    .await
+    .expect("owner should still control its own session");
+}
+
+/// Without a caller scope a process is unowned, and stays shared — the
+/// pre-ownership behaviour that direct CLI use and tests rely on.
+#[tokio::test]
+#[cfg(unix)]
+async fn unidentified_callers_still_share_unowned_processes() {
+    use crate::tools::runtime::{exec_execute_command_streaming, exec_process_async};
+
+    let spawned = exec_execute_command_streaming(
+        &json!({"command": "sleep 30", "background": true}),
+        ws(),
+        None,
+    )
+    .await
+    .expect("background spawn");
+
+    let session_id = serde_json::from_str::<Value>(&spawned)
+        .ok()
+        .and_then(|v| v["sessionId"].as_str().map(String::from))
+        .expect("sessionId in spawn result");
+
+    let seen = crate::tool_caller::with_caller(
+        "thread:anyone",
+        exec_process_async(&json!({"action": "poll", "sessionId": session_id}), ws()),
+    )
+    .await;
+    assert!(
+        seen.is_ok(),
+        "an unowned session must stay reachable: {seen:?}"
+    );
+
+    exec_process_async(&json!({"action": "remove", "sessionId": session_id}), ws())
+        .await
+        .expect("cleanup");
+}

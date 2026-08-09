@@ -76,8 +76,17 @@ pub async fn exec_execute_command_streaming(
             .lock()
             .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
-        let session_id = mgr.spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
-        debug!(session_id = %session_id, "Background process spawned");
+        // Stamp the caller so only this conversation/sub-agent can later
+        // poll, write to, or kill the process. Unidentified callers (direct
+        // CLI, tests) produce an unowned session, which stays shared.
+        let owner = crate::tool_caller::current();
+        let session_id = mgr.spawn_with_owner(
+            command,
+            cwd.to_string_lossy().as_ref(),
+            Some(timeout_secs),
+            owner.clone(),
+        )?;
+        debug!(session_id = %session_id, owner = ?owner, "Background process spawned");
 
         return Ok(json!({
             "status": "running",
@@ -430,7 +439,9 @@ async fn adopt_child(
         Some(timeout),
         started_at,
         crate::process_manager::AdoptedChild::new(out_buf, err_buf, finished, stdin_tx, kill_tx),
-        None,
+        // A command that outran its yield window becomes a background
+        // session, so it needs the same owner stamp as an explicit one.
+        crate::tool_caller::current(),
     );
 
     let manager = process_manager();
@@ -615,11 +626,16 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
                         .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
                     let remaining_timeout = timeout_deadline.saturating_duration_since(now);
-                    let mut session = crate::process_manager::ExecSession::new(
+                    // Reached from the blocking pool, where the task-local
+                    // identity is not visible, so this normally yields an
+                    // unowned session. Asking anyway keeps the stamp correct
+                    // if this path is ever driven from an async caller.
+                    let mut session = crate::process_manager::ExecSession::with_owner(
                         command.to_string(),
                         cwd.to_string_lossy().to_string(),
                         Some(remaining_timeout),
                         child,
+                        crate::tool_caller::current(),
                     );
 
                     session.try_read_output();
@@ -654,10 +670,22 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     format_output(output, timeout_secs)
 }
-
-/// Manage background exec sessions (async version).
-#[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
+/// Manage background exec sessions on behalf of `caller`.
+///
+/// Every lookup goes through the ownership-checked accessors. A background
+/// process belongs to whoever started it, and another conversation or
+/// sub-agent must not be able to read its output, write to its stdin, or kill
+/// it. A session the caller may not reach reports the same "no session found"
+/// as one that never existed, so this cannot be used to discover ids
+/// belonging to other callers.
+///
+/// `caller` of `None` is unidentified and reaches only unowned sessions —
+/// those created outside any caller scope, as direct CLI use and tests do.
+///
+/// Shared by the async and sync entry points so the two cannot drift: an
+/// enforcement gap in one copy of a duplicated match is exactly the bug this
+/// guards against.
+fn process_action(args: &Value, caller: Option<&str>) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -667,7 +695,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
 
     let session_id = args.get("sessionId").and_then(|v| v.as_str());
 
-    debug!(session_id, "Processing exec session action");
+    debug!(session_id, caller, "Processing exec session action");
 
     // ProcessManager still uses std::sync::Mutex, which is fine for quick operations
     let manager = process_manager();
@@ -675,11 +703,18 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
         .lock()
         .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
+    // Missing or not-ours are deliberately indistinguishable.
+    let not_found = |id: &str| format!("No session found: {}", id);
+
     match action {
         "list" => {
+            // Polls every session, including ones this caller cannot address:
+            // draining pipes is bookkeeping that keeps a full pipe buffer from
+            // stalling somebody else's child, and it reveals nothing, since
+            // the listing below is filtered.
             mgr.poll_all();
 
-            let sessions = mgr.list();
+            let sessions = mgr.list_owned(caller);
             if sessions.is_empty() {
                 return Ok("No active sessions.".to_string());
             }
@@ -704,9 +739,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
         "poll" => {
             let id = session_id.ok_or("Missing sessionId for poll action")?;
 
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr.get_owned_mut(id, caller).ok_or_else(|| not_found(id))?;
 
             session.try_read_output();
             let exited = session.check_exit();
@@ -740,9 +773,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
         "log" => {
             let id = session_id.ok_or("Missing sessionId for log action")?;
 
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr.get_owned_mut(id, caller).ok_or_else(|| not_found(id))?;
 
             session.try_read_output();
 
@@ -771,9 +802,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
                 .and_then(|v| v.as_str())
                 .ok_or("Missing data for write action")?;
 
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr.get_owned_mut(id, caller).ok_or_else(|| not_found(id))?;
 
             session.write_stdin(data)?;
             Ok(format!("Wrote {} bytes to session {}", data.len(), id))
@@ -786,9 +815,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'keys' for send_keys action")?;
 
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr.get_owned_mut(id, caller).ok_or_else(|| not_found(id))?;
 
             let bytes_sent = session.send_keys(keys)?;
             Ok(format!(
@@ -800,9 +827,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
         "kill" => {
             let id = session_id.ok_or("Missing sessionId for kill action")?;
 
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr.get_owned_mut(id, caller).ok_or_else(|| not_found(id))?;
 
             session.kill()?;
             debug!(session_id = id, "Session killed");
@@ -810,7 +835,8 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
         }
 
         "clear" => {
-            mgr.clear_completed();
+            // Leaves other callers' finished sessions for them to collect.
+            mgr.clear_completed_owned(caller);
             debug!("Cleared completed sessions");
             Ok("Cleared completed sessions.".to_string())
         }
@@ -818,14 +844,14 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
         "remove" => {
             let id = session_id.ok_or("Missing sessionId for remove action")?;
 
-            if let Some(mut session) = mgr.remove(id) {
+            if let Some(mut session) = mgr.remove_owned(id, caller) {
                 if session.status == SessionStatus::Running {
                     session.kill().ignore();
                 }
                 debug!(session_id = id, "Session removed");
                 Ok(format!("Removed session {}", id))
             } else {
-                Err(format!("No session found: {}", id).into())
+                Err(not_found(id).into())
             }
         }
 
@@ -840,154 +866,21 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResu
     }
 }
 
-/// Sync wrapper for process tool.
+/// Manage background exec sessions (async version).
+///
+/// The dispatch path for `process` is async-native, so the task-local caller
+/// identity set by the gateway is visible here.
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_process(args: &Value, _workspace_dir: &Path) -> ToolResult {
-    // Same as async version but sync - ProcessManager operations are quick
-    exec_process_sync(args, _workspace_dir)
+pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
+    process_action(args, crate::tool_caller::current().as_deref())
 }
 
-fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
-    let action = args
-        .get("action")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing required parameter: action".to_string())?;
-
-    let session_id = args.get("sessionId").and_then(|v| v.as_str());
-
-    let manager = process_manager();
-    let mut mgr = manager
-        .lock()
-        .map_err(|_| "Failed to acquire process manager lock".to_string())?;
-
-    match action {
-        "list" => {
-            mgr.poll_all();
-            let sessions = mgr.list();
-            if sessions.is_empty() {
-                return Ok("No active sessions.".to_string());
-            }
-            let mut output = String::from("Background sessions:\n\n");
-            for session in sessions {
-                let status_str = match &session.status {
-                    SessionStatus::Running => "running".to_string(),
-                    SessionStatus::Exited(code) => format!("exited ({})", code),
-                    SessionStatus::Killed => "killed".to_string(),
-                    SessionStatus::TimedOut => "timed out".to_string(),
-                };
-                let elapsed = session.elapsed().as_secs();
-                output.push_str(&format!(
-                    "- {} [{}] ({}s)\n  {}\n",
-                    session.id, status_str, elapsed, session.command
-                ));
-            }
-            Ok(output)
-        }
-        "poll" => {
-            let id = session_id.ok_or("Missing sessionId for poll action")?;
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
-            session.try_read_output();
-            let exited = session.check_exit();
-            let new_output = session.poll_output().to_string();
-            let status_str = match &session.status {
-                SessionStatus::Running => "running".to_string(),
-                SessionStatus::Exited(code) => format!("exited ({})", code),
-                SessionStatus::Killed => "killed".to_string(),
-                SessionStatus::TimedOut => "timed out".to_string(),
-            };
-            let mut result = String::new();
-            if !new_output.is_empty() {
-                result.push_str(&new_output);
-                if !new_output.ends_with('\n') {
-                    result.push('\n');
-                }
-                result.push('\n');
-            }
-            if exited {
-                result.push_str(&format!("Process {}.", status_str));
-            } else {
-                result.push_str(&format!("Process still {}.", status_str));
-            }
-            Ok(result)
-        }
-        "log" => {
-            let id = session_id.ok_or("Missing sessionId for log action")?;
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
-            session.try_read_output();
-            let offset = args
-                .get("offset")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize);
-            let limit = args
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize)
-                .or(Some(50));
-            let output = session.log_output(offset, limit);
-            if output.is_empty() {
-                Ok("(no output)".to_string())
-            } else {
-                Ok(output)
-            }
-        }
-        "write" => {
-            let id = session_id.ok_or("Missing sessionId for write action")?;
-            let data = args
-                .get("data")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing data for write action")?;
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
-            session.write_stdin(data)?;
-            Ok(format!("Wrote {} bytes to session {}", data.len(), id))
-        }
-        "send_keys" | "sendkeys" | "send-keys" => {
-            let id = session_id.ok_or("Missing sessionId for send_keys action")?;
-            let keys = args
-                .get("keys")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'keys' for send_keys action")?;
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
-            let bytes_sent = session.send_keys(keys)?;
-            Ok(format!(
-                "Sent keys [{}] ({} bytes) to session {}",
-                keys, bytes_sent, id
-            ))
-        }
-        "kill" => {
-            let id = session_id.ok_or("Missing sessionId for kill action")?;
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| format!("No session found: {}", id))?;
-            session.kill()?;
-            Ok(format!("Killed session {}", id))
-        }
-        "clear" => {
-            mgr.clear_completed();
-            Ok("Cleared completed sessions.".to_string())
-        }
-        "remove" => {
-            let id = session_id.ok_or("Missing sessionId for remove action")?;
-            if let Some(mut session) = mgr.remove(id) {
-                if session.status == SessionStatus::Running {
-                    session.kill().ignore();
-                }
-                Ok(format!("Removed session {}", id))
-            } else {
-                Err(format!("No session found: {}", id).into())
-            }
-        }
-        _ => Err(format!(
-            "Unknown action: {}. Valid: list, poll, log, write, send_keys, kill, clear, remove",
-            action
-        )
-        .into()),
-    }
+/// Sync wrapper for process tool.
+///
+/// Not the gateway's path — `process` is dispatched async-native. Anything
+/// reaching this from the blocking pool runs unidentified and therefore sees
+/// only unowned sessions.
+#[instrument(skip(args, _workspace_dir), fields(action))]
+pub fn exec_process(args: &Value, _workspace_dir: &Path) -> ToolResult {
+    process_action(args, crate::tool_caller::current().as_deref())
 }
