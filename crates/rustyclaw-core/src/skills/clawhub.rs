@@ -235,6 +235,28 @@ struct PublishAccepted {
     skill_id: String,
 }
 
+/// Build a profile from what whoami actually returns.
+///
+/// A free function rather than inline in `profile()` so it can be exercised
+/// against a real response body — the alternative was a test that built a
+/// `ClawHubProfile` and asserted the defaults it had just written, which is
+/// the kind of test `CONTRIBUTING.md` asks contributors not to write.
+///
+/// whoami carries a handle, a display name and an avatar. It carries no
+/// counts, no bio and no join date, so those stay `None`/empty and the
+/// callers omit them, rather than rendering a zero the registry never sent.
+fn profile_from_whoami(whoami: WhoamiResponse) -> ClawHubProfile {
+    ClawHubProfile {
+        username: whoami.user.handle.clone().unwrap_or_default(),
+        display_name: whoami
+            .user
+            .display_name
+            .or(whoami.user.handle)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
 /// Auth response from ClawHub login.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthResponse {
@@ -807,22 +829,10 @@ impl SkillManager {
             ));
         }
 
-        // whoami carries a handle, a display name and an avatar — not the
-        // counts and bio the old `/api/v1/profile` shape promised. The extra
-        // fields stay at their defaults rather than being invented, so the
-        // command shows what the registry actually knows.
         let whoami: WhoamiResponse = resp
             .json()
             .map_err(|e| SkillError::context("Failed to parse whoami response", e))?;
-        Ok(ClawHubProfile {
-            username: whoami.user.handle.clone().unwrap_or_default(),
-            display_name: whoami
-                .user
-                .display_name
-                .or(whoami.user.handle)
-                .unwrap_or_default(),
-            ..Default::default()
-        })
+        Ok(profile_from_whoami(whoami))
     }
 
     /// Fetch the authenticated user's starred skills from ClawHub.
@@ -1032,19 +1042,40 @@ mod route_tests {
 
     /// whoami reports no counts, so the profile must not claim any.
     ///
-    /// `ClawHubProfile` used to default them to zero, and both display sites
-    /// printed the line unconditionally — so every user was told they had
-    /// published nothing and starred nothing, as fact. A defaulted field is
-    /// still fabricated data once something renders it.
+    /// Driven through the real deserialisation and mapping. The first attempt
+    /// at this test built a `ClawHubProfile` by hand and asserted the
+    /// defaults it had just set, which could only have failed if the type
+    /// changed — exactly what `CONTRIBUTING.md` says not to write.
     #[test]
     fn a_profile_from_whoami_claims_no_counts() {
-        let profile = ClawHubProfile {
-            username: "someone".into(),
-            display_name: "Someone".into(),
-            ..Default::default()
-        };
-        assert_eq!(profile.published_count, None);
-        assert_eq!(profile.starred_count, None);
+        let body =
+            r#"{"user":{"handle":"someone","displayName":"Someone","image":"https://x/y.png"}}"#;
+        let whoami: WhoamiResponse = serde_json::from_str(body).expect("whoami body parses");
+        let profile = profile_from_whoami(whoami);
+
+        assert_eq!(profile.username, "someone");
+        assert_eq!(profile.display_name, "Someone");
+        assert_eq!(profile.published_count, None, "whoami sends no counts");
+        assert_eq!(profile.starred_count, None, "whoami sends no counts");
+        assert!(profile.bio.is_empty());
+        assert!(profile.joined.is_empty());
+    }
+
+    /// A handle is nullable, and the display name is optional.
+    #[test]
+    fn a_profile_survives_the_fields_whoami_may_omit() {
+        // Only the required key, with the handle null.
+        let sparse: WhoamiResponse =
+            serde_json::from_str(r#"{"user":{"handle":null}}"#).expect("sparse body parses");
+        let profile = profile_from_whoami(sparse);
+        assert!(profile.username.is_empty());
+        assert!(profile.display_name.is_empty());
+
+        // No display name: the handle stands in, rather than showing blank.
+        let handle_only: WhoamiResponse =
+            serde_json::from_str(r#"{"user":{"handle":"someone"}}"#).expect("body parses");
+        let profile = profile_from_whoami(handle_only);
+        assert_eq!(profile.display_name, "someone");
     }
 
     /// Search deliberately uses the legacy route, and says so.
