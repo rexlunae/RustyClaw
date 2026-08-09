@@ -2007,3 +2007,128 @@ async fn read_file_extracts_office_documents() {
 
     std::fs::remove_file(&path).ok();
 }
+
+/// A session's transcript is private to whoever started it (issue #416).
+///
+/// The three read paths were the half `sessions_kill` left open: any caller
+/// that could name a key — or just run `sessions_list`, which hands the keys
+/// out — could read another conversation's history. Tool output is kept out
+/// of the record deliberately, but the model's own messages are in there and
+/// they carry whatever the run was working on.
+#[test]
+fn a_sessions_transcript_is_private_to_the_caller_that_started_it() {
+    use crate::sessions::session_manager;
+    use crate::tool_caller::with_caller_blocking;
+    use crate::tools::sessions_tools::{
+        exec_session_status, exec_sessions_history, exec_sessions_list,
+    };
+
+    let key = {
+        let mut mgr = session_manager().lock().expect("session manager");
+        let key = mgr.spawn_subagent(
+            "main",
+            "read the private notes",
+            None,
+            Some("thread:owner".to_string()),
+        );
+        let session = mgr.get_mut(&key).expect("just created");
+        session.add_message("assistant", "the passphrase is hunter2");
+        key
+    };
+
+    // The owner reads its own run back — the case that has to keep working.
+    let owned = with_caller_blocking(Some("thread:owner".into()), || {
+        exec_sessions_history(&json!({"sessionKey": key}), ws())
+    })
+    .expect("the owner can read its own history");
+    assert!(
+        owned.contains("hunter2"),
+        "the owner lost access to its own run, got: {owned}"
+    );
+
+    // Another conversation must not, even holding the key.
+    let denied = with_caller_blocking(Some("thread:other".into()), || {
+        exec_sessions_history(&json!({"sessionKey": key}), ws())
+    })
+    .expect_err("another thread must not read the history")
+    .to_string();
+    assert!(
+        denied.contains("Session not found"),
+        "the refusal must not confirm the key exists, got: {denied}"
+    );
+
+    // Status leaks the same existence, so it answers the same way.
+    let status_denied = with_caller_blocking(Some("thread:other".into()), || {
+        exec_session_status(&json!({"sessionKey": key}), ws())
+    })
+    .expect_err("another thread must not read the status")
+    .to_string();
+    assert!(
+        status_denied.contains("Session not found"),
+        "status refusal must not confirm the key exists, got: {status_denied}"
+    );
+    let status_ok = with_caller_blocking(Some("thread:owner".into()), || {
+        exec_session_status(&json!({"sessionKey": key}), ws())
+    })
+    .expect("the owner can read its own status");
+    assert!(status_ok.contains(&key));
+
+    // And the list must not hand the key out in the first place — that is
+    // how a caller with no key gets one.
+    let owner_list = with_caller_blocking(Some("thread:owner".into()), || {
+        exec_sessions_list(&json!({"limit": 200}), ws())
+    })
+    .expect("owner list");
+    assert!(
+        owner_list.contains(&key),
+        "the owner should see its own session, got: {owner_list}"
+    );
+    let other_list = with_caller_blocking(Some("thread:other".into()), || {
+        exec_sessions_list(&json!({"limit": 200}), ws())
+    })
+    .expect("other list");
+    assert!(
+        !other_list.contains(&key),
+        "another thread must not be handed the key, got: {other_list}"
+    );
+
+    // An unidentified caller is not a wildcard either.
+    let anon = with_caller_blocking(None, || {
+        exec_sessions_history(&json!({"sessionKey": key}), ws())
+    });
+    assert!(
+        anon.is_err(),
+        "an unidentified caller must not read an owned session"
+    );
+}
+
+/// The unowned carve-out is deliberate, and narrow.
+///
+/// `sessions_spawn` refuses to start an unattributed run and `subagent_run`
+/// stamps its caller, so a record with no owner is a swarm deployment, a turn
+/// with no thread at all, or one predating ownership tracking. There is no
+/// owner to compare against, and an ownership rule would lock out the only
+/// party with a claim rather than protecting anyone.
+#[test]
+fn an_unowned_session_stays_readable() {
+    use crate::sessions::session_manager;
+    use crate::tool_caller::with_caller_blocking;
+    use crate::tools::sessions_tools::exec_sessions_history;
+
+    let key = {
+        let mut mgr = session_manager().lock().expect("session manager");
+        let key = mgr.spawn_subagent("main", "no owner recorded", None, None);
+        mgr.get_mut(&key)
+            .expect("just created")
+            .add_message("assistant", "nothing secret here");
+        key
+    };
+
+    for caller in [Some("thread:anyone".to_string()), None] {
+        let out = with_caller_blocking(caller.clone(), || {
+            exec_sessions_history(&json!({"sessionKey": key}), ws())
+        })
+        .unwrap_or_else(|e| panic!("unowned record should stay readable by {caller:?}: {e}"));
+        assert!(out.contains("nothing secret here"));
+    }
+}

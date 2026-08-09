@@ -19,7 +19,19 @@ pub fn exec_sessions_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     debug!(limit, "Listing sessions");
 
-    let sessions = mgr.list(None, false, limit);
+    // Filtered rather than refused: a list is the wrong place to argue about
+    // permission, and omitting what the caller may not see is the same answer
+    // the keyed lookups give. Taken unbounded and truncated afterwards — the
+    // manager truncates before the filter could run, which would otherwise
+    // return fewer than `limit` of the caller's own sessions because someone
+    // else's newer ones used up the slots.
+    let caller = crate::tool_caller::current();
+    let sessions: Vec<_> = mgr
+        .list(None, false, usize::MAX)
+        .into_iter()
+        .filter(|s| s.visible_to(caller.as_deref()))
+        .take(limit)
+        .collect();
 
     if sessions.is_empty() {
         return Ok("No active sessions.".to_string());
@@ -226,20 +238,14 @@ pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
         return Err(format!("No session found: {key}").into());
     };
 
-    // Same rule as backgrounded processes: a session belongs to whoever
-    // spawned it, and another conversation must not be able to reach in and
-    // stop it.
-    //
-    // A record with no owner is one `sessions_spawn` never made — a
-    // synchronous `subagent_run`, or a record from before ownership tracking.
-    // Those stay reachable by anyone, which costs nothing here because the
-    // kind and attachment checks below refuse them anyway. Every background
-    // run has an owner: `sessions_spawn` refuses to start one otherwise.
-    if let Some(owner) = session.parent_key.clone() {
-        let caller = crate::tool_caller::current();
-        if caller.as_deref() != Some(owner.as_str()) {
-            return Err(format!("No session found: {key}").into());
-        }
+    // Same rule as backgrounded processes, and now the same rule the read
+    // tools use: a session belongs to whoever spawned it, and another
+    // conversation must not be able to reach in and stop it. The unowned
+    // carve-out costs nothing here because the kind and attachment checks
+    // below refuse those records anyway.
+    let caller = crate::tool_caller::current();
+    if !session.visible_to(caller.as_deref()) {
+        return Err(format!("No session found: {key}").into());
     }
 
     // Only a background run can be stopped, and saying so beats a comfortable
@@ -423,6 +429,19 @@ pub fn exec_sessions_history(args: &Value, _workspace_dir: &Path) -> ToolResult 
         .lock()
         .map_err(|_| "Failed to acquire session manager lock".to_string())?;
 
+    // Ownership before content. The transcript is the sensitive part: tool
+    // output is kept out of the record deliberately, but the model's own
+    // messages are in there and they carry whatever the run was working on.
+    // Phrased as "not found" for the same reason `sessions_kill` is — a
+    // distinct "denied" would confirm the key exists.
+    let caller = crate::tool_caller::current();
+    if !mgr
+        .get(session_key)
+        .is_some_and(|s| s.visible_to(caller.as_deref()))
+    {
+        return Err(format!("Session not found: {}", session_key).into());
+    }
+
     let history = mgr
         .history(session_key, limit, include_tools)
         .ok_or_else(|| format!("Session not found: {}", session_key))?;
@@ -468,20 +487,34 @@ pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
         output.push_str(&format!("Base URL: {}\n\n", base_url));
     }
 
+    // Status is the third read path, and gating the other two without it
+    // would be ceremonial: the message count and runtime of someone else's
+    // run are still someone else's, and an honest "not found" here is what
+    // stops the key from being confirmed.
+    let caller = crate::tool_caller::current();
+
     if let Some(key) = session_key {
-        if let Some(session) = mgr.get(key) {
-            output.push_str(&format!("Session: {}\n", session.key));
-            output.push_str(&format!("Agent: {}\n", session.agent_id));
-            output.push_str(&format!("Kind: {:?}\n", session.kind));
-            output.push_str(&format!("Status: {:?}\n", session.status));
-            output.push_str(&format!("Runtime: {}s\n", session.runtime_secs()));
-            output.push_str(&format!("Messages: {}\n", session.messages.len()));
-        } else {
-            return Err(format!("Session not found: {}", key).into());
+        match mgr.get(key) {
+            Some(session) if session.visible_to(caller.as_deref()) => {
+                output.push_str(&format!("Session: {}\n", session.key));
+                output.push_str(&format!("Agent: {}\n", session.agent_id));
+                output.push_str(&format!("Kind: {:?}\n", session.kind));
+                output.push_str(&format!("Status: {:?}\n", session.status));
+                output.push_str(&format!("Runtime: {}s\n", session.runtime_secs()));
+                output.push_str(&format!("Messages: {}\n", session.messages.len()));
+            }
+            _ => return Err(format!("Session not found: {}", key).into()),
         }
     } else {
-        // Show general status
-        let all_sessions = mgr.list(None, false, 100);
+        // Counts over what the caller can see, for the same reason: a total
+        // that moves when another conversation starts a run is a side channel,
+        // however narrow.
+        let all_sessions: Vec<_> = mgr
+            .list(None, false, usize::MAX)
+            .into_iter()
+            .filter(|s| s.visible_to(caller.as_deref()))
+            .take(100)
+            .collect();
         let active = all_sessions
             .iter()
             .filter(|s| s.status == SessionStatus::Active)
