@@ -92,42 +92,153 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> ToolResult {
         }
     }
 
-    let manager = session_manager();
-    let mut mgr = manager
-        .lock()
-        .map_err(|_| "Failed to acquire session manager lock".to_string())?;
+    // Nothing here can run an agent turn — core has no model client. Find the
+    // runner before writing a record, so a spawn that cannot execute is an
+    // honest refusal instead of a session that sits at Active forever.
+    let runner = crate::sessions::spawn_runner().ok_or_else(|| {
+        "Background sub-agents are unavailable: no gateway is hosting this tool. \
+         Do the work in this session, or use subagent_run for a focused \
+         synchronous run."
+            .to_string()
+    })?;
 
-    // Record who asked, both so the fan-out ceiling below has something to
-    // count and so a sub-agent's children are attributed to it rather than
-    // looking like top-level work.
-    let parent = crate::tool_caller::current();
-    if let Some(parent_key) = parent.as_deref() {
-        let running = mgr.active_subagents_of(parent_key);
-        crate::tool_limits::check_subagent(running)
-            .map_err(|e| crate::tools::error::ToolError::msg(e.to_string()))?;
+    let (session_key, run_id) = {
+        let manager = session_manager();
+        let mut mgr = manager
+            .lock()
+            .map_err(|_| "Failed to acquire session manager lock".to_string())?;
+
+        // Record who asked, both so the fan-out ceiling below has something to
+        // count and so a sub-agent's children are attributed to it rather than
+        // looking like top-level work.
+        let parent = crate::tool_caller::current();
+        if let Some(parent_key) = parent.as_deref() {
+            let running = mgr.active_subagents_of(parent_key);
+            crate::tool_limits::check_subagent(running)
+                .map_err(|e| crate::tools::error::ToolError::msg(e.to_string()))?;
+        }
+
+        let key = mgr.spawn_subagent(agent_id, task, label.clone(), parent.clone());
+        debug!(session_key = %key, parent = ?parent, "Sub-agent spawned");
+
+        let run_id = mgr
+            .get(&key)
+            .and_then(|s| s.run_id.clone())
+            .unwrap_or_default();
+        if let Some(session) = mgr.get_mut(&key) {
+            session.add_message("user", task);
+        }
+        (key, run_id)
+        // Lock released before starting the run: the runner records progress
+        // into this same manager, and holding it across the start would
+        // deadlock the moment it did.
+    };
+
+    if let Err(e) = runner.start(SpawnRequest {
+        session_key: session_key.clone(),
+        agent_id: agent_id.to_string(),
+        task: task.to_string(),
+        model: args.get("model").and_then(|v| v.as_str()).map(String::from),
+        timeout_secs: args
+            .get("runTimeoutSeconds")
+            .and_then(|v| v.as_u64())
+            .filter(|s| *s > 0),
+    }) {
+        // Nothing is running, so the record must not claim otherwise.
+        if let Ok(mut mgr) = session_manager().lock() {
+            if let Some(session) = mgr.get_mut(&session_key) {
+                session.add_message("system", &format!("failed to start: {e}"));
+                session.error();
+            }
+        }
+        return Err(format!("Failed to start sub-agent: {e}").into());
     }
 
-    let session_key = mgr.spawn_subagent(agent_id, task, label.clone(), parent.clone());
-    debug!(session_key = %session_key, parent = ?parent, "Sub-agent spawned");
-
-    // Get the run_id
-    let run_id = mgr
-        .get(&session_key)
-        .and_then(|s| s.run_id.clone())
-        .unwrap_or_default();
-
     let result = SpawnResult {
-        status: "accepted".to_string(),
-        run_id: run_id.clone(),
+        status: "running".to_string(),
+        run_id,
         session_key: session_key.clone(),
         message: format!(
-            "Sub-agent spawned. Task: '{}'. Use sessions_history or sessions_send to interact.",
-            task
+            "Sub-agent running in the background on: '{}'. Check on it with \
+             sessions_history or session_status (key '{}'), and stop it with \
+             sessions_kill.",
+            task, session_key
         ),
     };
 
     serde_json::to_string_pretty(&result)
         .map_err(|e| ToolError::context("Failed to serialize result", e))
+}
+
+/// Stop a running spawned sub-agent.
+#[instrument(skip(args, _workspace_dir))]
+pub fn exec_sessions_kill(args: &Value, _workspace_dir: &Path) -> ToolResult {
+    use crate::sessions::*;
+
+    let target = args
+        .get("sessionKey")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let label = args.get("label").and_then(|v| v.as_str());
+
+    let manager = session_manager();
+    let mut mgr = manager
+        .lock()
+        .map_err(|_| "Failed to acquire session manager lock".to_string())?;
+
+    let key = match (target, label) {
+        (Some(key), _) => key,
+        (None, Some(label)) => mgr
+            .get_by_label(label)
+            .map(|s| s.key.clone())
+            .ok_or_else(|| format!("No session found with label '{label}'"))?,
+        (None, None) => {
+            return Err("Provide either sessionKey or label".to_string().into());
+        }
+    };
+
+    let Some(session) = mgr.get(&key) else {
+        return Err(format!("No session found: {key}").into());
+    };
+
+    // Same rule as backgrounded processes: a session belongs to whoever
+    // spawned it, and another conversation must not be able to reach in and
+    // stop it. An unowned session predates ownership tracking and stays
+    // stoppable by anyone.
+    if let Some(owner) = session.parent_key.clone() {
+        let caller = crate::tool_caller::current();
+        if caller.as_deref() != Some(owner.as_str()) {
+            return Err(format!("No session found: {key}").into());
+        }
+    }
+
+    if session.status != SessionStatus::Active {
+        let status = session.status.clone();
+        return Ok(format!(
+            "Session {key} is already {status:?}; nothing to stop."
+        ));
+    }
+
+    // Stop the run first, then record it: if the abort landed and the record
+    // still said Active, the parent would poll a corpse forever.
+    let was_running = running_sessions()
+        .lock()
+        .map(|mut runs| runs.stop(&key))
+        .unwrap_or(false);
+    // Already looked up above, so the only failure mode is a race that
+    // removed it; either way the caller's answer is the same.
+    mgr.stop_session(&key).ok();
+    if let Some(session) = mgr.get_mut(&key) {
+        session.add_message("system", "stopped by sessions_kill");
+    }
+
+    Ok(if was_running {
+        format!("Stopped session {key}.")
+    } else {
+        // The record was Active but no task was executing — a run that died
+        // without recording its own end, or a record from an older gateway.
+        format!("Session {key} had no running task; marked stopped.")
+    })
 }
 
 /// Send a message to a session.

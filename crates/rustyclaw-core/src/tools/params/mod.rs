@@ -887,20 +887,26 @@ pub fn sessions_spawn_params() -> Vec<ToolParam> {
             required: false,
         },
         ToolParam {
-            name: "thinking".into(),
-            description: "Override thinking level (off/low/medium/high).".into(),
+            name: "runTimeoutSeconds".into(),
+            description: "Stop the sub-agent after N seconds if it is still working.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn sessions_kill_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "sessionKey".into(),
+            description: "Key of the session to stop (from sessions_spawn or sessions_list)."
+                .into(),
             param_type: "string".into(),
             required: false,
         },
         ToolParam {
-            name: "runTimeoutSeconds".into(),
-            description: "Abort sub-agent after N seconds.".into(),
-            param_type: "integer".into(),
-            required: false,
-        },
-        ToolParam {
-            name: "cleanup".into(),
-            description: "'delete' or 'keep' session after completion.".into(),
+            name: "label".into(),
+            description: "Label of the session to stop, instead of its key.".into(),
             param_type: "string".into(),
             required: false,
         },

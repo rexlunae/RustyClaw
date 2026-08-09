@@ -104,8 +104,8 @@ use cron_tool::exec_cron;
 
 // Session operations
 use sessions_tools::{
-    exec_agents_list, exec_session_status, exec_sessions_history, exec_sessions_list,
-    exec_sessions_send, exec_sessions_spawn,
+    exec_agents_list, exec_session_status, exec_sessions_history, exec_sessions_kill,
+    exec_sessions_list, exec_sessions_send, exec_sessions_spawn,
 };
 
 // Agent management operations
@@ -317,6 +317,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "cron" => "Manage scheduled jobs",
         "sessions_list" => "List active sessions",
         "sessions_spawn" => "Spawn async sub-agents (use cheaper models for simple tasks)",
+        "sessions_kill" => "Stop a background sub-agent",
         "sessions_send" => "Send messages to sessions",
         "sessions_history" => "Read session message history",
         "session_status" => "Check session status & usage",
@@ -482,6 +483,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &CRON,
         &SESSIONS_LIST,
         &SESSIONS_SPAWN,
+        &SESSIONS_KILL,
         &SESSIONS_SEND,
         &SESSIONS_HISTORY,
         &SESSION_STATUS,
@@ -807,10 +809,16 @@ pub async fn execute_tool_streaming(
     let args = args.clone();
     let workspace_dir = workspace_dir.to_path_buf();
 
-    // Run sync tools on blocking thread pool
-    let result = tokio::task::spawn_blocking(move || execute_fn(&args, &workspace_dir))
-        .await
-        .map_err(|e| ToolError::context("Task join error", e))?;
+    // Run sync tools on blocking thread pool, carrying the caller identity
+    // across by hand — the task-local it normally rides on does not reach a
+    // blocking thread, and without it every sync tool would run unidentified
+    // and see every other caller's resources as unowned.
+    let caller = crate::tool_caller::current();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::tool_caller::with_caller_blocking(caller, || execute_fn(&args, &workspace_dir))
+    })
+    .await
+    .map_err(|e| ToolError::context("Task join error", e))?;
 
     if result.is_err() {
         warn!(error = ?result.as_ref().err(), "Tool execution failed");

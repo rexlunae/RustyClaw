@@ -135,6 +135,7 @@ pub async fn run_gateway(
         default_max_calls = tool_limits.default_max_calls,
         max_background_processes = tool_limits.max_background_processes,
         max_subagents = tool_limits.max_subagents,
+        max_background_sessions = tool_limits.max_background_sessions,
         "Tool budgets installed"
     );
     rustyclaw_core::tool_limits::install(tool_limits);
@@ -251,6 +252,21 @@ pub async fn run_gateway(
     let shared_config: SharedConfig = Arc::new(RwLock::new(config.clone()));
     let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx.clone()));
     let rate_limiter = auth::new_rate_limiter();
+
+    // Give `sessions_spawn` something to actually run. Core owns the session
+    // records but has no model client, so without this the tool refuses
+    // rather than filing a record for work that never happens.
+    rustyclaw_core::sessions::set_spawn_runner(Arc::new(
+        crate::spawn_runner::GatewaySpawnRunner::new(
+            rustyclaw_core::providers::http_client(),
+            shared_config.clone(),
+            shared_model_ctx.clone(),
+            vault.clone(),
+            skill_mgr.clone(),
+            task_mgr.clone(),
+            tokio::runtime::Handle::current(),
+        ),
+    ));
 
     if options.ssh_stdio {
         let username = std::env::var("USER")

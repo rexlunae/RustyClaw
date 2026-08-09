@@ -1098,7 +1098,7 @@ fn test_sessions_list_params_defined() {
 #[test]
 fn test_sessions_spawn_params_defined() {
     let params = sessions_spawn_params();
-    assert_eq!(params.len(), 7);
+    assert_eq!(params.len(), 5);
     assert!(params.iter().any(|p| p.name == "task" && p.required));
 }
 
@@ -1113,6 +1113,165 @@ fn test_sessions_spawn_missing_task() {
             .to_string()
             .contains("Missing required parameter")
     );
+}
+
+/// Hold while touching the process-wide spawn runner, and leave it absent
+/// afterwards so the tests that expect no gateway still see none.
+fn spawn_runner_guard() -> std::sync::MutexGuard<'static, ()> {
+    let guard = crate::sessions::SPAWN_RUNNER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::sessions::clear_spawn_runner();
+    guard
+}
+
+#[test]
+fn test_sessions_spawn_without_a_runner_refuses() {
+    let _guard = spawn_runner_guard();
+    // No gateway is hosting these tools in a unit test, so there is nothing
+    // that can run an agent turn. The tool must say so rather than file a
+    // session record for work that will never happen — the whole defect in
+    // #114.
+    let result = exec_sessions_spawn(&json!({"task": "do a thing"}), ws());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("no gateway"), "{err}");
+}
+
+#[test]
+fn test_sessions_spawn_leaves_no_record_when_it_refuses() {
+    let _guard = spawn_runner_guard();
+    // Identified by task text rather than by counting: the session manager is
+    // process-wide, so a count would race with any other test spawning one.
+    const TASK: &str = "sessions_spawn refusal leaves no record";
+    exec_sessions_spawn(&json!({"task": TASK}), ws())
+        .expect_err("no runner is installed, so this must refuse");
+
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    assert!(
+        !mgr.list(None, false, usize::MAX)
+            .iter()
+            .any(|s| s.task.as_deref() == Some(TASK)),
+        "a refused spawn must not leave a session behind"
+    );
+}
+
+#[test]
+fn test_sessions_spawn_hands_the_run_to_the_installed_runner() {
+    use crate::sessions::{SpawnRequest, SpawnRunner};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<SpawnRequest>>);
+    impl SpawnRunner for Recorder {
+        fn start(&self, req: SpawnRequest) -> Result<(), String> {
+            self.0.lock().unwrap().push(req);
+            Ok(())
+        }
+    }
+
+    let _guard = spawn_runner_guard();
+    let recorder = Arc::new(Recorder::default());
+    crate::sessions::set_spawn_runner(recorder.clone());
+
+    let out = exec_sessions_spawn(
+        &json!({"task": "summarize the log", "runTimeoutSeconds": 30, "model": "haiku"}),
+        ws(),
+    )
+    .unwrap();
+    assert!(out.contains("\"running\""), "{out}");
+
+    let started = recorder.0.lock().unwrap();
+    let req = started
+        .iter()
+        .find(|r| r.task == "summarize the log")
+        .expect("the runner must be handed the request");
+    assert_eq!(req.agent_id, "main");
+    assert_eq!(req.model.as_deref(), Some("haiku"));
+    // The schema advertises runTimeoutSeconds, so it has to reach the run.
+    assert_eq!(req.timeout_secs, Some(30));
+
+    // The record the parent will poll exists and carries the task.
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    let session = mgr.get(&req.session_key).expect("session record");
+    assert_eq!(session.status, crate::sessions::SessionStatus::Active);
+    assert!(session.messages.iter().any(|m| m.role == "user"));
+    drop(mgr);
+    drop(started);
+    crate::sessions::clear_spawn_runner();
+}
+
+// ── sessions_kill ───────────────────────────────────────────────
+
+#[test]
+fn test_sessions_kill_params_defined() {
+    let params = sessions_kill_params();
+    assert_eq!(params.len(), 2);
+    assert!(params.iter().all(|p| !p.required));
+}
+
+#[test]
+fn test_sessions_kill_needs_a_target() {
+    let err = exec_sessions_kill(&json!({}), ws())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("sessionKey or label"), "{err}");
+}
+
+#[test]
+fn test_sessions_kill_unknown_session() {
+    let err = exec_sessions_kill(&json!({"sessionKey": "agent:main:subagent:nope"}), ws())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("No session found"), "{err}");
+}
+
+#[test]
+fn test_sessions_kill_marks_the_record_stopped() {
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        mgr.spawn_subagent("main", "long job", None, None)
+    };
+    let out = exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws()).unwrap();
+    assert!(out.contains("stopped"), "{out}");
+
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    assert_eq!(
+        mgr.get(&key).unwrap().status,
+        crate::sessions::SessionStatus::Stopped,
+        "a stopped run must not report itself Completed — the parent would \
+         read that as the work being done"
+    );
+}
+
+#[test]
+fn test_sessions_kill_refuses_another_callers_session() {
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        mgr.spawn_subagent("main", "someone else's job", None, Some("thread:1".into()))
+    };
+    // Unidentified here, so the caller is not `thread:1`. The refusal is
+    // phrased as "not found" so one conversation cannot probe another's keys.
+    let err = exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("No session found"), "{err}");
+
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    assert_eq!(
+        mgr.get(&key).unwrap().status,
+        crate::sessions::SessionStatus::Active
+    );
+}
+
+#[test]
+fn test_sessions_kill_is_idempotent() {
+    let key = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        mgr.spawn_subagent("main", "short job", None, None)
+    };
+    exec_sessions_kill(&json!({"sessionKey": key.clone()}), ws()).unwrap();
+    let out = exec_sessions_kill(&json!({"sessionKey": key}), ws()).unwrap();
+    assert!(out.contains("already"), "{out}");
 }
 
 // ── sessions_send ───────────────────────────────────────────────

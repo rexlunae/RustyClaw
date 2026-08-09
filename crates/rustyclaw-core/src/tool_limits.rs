@@ -42,6 +42,10 @@ fn default_max_subagents() -> usize {
     8
 }
 
+fn default_max_background_sessions() -> usize {
+    32
+}
+
 /// Per-tool call ceilings applied on top of [`ToolLimitsConfig::default_max_calls`].
 ///
 /// Only tools whose cost lands somewhere other than this process are listed:
@@ -80,6 +84,14 @@ pub struct ToolLimitsConfig {
     /// Sub-agents one caller may have running at once.
     #[serde(default = "default_max_subagents")]
     pub max_subagents: usize,
+
+    /// Background sessions running anywhere in this process at once.
+    ///
+    /// [`Self::max_subagents`] bounds a caller's *breadth*, not the depth of
+    /// the tree: a spawned run is a caller in its own right, so eight can
+    /// each start eight. This ceiling is what actually bounds the total.
+    #[serde(default = "default_max_background_sessions")]
+    pub max_background_sessions: usize,
 }
 
 impl Default for ToolLimitsConfig {
@@ -90,6 +102,7 @@ impl Default for ToolLimitsConfig {
             per_tool: default_per_tool(),
             max_background_processes: default_max_background_processes(),
             max_subagents: default_max_subagents(),
+            max_background_sessions: default_max_background_sessions(),
         }
     }
 }
@@ -132,6 +145,14 @@ pub enum LimitError {
          Wait for one to finish, or raise tool_limits.max_subagents in config."
     )]
     TooManySubagents { running: usize, limit: usize },
+
+    /// This process is already running as many background sessions as it may.
+    #[error(
+        "Too many background sessions: {running} already running across all callers \
+         (limit {limit}). Wait for one to finish or stop one with sessions_kill, or \
+         raise tool_limits.max_background_sessions in config."
+    )]
+    TooManyBackgroundSessions { running: usize, limit: usize },
 }
 
 /// Installed limits. Set once by the gateway at startup; defaults apply until
@@ -238,6 +259,19 @@ pub fn check_subagent(running: usize) -> Result<(), LimitError> {
         return Ok(());
     }
     Err(LimitError::TooManySubagents { running, limit })
+}
+
+/// Refuse a new background session when the process is already at its ceiling.
+///
+/// Unlike the per-caller checks, this one counts everything: a spawned run
+/// spawning its own runs is a fresh caller with a fresh budget, so nothing
+/// per-caller can bound the tree.
+pub fn check_background_session(running: usize) -> Result<(), LimitError> {
+    let limit = config().max_background_sessions;
+    if limit == 0 || running < limit {
+        return Ok(());
+    }
+    Err(LimitError::TooManyBackgroundSessions { running, limit })
 }
 
 #[cfg(test)]
@@ -375,15 +409,39 @@ mod tests {
     }
 
     #[test]
+    fn the_background_session_ceiling_bounds_the_whole_tree() {
+        // The per-caller sub-agent cap cannot bound depth: each spawned run is
+        // a caller with its own fresh allowance. This one counts everything.
+        let _guard = guard();
+        install(ToolLimitsConfig {
+            max_background_sessions: 3,
+            ..Default::default()
+        });
+
+        assert!(check_background_session(2).is_ok());
+        assert!(matches!(
+            check_background_session(3),
+            Err(LimitError::TooManyBackgroundSessions {
+                running: 3,
+                limit: 3
+            })
+        ));
+
+        install(ToolLimitsConfig::default());
+    }
+
+    #[test]
     fn zero_concurrency_limit_disables_the_ceiling() {
         let _guard = guard();
         install(ToolLimitsConfig {
             max_background_processes: 0,
             max_subagents: 0,
+            max_background_sessions: 0,
             ..Default::default()
         });
         assert!(check_background_process(9_999).is_ok());
         assert!(check_subagent(9_999).is_ok());
+        assert!(check_background_session(9_999).is_ok());
         install(ToolLimitsConfig::default());
     }
 }

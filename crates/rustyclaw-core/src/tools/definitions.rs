@@ -198,17 +198,30 @@ pub static SESSIONS_LIST: ToolDef = ToolDef {
 
 pub static SESSIONS_SPAWN: ToolDef = ToolDef {
     name: "sessions_spawn",
-    description: "Spawn a sub-agent to run a task asynchronously. Sub-agents run in isolated sessions \
-                  and announce results when finished. SPAWN FREELY — the system handles concurrency efficiently.\n\n\
+    description: "Spawn a sub-agent that runs a task in the background and returns immediately. \
+                  The sub-agent works in its own session while you keep going; poll it with \
+                  sessions_history or session_status using the returned sessionKey, and stop it \
+                  with sessions_kill.\n\n\
+                  It runs with no user attached, so it cannot ask anything: any tool your policy \
+                  does not outright allow is refused, and the run is bounded by a round limit.\n\n\
+                  Use subagent_run instead when you need the answer before continuing.\n\n\
                   **Model selection guidance:**\n\
                   - Use `model_recommend` to get a cost-appropriate model for the task\n\
                   - Simple tasks (grep, format, list) → use free/economy models (llama3.2, claude-haiku)\n\
                   - Medium tasks (code edits, analysis) → use economy/standard models\n\
                   - Complex tasks (debugging, architecture) → use standard models\n\
-                  - Critical tasks (security, production) → use premium models\n\n\
-                  Multiple sub-agents can run concurrently. Continue working while they run.",
+                  - Critical tasks (security, production) → use premium models",
     parameters: vec![],
     execute: exec_sessions_spawn,
+};
+
+pub static SESSIONS_KILL: ToolDef = ToolDef {
+    name: "sessions_kill",
+    description: "Stop a background sub-agent started with sessions_spawn, by sessionKey or label. \
+                  Use it when a run is no longer needed, is looping, or has gone wrong — nothing \
+                  else will end it. The session's history stays readable afterwards.",
+    parameters: vec![],
+    execute: exec_sessions_kill,
 };
 
 pub static SESSIONS_SEND: ToolDef = ToolDef {

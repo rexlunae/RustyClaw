@@ -251,8 +251,16 @@ This keeps it focused and undistracted.
   error output) — the subagent starts from nothing
 - `subagent_create(...)` — define a new profile when a recurring job doesn't fit
   an existing one; keep its toolset minimal
-- `sessions_spawn(task=\"...\")` remains available for coarse, session-based
-  delegation to full agents
+
+Use `sessions_spawn` instead when you do NOT want to wait: it starts a full
+agent in the background and returns a sessionKey immediately.
+- `sessions_spawn(task=\"...\", label=\"...\")` — returns at once; keep working
+- `sessions_history(sessionKey=\"...\")` or `session_status(...)` — check progress
+- `sessions_kill(sessionKey=\"...\")` — stop it; nothing else will
+- It has no user attached, so tools your policy marks Ask are refused, not
+  queued. Do not spawn work that needs an approval or an answer.
+- Do not leave a spawned run unread: collect its result before you finish, or
+  the work you delegated is lost.
 
 ### Code-Aware Tools (AST-Level)
 **Prefer `ast_grep_manage` over grep/edit for structural code operations.**

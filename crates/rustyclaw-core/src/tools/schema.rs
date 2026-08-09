@@ -62,6 +62,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "cron" => cron_params(),
         "sessions_list" => sessions_list_params(),
         "sessions_spawn" => sessions_spawn_params(),
+        "sessions_kill" => sessions_kill_params(),
         "sessions_send" => sessions_send_params(),
         "sessions_history" => sessions_history_params(),
         "session_status" => session_status_params(),

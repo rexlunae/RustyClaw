@@ -35,6 +35,7 @@ mod server;
 mod service_handler;
 mod session;
 mod skills_handler;
+mod spawn_runner;
 mod ssh;
 mod subagent_runner;
 mod system_prompt;
