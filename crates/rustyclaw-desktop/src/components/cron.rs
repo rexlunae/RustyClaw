@@ -27,6 +27,11 @@ pub enum CronCommand {
         provider: Option<String>,
         model: Option<String>,
         thread_id: Option<u64>,
+        /// The author picked "foreground" for a job that may currently be
+        /// pinned. `thread_id: None` cannot carry that — it is also what a
+        /// caller sends when it has nothing to say about the thread — so
+        /// without this flag the pin would quietly outlive the choice.
+        clear_thread: bool,
     },
 }
 
@@ -80,7 +85,31 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
     let is_editing = editing.read().is_some();
     let threads = props.threads.clone();
     let provider_models = props.provider_models.clone();
-    let model_options = models_for(&provider_models, &form_provider.read());
+
+    // A job saved against a provider or model this build no longer lists
+    // still has to show what it is set to. Dropping it from the options
+    // renders the picker blank, which reads as "nothing chosen" and turns
+    // the next save into a silent re-point. Carry the current value at the
+    // top instead — the same rule the composer's model bar follows.
+    let current_provider = form_provider.read().clone();
+    let current_model = form_model.read().clone();
+    let mut provider_options: Vec<String> = providers::provider_ids()
+        .iter()
+        .map(|p| (*p).to_string())
+        .collect();
+    if !current_provider.is_empty() && !provider_options.contains(&current_provider) {
+        provider_options.insert(0, current_provider.clone());
+    }
+    let mut model_options = models_for(&provider_models, &current_provider);
+    if !current_model.is_empty() && !model_options.contains(&current_model) {
+        model_options.insert(0, current_model.clone());
+    }
+    // Same for a thread that has since gone away: show the pin rather than
+    // falling through to the empty value, which is "foreground".
+    let current_thread = form_thread.read().clone();
+    let orphan_thread = current_thread.as_deref().filter(|choice| {
+        !choice.is_empty() && !threads.iter().any(|(id, _)| id.to_string() == *choice)
+    });
 
     let on_save = {
         let on_command = props.on_command;
@@ -112,6 +141,9 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                 provider: Some(provider),
                 model: Some(model),
                 thread_id,
+                // Save is gated on the author having chosen, so reaching
+                // here with no thread means they chose the foreground.
+                clear_thread: thread_id.is_none(),
             });
             editing.set(None);
         }
@@ -206,7 +238,7 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                         form_provider.set(picked);
                                     },
                                     option { value: "", disabled: true, "Select provider" }
-                                    for id in providers::provider_ids() {
+                                    for id in provider_options.iter() {
                                         option {
                                             key: "{id}",
                                             value: "{id}",
@@ -249,6 +281,9 @@ pub fn CronDialog(props: CronDialogProps) -> Element {
                                     option { value: "", disabled: true, "Select where it runs" }
                                 }
                                 option { value: "", "Foreground at fire time" }
+                                if let Some(gone) = orphan_thread {
+                                    option { value: "{gone}", "#{gone} — (no longer listed)" }
+                                }
                                 for (id, label) in threads.iter() {
                                     option {
                                         key: "{id}",

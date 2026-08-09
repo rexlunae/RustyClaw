@@ -510,7 +510,14 @@ impl CronStore {
         if let Some(agent_id) = patch.agent_id {
             job.agent_id = Some(agent_id);
         }
-        if let Some(thread_id) = patch.thread_id {
+        // `thread_id: None` means "leave it alone" — the only thing a caller
+        // that does not mention the thread can say — so unpinning needs its
+        // own signal. Without one, deliberately moving a pinned wake back to
+        // the foreground looked identical to not mentioning it, and the pin
+        // silently survived.
+        if patch.clear_thread {
+            job.thread_id = None;
+        } else if let Some(thread_id) = patch.thread_id {
             job.thread_id = Some(thread_id);
         }
         if let Some(session_target) = patch.session_target {
@@ -675,6 +682,13 @@ pub struct CronJobPatch {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<u64>,
+    /// Unpin the job from its thread, returning it to the foreground.
+    ///
+    /// Separate from `thread_id` because `None` there already means "leave
+    /// it alone" — the only thing a caller that does not mention the thread
+    /// can say. Takes precedence when set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_thread: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_target: Option<SessionTarget>,
 }
@@ -773,6 +787,88 @@ mod tests {
             Payload::AgentTurn { model, .. } => assert_eq!(model.as_deref(), Some("claude-opus")),
             other => panic!("expected an agent turn, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_pin_survives_a_patch_that_says_nothing_about_the_thread() {
+        // The common case, and the reason unpinning needs its own flag:
+        // most callers send `thread_id: None` simply because they are
+        // editing something else.
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let id = store.add(job_with_model("claude-haiku")).unwrap();
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    thread_id: Some(9),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    name: Some("renamed".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(store.get(&id).unwrap().thread_id, Some(9));
+    }
+
+    #[test]
+    fn clear_thread_returns_a_pinned_job_to_the_foreground() {
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let id = store.add(job_with_model("claude-haiku")).unwrap();
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    thread_id: Some(9),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    clear_thread: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(store.get(&id).unwrap().thread_id, None);
+    }
+
+    #[test]
+    fn clear_thread_wins_over_a_thread_id_sent_alongside_it() {
+        // Both set is a caller bug, but it has to resolve one way rather
+        // than depending on field order: the explicit unpin is the newer,
+        // more specific instruction, so it takes it.
+        let dir = TempDir::new().unwrap();
+        let mut store = CronStore::new(dir.path()).unwrap();
+        let id = store.add(job_with_model("claude-haiku")).unwrap();
+
+        store
+            .update(
+                &id,
+                CronJobPatch {
+                    thread_id: Some(4),
+                    clear_thread: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(store.get(&id).unwrap().thread_id, None);
     }
 
     #[test]

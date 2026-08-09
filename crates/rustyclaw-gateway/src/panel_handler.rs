@@ -41,6 +41,7 @@ pub async fn handle_panel_request(
             provider,
             model,
             thread_id,
+            clear_thread,
         } => cron_upsert(
             config,
             CronUpsert {
@@ -53,6 +54,7 @@ pub async fn handle_panel_request(
                 provider,
                 model,
                 thread_id,
+                clear_thread,
             },
         ),
         ClientPayload::CronActionRequest { id, action } => cron_action(config, id, action),
@@ -431,6 +433,10 @@ struct CronUpsert {
     provider: Option<String>,
     model: Option<String>,
     thread_id: Option<u64>,
+    /// Unpin the job from its thread. `thread_id: None` cannot express this
+    /// — it means "leave the thread alone", which is all an older client can
+    /// say — so choosing "foreground" needs its own flag or the pin survives.
+    clear_thread: bool,
 }
 
 fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
@@ -472,6 +478,7 @@ fn cron_upsert(config: &Config, req: CronUpsert) -> ServerFrame {
                             schedule: Some(schedule),
                             payload: Some(payload),
                             thread_id: req.thread_id,
+                            clear_thread: req.clear_thread,
                             ..Default::default()
                         },
                     )
@@ -1342,6 +1349,7 @@ mod cron_panel_tests {
                 provider: None,
                 model: Some("deepseek-v4".into()),
                 thread_id: Some(7),
+                clear_thread: false,
             },
         )
         .unwrap();
@@ -1363,12 +1371,59 @@ mod cron_panel_tests {
                 provider: None,
                 model: None,
                 thread_id: None,
+                clear_thread: false,
             },
         )
         .unwrap();
         assert!(renamed.agent_turn, "kind flattened by the edit");
         assert_eq!(renamed.model.as_deref(), Some("deepseek-v4"));
         assert_eq!(renamed.thread_id, Some(7), "thread target survived");
+    }
+
+    /// Choosing "foreground" for a pinned wake has to actually unpin it.
+    /// `thread_id: None` cannot say so — it is also what an older client
+    /// sends when editing something else — so the pin used to survive the
+    /// choice and the wake kept firing into the thread it was moved out of.
+    #[test]
+    fn choosing_the_foreground_unpins_a_wake_from_its_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+
+        let created = upsert(
+            &config,
+            CronUpsert {
+                id: None,
+                name: "wake".into(),
+                expr: "every 1h".into(),
+                payload: "check the queue".into(),
+                paused: false,
+                agent_turn: true,
+                provider: Some("anthropic".into()),
+                model: Some("claude-opus".into()),
+                thread_id: Some(7),
+                clear_thread: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(created.thread_id, Some(7));
+
+        let moved = upsert(
+            &config,
+            CronUpsert {
+                id: Some(created.id.clone()),
+                name: "wake".into(),
+                expr: "every 1h".into(),
+                payload: "check the queue".into(),
+                paused: false,
+                agent_turn: true,
+                provider: Some("anthropic".into()),
+                model: Some("claude-opus".into()),
+                thread_id: None,
+                clear_thread: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(moved.thread_id, None, "the pin outlived the choice");
     }
 
     /// Run-now arms the job for an immediate fire instead of erroring.
@@ -1388,6 +1443,7 @@ mod cron_panel_tests {
                 provider: None,
                 model: None,
                 thread_id: None,
+                clear_thread: false,
             },
         )
         .unwrap();
