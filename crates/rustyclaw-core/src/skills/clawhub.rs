@@ -235,6 +235,53 @@ struct PublishAccepted {
     skill_id: String,
 }
 
+/// Whether an upload target the registry named is safe to send a file to.
+///
+/// The registry hands back a URL and the client PUTs the skill to it, so the
+/// destination is chosen by whatever `clawhub_url` points at. A hostile or
+/// misconfigured registry could name a plaintext endpoint, or an address
+/// inside the caller's network, and the upload would go there.
+///
+/// The rule is relative rather than absolute, so self-hosting still works:
+/// the upload target may not be *less* protected than the registry the user
+/// chose. An https registry cannot redirect to http, and a registry on the
+/// public internet cannot redirect to loopback. A registry that is itself on
+/// localhost may name localhost, because that is a developer running both
+/// halves on one machine.
+fn upload_target_is_acceptable(registry: &url::Url, upload: &url::Url) -> Result<(), String> {
+    if registry.scheme() == "https" && upload.scheme() != "https" {
+        return Err(format!(
+            "refused: the registry is https but named a {} upload target, which \
+             would send the skill in plaintext",
+            upload.scheme()
+        ));
+    }
+    if !is_local_host(registry) && is_local_host(upload) {
+        return Err(
+            "refused: a remote registry named an upload target inside this \
+             machine or network"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Loopback, link-local, or an RFC1918 address — somewhere only this machine
+/// or this network can reach.
+fn is_local_host(u: &url::Url) -> bool {
+    match u.host() {
+        Some(url::Host::Domain(name)) => {
+            let name = name.to_ascii_lowercase();
+            name == "localhost" || name.ends_with(".localhost") || name.ends_with(".internal")
+        }
+        Some(url::Host::Ipv4(ip)) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        None => false,
+    }
+}
+
 /// Build a profile from what whoami actually returns.
 ///
 /// A free function rather than inline in `profile()` so it can be exercised
@@ -554,6 +601,19 @@ impl SkillManager {
             .map_err(|e| SkillError::context("ClawHub refused the upload request", e))?
             .json()
             .map_err(|e| SkillError::context("Failed to parse the upload URL response", e))?;
+
+        // Where the registry told us to send the file is the registry's
+        // choice, not ours — check it before handing over the contents.
+        {
+            let registry = url::Url::parse(&self.registry_url)
+                .map_err(|e| SkillError::msg(format!("Registry URL is not a URL: {e}")))?;
+            let upload = url::Url::parse(&ticket.upload_url).map_err(|e| {
+                SkillError::msg(format!(
+                    "ClawHub returned an upload URL that is not a URL: {e}"
+                ))
+            })?;
+            upload_target_is_acceptable(&registry, &upload).map_err(SkillError::msg)?;
+        }
 
         let stored: StoredUpload = client
             .post(&ticket.upload_url)
@@ -1088,5 +1148,58 @@ mod route_tests {
     fn search_uses_the_legacy_route_on_purpose() {
         assert_eq!(routes::LEGACY_SEARCH, "/api/search");
         assert_ne!(routes::LEGACY_SEARCH, routes::SEARCH);
+    }
+}
+
+#[cfg(test)]
+mod upload_target_tests {
+    use super::upload_target_is_acceptable;
+
+    fn check(registry: &str, upload: &str) -> Result<(), String> {
+        upload_target_is_acceptable(
+            &url::Url::parse(registry).unwrap(),
+            &url::Url::parse(upload).unwrap(),
+        )
+    }
+
+    /// The normal case: a hosted registry naming its storage bucket.
+    #[test]
+    fn a_https_registry_may_name_a_https_bucket() {
+        assert!(check("https://clawhub.ai", "https://files.convex.cloud/abc").is_ok());
+    }
+
+    /// The registry chooses where the file goes, so it must not be able to
+    /// choose plaintext — the skill would cross the network in the clear.
+    #[test]
+    fn a_https_registry_may_not_downgrade_the_upload_to_http() {
+        let err = check("https://clawhub.ai", "http://files.example/abc")
+            .expect_err("a downgrade must be refused");
+        assert!(err.contains("plaintext"), "got: {err}");
+    }
+
+    /// Nor point the upload inward: that turns publish into a request the
+    /// caller never intended to make against their own network.
+    #[test]
+    fn a_remote_registry_may_not_name_a_local_target() {
+        for inside in [
+            "https://localhost/upload",
+            "https://127.0.0.1/upload",
+            "https://10.1.2.3/upload",
+            "https://192.168.0.5/upload",
+            "https://169.254.169.254/latest/meta-data",
+            "https://build.internal/upload",
+        ] {
+            let err =
+                check("https://clawhub.ai", inside).expect_err("a local target must be refused");
+            assert!(err.contains("inside this"), "got: {err}");
+        }
+    }
+
+    /// But a developer running the registry locally is not an attack, and
+    /// must keep working — which is why the rule is relative.
+    #[test]
+    fn a_local_registry_may_name_a_local_target() {
+        assert!(check("http://localhost:3000", "http://localhost:3000/upload").is_ok());
+        assert!(check("http://127.0.0.1:3000", "http://127.0.0.1:9000/x").is_ok());
     }
 }
