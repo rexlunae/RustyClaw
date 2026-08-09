@@ -4,6 +4,7 @@
 // (tree-sitter AST patterns). Uses the native Rust API instead of shelling out
 // to the CLI, so this works anywhere the tool compiles.
 
+use crate::tools::ToolParam;
 use crate::tools::error::{ToolError, ToolResult};
 use ast_grep_core::matcher::Pattern;
 use ast_grep_language::{LanguageExt, SupportLang};
@@ -479,4 +480,98 @@ fn sh_in(dir: &Path, script: &str) -> ToolResult {
     } else {
         Ok(stderr)
     }
+}
+
+/// Parameters for `ast_grep_manage`.
+///
+/// The tool was registered with none, so the model was offered a structural
+/// search-and-rewrite tool whose description lists eight actions and which
+/// accepted no way to name one. Derived from what `exec_ast_grep` reads.
+pub fn ast_grep_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action: 'setup' (install ast-grep), 'search' / 'run' (match or \
+                          rewrite by AST pattern), 'scan' (run lint rules from a config), \
+                          'test' (test rules), 'new' (create a rule, test, or project), \
+                          'version', 'help'."
+                .into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "pattern".into(),
+            description: "AST pattern to match, in the target language's syntax with \
+                          metavariables such as `$A` (required for 'search' and 'run')."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "rewrite".into(),
+            description: "Replacement pattern for 'run'. Omit to search without rewriting.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "lang".into(),
+            description: "Language / file extension to parse as (default: 'rs').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "paths".into(),
+            description: "Path or glob to search, relative to the workspace (default: '.').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "context".into(),
+            description: "Lines of context to show around each match (default: 0).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "config".into(),
+            description: "Rule config file for 'scan' and 'test'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "rule".into(),
+            description: "Single rule file for 'scan', instead of a whole config.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "test_dir".into(),
+            description: "Directory of rule tests, for 'test'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "item_type".into(),
+            description: "What 'new' creates: 'rule', 'test', 'util', or 'project'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "name".into(),
+            description: "Name of the item 'new' creates.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "base_dir".into(),
+            description: "Directory 'new' creates the item in (default: '.').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "json".into(),
+            description: "Return machine-readable JSON from 'scan' instead of text.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+    ]
 }

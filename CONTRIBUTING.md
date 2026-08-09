@@ -93,10 +93,15 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 6. Update documentation
 
 Step 4 is the one that bites: parameters are resolved from a match separate
-from registration, so a tool can be registered and still reach the model with
-an empty schema — registered, visible, uncallable.
-`crates/rustyclaw-core/tests/tool_registry.rs` checks every offered tool for
-that, so a missed arm fails there rather than in someone's session.
+from registration, and that match ends in a catch-all, so a tool can be
+registered and still reach the model with an empty schema — registered,
+described, and impossible to invoke with any argument. Four tools were in
+that state at once.
+
+`crates/rustyclaw-core/tests/tool_registry.rs` fails when a tool is offered
+with no parameters and is not on its `PARAMETERLESS` list. If your tool
+genuinely takes none, add it there; otherwise the test is telling you step 4
+is missing.
 
 ## Adding Tests
 
