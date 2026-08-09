@@ -1268,7 +1268,12 @@ pub(crate) async fn dispatch_text_message(
             }
 
             // Tools that modify session state should trigger sidebar update
-            const SESSION_TOOLS: &[&str] = &["sessions_spawn", "sessions_send", "subagent_run"];
+            const SESSION_TOOLS: &[&str] = &[
+                "sessions_spawn",
+                "sessions_kill",
+                "sessions_send",
+                "subagent_run",
+            ];
             if SESSION_TOOLS.contains(&tc.name.as_str()) && !is_error {
                 send_threads_update_shared(
                     writer,

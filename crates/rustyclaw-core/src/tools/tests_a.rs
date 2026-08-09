@@ -1264,6 +1264,64 @@ fn test_sessions_kill_refuses_another_callers_session() {
 }
 
 #[test]
+fn test_sessions_kill_stops_the_whole_subtree() {
+    // A spawned run's children are owned by the identity *it* ran under, which
+    // nothing can present once its task is aborted. Left behind they would
+    // keep calling the model with nobody able to stop them.
+    let (parent, child, grandchild) = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        let parent = mgr.spawn_subagent("main", "parent work", None, None);
+        let child = mgr.spawn_subagent("main", "child work", None, Some(format!("spawn:{parent}")));
+        let grandchild = mgr.spawn_subagent(
+            "main",
+            "grandchild work",
+            None,
+            Some(format!("spawn:{child}")),
+        );
+        (parent, child, grandchild)
+    };
+
+    let out = exec_sessions_kill(&json!({"sessionKey": parent.clone()}), ws()).unwrap();
+    assert!(out.contains("2 sub-agent(s)"), "{out}");
+
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    for key in [&parent, &child, &grandchild] {
+        let session = mgr.get(key).unwrap();
+        assert_eq!(
+            session.status,
+            crate::sessions::SessionStatus::Stopped,
+            "{key} must not be left running"
+        );
+        assert!(session.finished_ms.is_some(), "{key} needs an end time");
+    }
+}
+
+#[test]
+fn test_sessions_kill_leaves_a_siblings_subtree_alone() {
+    let (target, bystander) = {
+        let mut mgr = crate::sessions::session_manager().lock().unwrap();
+        let target = mgr.spawn_subagent("main", "target", None, None);
+        let other = mgr.spawn_subagent("main", "other", None, None);
+        let bystander = mgr.spawn_subagent(
+            "main",
+            "other's child",
+            None,
+            Some(format!("spawn:{other}")),
+        );
+        (target, bystander)
+    };
+
+    exec_sessions_kill(&json!({"sessionKey": target}), ws()).unwrap();
+
+    let mgr = crate::sessions::session_manager().lock().unwrap();
+    assert_eq!(
+        mgr.get(&bystander).unwrap().status,
+        crate::sessions::SessionStatus::Active,
+        "another run's children must not be swept up"
+    );
+}
+
+#[test]
 fn test_sessions_kill_is_idempotent() {
     let key = {
         let mut mgr = crate::sessions::session_manager().lock().unwrap();
