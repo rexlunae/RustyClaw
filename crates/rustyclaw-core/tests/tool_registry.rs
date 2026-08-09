@@ -39,53 +39,85 @@ fn the_registry_offers_something() {
     );
 }
 
-/// A schema the provider cannot read is a tool the model cannot call, and
-/// nothing at registration time forces one to exist.
+/// Every offered tool says what it is for.
+///
+/// The only part of the emitted schema that is not a literal: `type`,
+/// `parameters.type` and the presence of `properties` are written by
+/// `tools_openai` itself and cannot vary, so asserting them would be
+/// theatre.
 #[test]
-fn every_offered_tool_carries_a_usable_schema() {
+fn every_offered_tool_says_what_it_is_for() {
     for (name, tool) in offered() {
-        assert_eq!(
-            tool["type"], "function",
-            "{name} is not offered as a function"
-        );
         let description = tool["function"]["description"].as_str().unwrap_or("");
         assert!(
             !description.trim().is_empty(),
             "{name} reaches the model with no description — nothing tells it \
              when to use the tool"
         );
-
-        let params = &tool["function"]["parameters"];
-        assert_eq!(
-            params["type"], "object",
-            "{name}'s parameters are not an object schema"
-        );
-        assert!(
-            params["properties"].is_object(),
-            "{name} has no properties object; providers reject the schema"
-        );
     }
 }
 
-/// A required parameter that is not declared makes the tool uncallable: the
-/// provider has no shape to fill in, and rejects or omits the call.
+/// Tools that genuinely take no arguments.
+///
+/// The list exists because "no parameters" has two causes that look
+/// identical on the wire: a tool that needs none, and a tool whose arm in
+/// `resolve_params` was never written — the match ends in `_ => vec![]`, so
+/// a miss is silent. Everything here is a bare lister; anything else with an
+/// empty schema is the second case.
+const PARAMETERLESS: &[&str] = &[
+    "agents_list",
+    "battery_health",
+    "host_info",
+    "load_status",
+    "mcp_list",
+    "service_list",
+    "subagent_list",
+    "swarm_list",
+    "swarm_templates",
+    "triggers_list",
+];
+
+/// A tool registered but forgotten in the parameter table reaches the model
+/// uncallable.
+///
+/// This is the check `CONTRIBUTING.md` promises, and the one the trap
+/// actually needs: `resolve_params` is a match separate from registration,
+/// ending in a catch-all, so a missing arm produces a tool that is offered,
+/// described, and impossible to invoke with any argument. `web_extract` hit
+/// it once; `todo`, `skill_curator` and `ast_grep_manage` were all sitting
+/// in the same state when this test was written — two of them with their
+/// parameter tables already authored and simply never wired up.
 #[test]
-fn no_tool_requires_a_parameter_it_does_not_declare() {
-    for (name, tool) in offered() {
-        let params = &tool["function"]["parameters"];
-        let declared = params["properties"]
-            .as_object()
-            .expect("checked by every_offered_tool_carries_a_usable_schema");
-        let Some(required) = params["required"].as_array() else {
-            continue;
-        };
-        for entry in required {
-            let key = entry.as_str().unwrap_or_default();
-            assert!(
-                declared.contains_key(key),
-                "{name} requires '{key}' but never declares it"
-            );
-        }
+fn no_tool_is_offered_with_an_empty_schema_by_accident() {
+    let orphans: Vec<String> = offered()
+        .into_iter()
+        .filter(|(name, tool)| {
+            !PARAMETERLESS.contains(&name.as_str())
+                && tool["function"]["parameters"]["properties"]
+                    .as_object()
+                    .is_some_and(|p| p.is_empty())
+        })
+        .map(|(name, _)| name)
+        .collect();
+
+    assert!(
+        orphans.is_empty(),
+        "offered with no parameters at all: {orphans:?}. Either add the arm \
+         to `resolve_params` in tools/schema.rs, or add the tool to \
+         PARAMETERLESS here if it genuinely takes none."
+    );
+}
+
+/// …and the list does not outlive the tools on it.
+#[test]
+fn the_parameterless_list_has_no_stale_entries() {
+    let names: Vec<String> = offered().into_iter().map(|(name, _)| name).collect();
+    for expected in PARAMETERLESS {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "{expected} is exempted from the schema check but is no longer \
+             offered — drop it from PARAMETERLESS"
+        );
     }
 }
 

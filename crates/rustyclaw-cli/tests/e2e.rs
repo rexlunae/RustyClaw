@@ -30,22 +30,67 @@ fn temp_workspace(test: &str) -> PathBuf {
     dir
 }
 
+/// The checks `doctor` promises to run, as they appear in its report.
+///
+/// Named here so a check that is quietly dropped fails a test rather than
+/// going unnoticed — the report is the whole product of the command.
+const DOCTOR_CHECKS: &[&str] = &[
+    "Config file",
+    "Workspace dir",
+    "Credentials dir",
+    "SOUL.md",
+    "Skills dir",
+];
+
+/// Run `doctor` against a given HOME and return its combined output.
+///
+/// `--non-interactive` rather than the `--check-only` these tests used to
+/// pass: that flag does not exist, so clap rejected the invocation with a
+/// usage error before `doctor` ran. Neither test asserted anything, so both
+/// passed on the usage error — advertised as end-to-end coverage of the
+/// health check while never reaching it.
+fn run_doctor(binary: &PathBuf, home: &PathBuf) -> String {
+    let output = Command::new(binary)
+        .arg("doctor")
+        .arg("--non-interactive")
+        .env("HOME", home)
+        .output()
+        .expect("Failed to run doctor");
+    assert!(
+        output.status.success(),
+        "doctor exited with {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 /// E2E: Fresh setup and first run
 #[test]
 fn test_e2e_fresh_setup() {
     let binary = binary_path();
     let workspace = temp_workspace("fresh_setup");
 
-    // Run onboard command (non-interactive mode if available)
-    let output = Command::new(&binary)
-        .arg("doctor")
-        .arg("--check-only")
-        .env("HOME", &workspace)
-        .output()
-        .expect("Failed to run doctor");
-    // Should complete without crashing
-    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let report = run_doctor(&binary, &workspace);
+
+    for check in DOCTOR_CHECKS {
+        assert!(
+            report.contains(check),
+            "doctor did not report the {check:?} check\n{report}"
+        );
+    }
+    // Nothing has been set up, so it must say so rather than passing a
+    // workspace it never looked at.
+    assert!(
+        report.contains("Some checks failed"),
+        "a bare HOME should not come up clean\n{report}"
+    );
+
     fs::remove_dir_all(&workspace).ok();
 }
 
@@ -222,22 +267,26 @@ fn test_e2e_workspace_operations() {
     let binary = binary_path();
     let workspace = temp_workspace("workspace_operations");
 
-    // Create workspace structure
-    fs::create_dir_all(workspace.join("memory")).unwrap();
-    fs::write(workspace.join("SOUL.md"), "# Test Soul\nI am a test agent.").unwrap();
-    fs::write(workspace.join("MEMORY.md"), "# Memory\n- Test entry").unwrap();
+    // Before: nothing on disk, so the workspace check should fail.
+    let before = run_doctor(&binary, &workspace);
+    assert!(
+        before.contains("✗ Workspace dir"),
+        "an empty HOME should fail the workspace check\n{before}"
+    );
 
-    // Verify workspace is valid
-    let output = Command::new(&binary)
-        .arg("doctor")
-        .arg("--check-only")
-        .current_dir(&workspace)
-        .env("HOME", &workspace)
-        .output()
-        .expect("Failed to run doctor");
+    // Create the directory doctor looks for, and nothing else.
+    fs::create_dir_all(workspace.join(".rustyclaw").join("workspace")).unwrap();
 
-    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    // After: the same check should pass, and only that one should move.
+    let after = run_doctor(&binary, &workspace);
+    assert!(
+        after.contains("✓ Workspace dir"),
+        "doctor did not notice the workspace directory\n{after}"
+    );
+    assert!(
+        after.contains("✗ Config file"),
+        "creating a workspace should not make unrelated checks pass\n{after}"
+    );
 
     fs::remove_dir_all(&workspace).ok();
 }
