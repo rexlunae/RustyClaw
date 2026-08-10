@@ -659,14 +659,29 @@ mod tests {
     #[test]
     fn model_name_normalization() {
         // Provider-qualified names get the provider prefix stripped.
-        assert_eq!(normalize_model_name("deepseek", "deepseek/deepseek-v4-flash"), "deepseek-v4-flash");
-        assert_eq!(normalize_model_name("anthropic", "anthropic/claude-sonnet-4"), "claude-sonnet-4");
+        assert_eq!(
+            normalize_model_name("deepseek", "deepseek/deepseek-v4-flash"),
+            "deepseek-v4-flash"
+        );
+        assert_eq!(
+            normalize_model_name("anthropic", "anthropic/claude-sonnet-4"),
+            "claude-sonnet-4"
+        );
         // Bare names pass through untouched.
-        assert_eq!(normalize_model_name("deepseek", "deepseek-v4-pro"), "deepseek-v4-pro");
+        assert_eq!(
+            normalize_model_name("deepseek", "deepseek-v4-pro"),
+            "deepseek-v4-pro"
+        );
         // A prefix belonging to a *different* provider is preserved
         // (openrouter routes `org/model` names verbatim).
-        assert_eq!(normalize_model_name("openrouter", "deepseek/deepseek-chat-v3"), "deepseek/deepseek-chat-v3");
-        assert_eq!(normalize_model_name("openrouter", "openrouter/auto"), "auto");
+        assert_eq!(
+            normalize_model_name("openrouter", "deepseek/deepseek-chat-v3"),
+            "deepseek/deepseek-chat-v3"
+        );
+        assert_eq!(
+            normalize_model_name("openrouter", "openrouter/auto"),
+            "auto"
+        );
         // A prefix with nothing after it must not produce an empty name.
         assert_eq!(normalize_model_name("deepseek", "deepseek/"), "deepseek/");
     }
