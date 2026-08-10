@@ -675,7 +675,18 @@ fn contained_path(base: &Path, relative: &str) -> Result<PathBuf, String> {
                     base.display()
                 ));
             }
-            _ => out.push(part),
+            _ => {
+                // Per component, not just on the whole string. `PathBuf::push`
+                // with a drive-prefixed component discards everything pushed
+                // before it on Windows, so `sub/C:evil` escapes even though
+                // the string does not start with a drive — the check below
+                // was on byte 1 of `relative` and this loop then handed each
+                // component to `push` individually.
+                if part.as_bytes().get(1) == Some(&b':') {
+                    return Err(format!("`{relative}`, which names a drive"));
+                }
+                out.push(part)
+            }
         }
     }
     // `.`, `./`, `././` and friends contribute nothing and land back on the
@@ -2051,7 +2062,17 @@ mod extract_tests {
     #[test]
     fn windows_shaped_names_are_refused_everywhere() {
         let base = Path::new("/skills/some-skill");
-        for name in ["C:\\Windows\\evil", "C:evil", "..\\..\\evil", "sub\\evil"] {
+        for name in [
+            "C:\\Windows\\evil",
+            "C:evil",
+            "..\\..\\evil",
+            "sub\\evil",
+            // A drive prefix on a later component. `PathBuf::push` discards
+            // the base for this one too, and a check on byte 1 of the whole
+            // string never sees it.
+            "sub/C:evil",
+            "a/b/Z:payload",
+        ] {
             assert!(
                 contained_path(base, name).is_err(),
                 "{name} should be refused"
