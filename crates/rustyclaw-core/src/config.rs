@@ -980,6 +980,23 @@ mod tests {
         assert!(err.to_string().contains("unreadable"), "{err}");
     }
 
+    /// A boot file that cannot be read at all (binary/truncated content,
+    /// a directory named boot.toml, unreadable permissions) must be treated
+    /// like an unparseable file: fatal through Config::load when there is
+    /// no legacy backup, but quarantined so the next boot does not loop.
+    #[test]
+    fn unreadable_binary_boot_file_is_fatal_but_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(dir.path(), "");
+        std::fs::write(dir.path().join("boot.toml"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
+        let err = Config::load(Some(path)).unwrap_err();
+        assert!(err.to_string().contains("unreadable"), "{err}");
+        assert!(
+            !dir.path().join("boot.toml").exists(),
+            "unreadable boot file must be quarantined so the next boot does not loop"
+        );
+    }
+
     /// Regression for Devin review #442 (BUG_0002): a missing config file at
     /// a custom path must still find boot.toml next to it, instead of
     /// falling back to the home directory.

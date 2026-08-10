@@ -25,7 +25,7 @@
 //! API keys are *not* in boot.toml: they already resolve per-provider from
 //! the vault or `*_API_KEY` env vars (see `crate::providers`).
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -88,31 +88,44 @@ impl BootConfig {
             return Ok(Self::default());
         }
 
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read boot config {}", path.display()))?;
-
-        let file: Option<BootFile> = match toml::from_str(&content) {
-            Ok(file) => Some(file),
-            Err(toml_err) => match serde_json::from_str::<BootFile>(&content) {
-                Ok(file) => {
-                    // stderr, not tracing: the gateway installs its
-                    // subscriber only after Config::load returns, so a
-                    // tracing event here would be dropped — the user would
-                    // never learn their boot file is being read as JSON.
-                    eprintln!(
-                        "WARNING: Boot config {} is JSON, not TOML — continuing (it will be \
-                         expected as TOML next time; consider renaming the file)",
-                        path.display()
-                    );
-                    Some(file)
-                }
-                Err(_) => {
-                    eprintln!(
-                        "ERROR: Boot config {} failed to parse as TOML or JSON: {toml_err}",
-                        path.display()
-                    );
-                    None
-                }
+        let file: Option<BootFile> = match std::fs::read_to_string(path) {
+            Err(read_err) => {
+                // A boot file that cannot be read at all (binary/truncated
+                // content, a directory named boot.toml, unreadable
+                // permissions) must go through the same quarantine-and-bail
+                // path as unparseable content; otherwise the gateway would
+                // fail on every start with no way out. stderr, not tracing:
+                // the subscriber is installed only after Config::load
+                // returns, so a tracing event here would be dropped.
+                eprintln!(
+                    "ERROR: Boot config {} could not be read: {read_err}",
+                    path.display()
+                );
+                None
+            }
+            Ok(content) => match toml::from_str(&content) {
+                Ok(file) => Some(file),
+                Err(toml_err) => match serde_json::from_str::<BootFile>(&content) {
+                    Ok(file) => {
+                        // stderr, not tracing: the gateway installs its
+                        // subscriber only after Config::load returns, so a
+                        // tracing event here would be dropped — the user would
+                        // never learn their boot file is being read as JSON.
+                        eprintln!(
+                            "WARNING: Boot config {} is JSON, not TOML — continuing (it will \
+                             be expected as TOML next time; consider renaming the file)",
+                            path.display()
+                        );
+                        Some(file)
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "ERROR: Boot config {} failed to parse as TOML or JSON: {toml_err}",
+                            path.display()
+                        );
+                        None
+                    }
+                },
             },
         };
 
