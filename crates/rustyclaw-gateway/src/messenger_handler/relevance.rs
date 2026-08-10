@@ -251,7 +251,13 @@ mod tests {
         direct.is_direct = true;
         assert!(is_message_relevant(&config, "acct", &direct, &[], &tracker));
         // A channel-less message is a DM even when the flag is not set.
-        assert!(is_message_relevant(&config, "acct", &msg(None, "hi"), &[], &tracker));
+        assert!(is_message_relevant(
+            &config,
+            "acct",
+            &msg(None, "hi"),
+            &[],
+            &tracker
+        ));
     }
 
     #[test]
@@ -301,12 +307,24 @@ mod tests {
         // A reply to someone else's message in the same channel is not.
         let mut other_reply = msg(Some("#room"), "agreed");
         other_reply.reply_to = Some("someone-elses-id".into());
-        assert!(!is_message_relevant(&config, "acct", &other_reply, &[], &tracker));
+        assert!(!is_message_relevant(
+            &config,
+            "acct",
+            &other_reply,
+            &[],
+            &tracker
+        ));
 
         // A reply to our message in a different channel is not relevant here.
         let mut cross_channel = msg(Some("#other"), "moving this");
         cross_channel.reply_to = Some("out-9".into());
-        assert!(!is_message_relevant(&config, "acct", &cross_channel, &[], &tracker));
+        assert!(!is_message_relevant(
+            &config,
+            "acct",
+            &cross_channel,
+            &[],
+            &tracker
+        ));
     }
 
     #[test]

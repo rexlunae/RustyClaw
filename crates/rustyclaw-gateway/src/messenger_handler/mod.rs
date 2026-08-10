@@ -32,7 +32,7 @@ mod relevance;
 use builders::create_messenger;
 use media::process_attachments;
 use prompt::build_messenger_system_prompt;
-use relevance::{channel_key, is_message_relevant, mention_tokens, SentMessageTracker};
+use relevance::{SentMessageTracker, channel_key, is_message_relevant, mention_tokens};
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
