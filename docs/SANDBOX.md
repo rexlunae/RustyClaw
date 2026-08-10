@@ -205,54 +205,6 @@ mode = "landlock"  # Force Landlock (fails if unavailable)
 mode = "none"  # ⚠️ NO PROTECTION - use only for debugging
 ```
 
-### MCP Servers
-
-MCP servers are arbitrary commands from config, and the tools they expose land
-in the model's tool list looking exactly like first-party ones. They are
-confined by default:
-
-```toml
-[mcp.servers.time]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-time"]
-# sandbox = "auto" is the default — no need to write it
-
-[mcp.servers.docs]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/docs"]
-sandbox = "required"           # refuse to start rather than run unconfined
-allow_paths = ["/home/user/docs"]  # read-only; the only extra directory it sees
-```
-
-| `sandbox` | Behaviour |
-|---|---|
-| `"auto"` (default) | Confine where the platform allows. If it cannot, run anyway and log a WARN naming the obstacle. |
-| `"required"` | Confine, or refuse to start the server. |
-| `"off"` | Do not confine. The pre-confinement behaviour. |
-
-A confined server gets:
-
-- its working directory (`cwd`) read-write. A server that sets no `cwd` gets a
-  private scratch directory, **not** the directory the gateway was started in
-- anything in `allow_paths`, mounted **read-only**
-- never the credentials directory, which is denied explicitly
-- a read-only `/usr`, `/lib`, `/bin`, `/etc`, a private `/tmp`, and its own
-  `/proc`
-- a **cleared environment**, rebuilt from `PATH`, `HOME`, `LANG`, `LC_ALL`,
-  `TERM`, `TMPDIR` and whatever the server's own `env` block sets
-
-That last point matters as much as the filesystem: the gateway's environment is
-where provider API keys live, and a server that inherits it has them without
-touching the disk.
-
-**Upgrading:** a server that reached outside its working directory before will
-now fail to find those paths. List them in `allow_paths`, or set
-`sandbox = "off"` for that server. Network access is unchanged — confined
-servers still have it, since most MCP servers are API clients.
-
-Confinement uses bubblewrap and is Linux-only today. On macOS and Windows,
-`"auto"` logs a warning and `"required"` refuses.
-
 ### Protected Paths (Automatic)
 
 RustyClaw automatically protects:

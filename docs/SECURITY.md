@@ -218,23 +218,6 @@ cat $(echo ~/.rustyclaw/cred*/vault.json)
 
 **Mitigation**: Enable sandbox mode (`bwrap`, `landlock`, or `macos`). The credentials directory is not mounted in the sandbox namespace.
 
-### MCP Servers Are Only As Confined As The Platform Allows
-
-MCP server processes are confined by default (see
-[SANDBOX.md](SANDBOX.md#mcp-servers)), but the mechanism is bubblewrap, which
-is Linux-only and needs unprivileged user namespaces. On macOS, on Windows, or
-on a hardened Linux host with user namespaces disabled, a server configured
-`sandbox = "auto"` runs **unconfined** — with a WARN naming the reason, never
-silently.
-
-Set `sandbox = "required"` on any server you would rather lose than run
-unconfined. That is the difference between the two settings: `"auto"` keeps
-working and tells you, `"required"` refuses.
-
-Confinement also does not restrict network access. Most MCP servers are API
-clients, so cutting the network would break the common case; a compromised
-server can still reach anything on the network this host can.
-
 ### CLI API Key Exposure
 
 API keys passed via command-line flags (e.g., `--openrouter-api-key=sk-xxx`) are visible to:
