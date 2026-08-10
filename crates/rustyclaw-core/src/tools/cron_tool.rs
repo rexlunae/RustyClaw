@@ -129,10 +129,13 @@ fn run_action(
         "add" => {
             let job_obj = args.get("job").ok_or("Missing required parameter: job")?;
 
-            let job: CronJob = serde_json::from_value(job_obj.clone())
+            // Accept the documented minimal definition, not the full stored
+            // `CronJob`: `jobId`/`createdMs` are server-owned and cannot be
+            // known in advance, so demanding them rejected every valid call.
+            let req: CronAddRequest = serde_json::from_value(job_obj.clone())
                 .map_err(|e| ToolError::context("Invalid job definition", e))?;
 
-            let id = store.add(job)?;
+            let id = store.add(req.into_job())?;
             crate::runtime_ctx::notify_cron_changed();
             debug!(job_id = %id, "Created cron job");
             Ok(format!("Created job: {}", id))
