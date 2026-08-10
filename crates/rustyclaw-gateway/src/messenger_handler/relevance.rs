@@ -94,7 +94,11 @@ pub fn channel_key(account_name: &str, channel: Option<&str>) -> String {
 }
 
 /// The names a human would use to @-mention this agent on a given account:
-/// the account's presented display name plus the configured agent name.
+/// the account's presented display name, the configured agent name, and the
+/// platform handles the account actually answers to.  Some backends address
+/// bots by handle rather than display name — IRC by nick, Matrix by the
+/// user-id local part — so omitting those would make the agent unreachable
+/// in group chats under `RelevanceFilter::Mentions`.
 pub fn mention_tokens(config: &Config, account: &MessengerConfig) -> Vec<String> {
     let mut tokens = Vec::new();
     let profile = super::resolved_profile(account, config);
@@ -105,6 +109,41 @@ pub fn mention_tokens(config: &Config, account: &MessengerConfig) -> Vec<String>
     let agent = config.agent_name.trim();
     if !agent.is_empty() {
         tokens.push(agent.to_string());
+    }
+    // IRC: the nick chosen at connect time. Prefer the explicitly configured
+    // nick; otherwise the sanitized form `apply_profile` would derive from
+    // the display name (non-alphanumerics → '_', 16 chars).
+    match account
+        .nick
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        Some(nick) => tokens.push(nick.to_string()),
+        None if !display.is_empty() => {
+            let derived: String = display
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .take(16)
+                .collect();
+            if !derived.is_empty() && derived != display {
+                tokens.push(derived);
+            }
+        }
+        None => {}
+    }
+    // Matrix: the local part of the user id ("@user:homeserver" → "user") is
+    // what people type to address the bot before the homeserver suffix.
+    if let Some(uid) = account
+        .user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        let local = uid.trim_start_matches('@').split(':').next().unwrap_or("");
+        if !local.is_empty() {
+            tokens.push(local.to_string());
+        }
     }
     tokens.sort();
     tokens.dedup();
@@ -141,10 +180,15 @@ pub fn contains_mention(content: &str, name: &str) -> bool {
             || !haystack[..abs]
                 .chars()
                 .next_back()
-                .unwrap()
+                .expect("non-empty prefix: abs > 0 is a char boundary inside the haystack")
                 .is_alphanumeric();
         let after = &rest[pos + needle.len()..];
-        let after_ok = after.is_empty() || !after.chars().next().unwrap().is_alphanumeric();
+        let after_ok = after.is_empty()
+            || !after
+                .chars()
+                .next()
+                .expect("non-empty remainder: emptiness was just checked")
+                .is_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -395,5 +439,58 @@ mod tests {
             &[],
             &tracker
         ));
+    }
+
+    #[test]
+    fn mention_tokens_include_platform_handles() {
+        let config = Config::default();
+
+        // IRC: explicit nick is a mention token; a display name with spaces
+        // also contributes the sanitized form apply_profile would use.
+        let irc = MessengerConfig {
+            name: "irc-bot".into(),
+            messenger_type: "irc".into(),
+            nick: Some("clawbot".into()),
+            ..Default::default()
+        };
+        let tokens = mention_tokens(&config, &irc);
+        assert!(
+            tokens.iter().any(|t| t == "clawbot"),
+            "explicit IRC nick must be a token: {tokens:?}"
+        );
+
+        // IRC without an explicit nick: the sanitized display name counts.
+        let irc_default = MessengerConfig {
+            name: "irc-bot".into(),
+            messenger_type: "irc".into(),
+            ..Default::default()
+        };
+        let tokens = mention_tokens(&config, &irc_default);
+        assert!(
+            tokens.iter().any(|t| t == "RustyClaw"),
+            "agent name must be a token: {tokens:?}"
+        );
+
+        // Matrix: the user-id local part is a mention token, so "@claw:homeserver"
+        // group messages match under the mentions filter.
+        let matrix = MessengerConfig {
+            name: "matrix-bot".into(),
+            messenger_type: "matrix".into(),
+            user_id: Some("@claw:matrix.lunar.center".into()),
+            ..Default::default()
+        };
+        let tokens = mention_tokens(&config, &matrix);
+        assert!(
+            tokens.iter().any(|t| t == "claw"),
+            "Matrix local part must be a token: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t == "RustyClaw"),
+            "agent name must be a token: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t == "Rusty Claw" || t == "RustyClaw"),
+            "display name must be a token: {tokens:?}"
+        );
     }
 }
