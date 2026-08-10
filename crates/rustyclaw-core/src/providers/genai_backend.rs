@@ -159,6 +159,10 @@ async fn genai_chat(
             consume_stream(stream.stream, w).await
         }
         None => {
+            let options = options
+                // Keep the raw response body in error reporting so a body-read
+                // failure (issue #447) is diagnosable from the log alone.
+                .with_capture_raw_body(true);
             let resp = client
                 .exec_chat(&req.model, chat_req, Some(&options))
                 .await?;
@@ -274,7 +278,7 @@ fn build_client(http: &reqwest::Client, req: &ProviderRequest) -> Client {
     let adapter = adapter_for(&req.provider);
     let base_url = normalize_base_url(adapter, &req.base_url);
     let api_key = req.api_key.clone().unwrap_or_default();
-    let model = req.model.clone();
+    let model = normalize_model_name(&req.provider, &req.model);
 
     let resolver = ServiceTargetResolver::from_resolver_fn(
         move |mut target: ServiceTarget| -> genai::resolver::Result<ServiceTarget> {
@@ -289,6 +293,31 @@ fn build_client(http: &reqwest::Client, req: &ProviderRequest) -> Client {
         .with_reqwest(http.clone())
         .with_service_target_resolver(resolver)
         .build()
+}
+
+/// Strip a leading `{provider}/` prefix from a model name.
+///
+/// Provider-qualified names are how model pickers and config files refer to
+/// models (`deepseek/deepseek-v4-flash`), but the wire APIs want the bare name
+/// (`deepseek-v4-flash`). genai's own namespace handling only splits on `::`,
+/// so a slash-qualified name was sent verbatim and rejected with a 400 —
+/// observed on a scheduled DeepSeek turn (issue #447). Only the *configured
+/// provider's* prefix is stripped: `openrouter` legitimately routes
+/// `org/model` names, so those must not be touched.
+fn normalize_model_name(provider: &str, model: &str) -> String {
+    let prefix = format!("{provider}/");
+    match model.strip_prefix(&prefix) {
+        Some(rest) if !rest.is_empty() => {
+            debug!(
+                provider = %provider,
+                original = %model,
+                normalized = %rest,
+                "Stripping provider prefix from model name"
+            );
+            rest.to_string()
+        }
+        _ => model.to_string(),
+    }
 }
 
 /// Map a RustyClaw provider id onto a genai adapter. Anthropic, Google, and
@@ -626,6 +655,21 @@ mod tests {
     /// Serialises tests that read or mutate `RUSTYCLAW_SKIP_TOOLS`, which is
     /// process-global state.
     static TOOLS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn model_name_normalization() {
+        // Provider-qualified names get the provider prefix stripped.
+        assert_eq!(normalize_model_name("deepseek", "deepseek/deepseek-v4-flash"), "deepseek-v4-flash");
+        assert_eq!(normalize_model_name("anthropic", "anthropic/claude-sonnet-4"), "claude-sonnet-4");
+        // Bare names pass through untouched.
+        assert_eq!(normalize_model_name("deepseek", "deepseek-v4-pro"), "deepseek-v4-pro");
+        // A prefix belonging to a *different* provider is preserved
+        // (openrouter routes `org/model` names verbatim).
+        assert_eq!(normalize_model_name("openrouter", "deepseek/deepseek-chat-v3"), "deepseek/deepseek-chat-v3");
+        assert_eq!(normalize_model_name("openrouter", "openrouter/auto"), "auto");
+        // A prefix with nothing after it must not produce an empty name.
+        assert_eq!(normalize_model_name("deepseek", "deepseek/"), "deepseek/");
+    }
 
     #[test]
     fn adapter_mapping() {
