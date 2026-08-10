@@ -23,7 +23,7 @@ use tracing::{debug, instrument, warn};
 /// again when connecting, so a determined DNS-rebinding attacker could still
 /// race the two lookups. The validator's double-resolution check narrows that
 /// window but does not fully close it (documented limitation).
-fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
+pub(crate) fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(move |attempt| {
         if attempt.previous().len() >= max {
             return attempt.error(format!("too many redirects (>{max})"));
@@ -41,7 +41,7 @@ fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
 /// Propagates the typed [`SsrfError`] so callers can distinguish a security
 /// `Blocked` verdict from a transient resolution failure; the rendered
 /// message is unchanged.
-fn ssrf_check_blocking(url: &str) -> ToolResult<()> {
+pub(crate) fn ssrf_check_blocking(url: &str) -> ToolResult<()> {
     Ok(SsrfValidator::default().validate_url(url)?)
 }
 
