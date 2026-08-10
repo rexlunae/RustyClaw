@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Message relevance filter — rule tier (`relevance_filter = "mentions"`).**
+  In group chats, every message previously triggered a full agent response
+  cycle, burning tokens on chatter that was never directed at the agent.
+  The new opt-in `relevance_filter = "mentions"` config value (default
+  `"always"`, preserving historic behavior) drops group-chat messages that
+  neither mention the agent by name (`@Name` or the name as a whole word,
+  case-insensitive) nor reply to a message the agent sent. Direct messages
+  always pass. Skipped messages are logged at debug level and never touch
+  the model, history, or typing indicators. The sent-message IDs the
+  gateway produces are tracked per channel (bounded) to recognize replies.
+  The LLM classifier tier (`"smart"`) from #165 remains a follow-up: it
+  needs a one-shot completion helper on `ModelContext` and will extend the
+  same decision point.
+
 - **Messenger setup in the clients: credentials, profile, and thread routing.**
   Messengers were configurable only by hand-editing `[[messengers]]` in
   `config.toml`, which meant live bot tokens sitting in plaintext next to
