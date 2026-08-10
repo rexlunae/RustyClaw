@@ -389,7 +389,10 @@ ssh_bind = "0.0.0.0:2222"
         // never enabled would expose the gateway (e.g. `0.0.0.0:2222` to
         // the LAN). The bind takes effect once SSH is enabled, exactly as
         // it does for an existing disabled section.
-        assert!(!ssh.enabled, "boot ssh_bind must not enable the SSH transport");
+        assert!(
+            !ssh.enabled,
+            "boot ssh_bind must not enable the SSH transport"
+        );
         assert_eq!(ssh.mode, crate::config::SshMode::Standalone);
     }
 
@@ -452,7 +455,10 @@ ssh_bind = "0.0.0.0:2222"
             "provider switch without a boot model must fall back to the \
              new provider's default, not inherit gpt-4o"
         );
-        assert!(m.base_url.is_none(), "provider switch must drop old base_url");
+        assert!(
+            m.base_url.is_none(),
+            "provider switch must drop old base_url"
+        );
     }
 
     /// Regression for Devin review #442 (BUG_0001): with the SAME provider,

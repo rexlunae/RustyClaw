@@ -950,11 +950,7 @@ mod tests {
             dir.path(),
             "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
         );
-        std::fs::write(
-            dir.path().join("boot.toml"),
-            "[invalid\nkey = @value",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("boot.toml"), "[invalid\nkey = @value").unwrap();
         let config = Config::load(Some(path)).unwrap();
         let model = config.model.unwrap();
         assert_eq!(model.provider, "openai");
@@ -967,11 +963,7 @@ mod tests {
     fn unreadable_boot_file_is_fatal_without_legacy_backup() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_full_config(dir.path(), "");
-        std::fs::write(
-            dir.path().join("boot.toml"),
-            "[invalid\nkey = @value",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("boot.toml"), "[invalid\nkey = @value").unwrap();
         let err = Config::load(Some(path)).unwrap_err();
         assert!(err.to_string().contains("unreadable"), "{err}");
     }
