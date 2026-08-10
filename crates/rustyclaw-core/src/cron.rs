@@ -29,14 +29,21 @@ fn generate_job_id() -> JobId {
 
 /// Schedule kinds for cron jobs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Schedule {
     /// One-shot at an absolute time (ISO 8601).
     At { at: String },
     /// Recurring interval in milliseconds.
     Every {
+        /// `everyMs` in JSON. The on-disk store used to write `every_ms`;
+        /// the alias keeps those files loadable.
+        #[serde(alias = "every_ms")]
         every_ms: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none", alias = "anchor_ms")]
         anchor_ms: Option<u64>,
     },
     /// Cron expression (5-field).
@@ -49,7 +56,11 @@ pub enum Schedule {
 
 /// Payload kinds for cron jobs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Payload {
     /// System event injected into main session.
     SystemEvent { text: String },
@@ -68,7 +79,9 @@ pub enum Payload {
         model: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         thinking: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        /// `timeoutSeconds` in JSON; `timeout_seconds` still parses (legacy
+        /// on-disk jobs written before the field was camelCased).
+        #[serde(skip_serializing_if = "Option::is_none", alias = "timeout_seconds")]
         timeout_seconds: Option<u64>,
     },
 }
@@ -97,9 +110,10 @@ pub enum DeliveryMode {
 }
 
 /// Session target for job execution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionTarget {
+    #[default]
     Main,
     Isolated,
 }
@@ -246,6 +260,71 @@ impl CronJob {
                 }
             }
         }
+    }
+}
+
+/// The minimal definition accepted by the `cron` tool's `add` action.
+///
+/// Distinct from the full stored [`CronJob`] on purpose: `jobId` and
+/// `createdMs` are server-owned (generated at creation), so demanding them
+/// from the caller made every `add` fail validation. This is the shape the
+/// tool documents — `schedule`, `payload`, optional `name`/`sessionTarget`/
+/// `threadId`/`model` — and [`CronAddRequest::into_job`] fills in the rest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronAddRequest {
+    /// Short human-readable name, shown in job listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Longer description, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// When the job fires.
+    pub schedule: Schedule,
+    /// Where the wake lands: main session or an isolated one. Defaults to
+    /// main, matching the tool's documented `sessionTarget: "main"`.
+    #[serde(default, alias = "session_target")]
+    pub session_target: SessionTarget,
+    /// What the scheduler runs.
+    pub payload: Payload,
+    /// Delivery configuration for isolated jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
+    /// Whether the job starts enabled. Defaults to true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Agent the job runs under.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "agent_id")]
+    pub agent_id: Option<String>,
+    /// For one-shot jobs, delete after successful run. Defaults to true for
+    /// `At` schedules, false otherwise (the `CronJob::new` behaviour).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "delete_after_run"
+    )]
+    pub delete_after_run: Option<bool>,
+    /// Thread the wake lands in. `None` targets the foreground thread at
+    /// fire time.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "thread_id")]
+    pub thread_id: Option<u64>,
+}
+
+impl CronAddRequest {
+    /// Build the full stored job, generating the server-owned fields
+    /// (`jobId`, `createdMs`, …) the caller cannot know in advance.
+    pub fn into_job(self) -> CronJob {
+        let delete_after_run = self
+            .delete_after_run
+            .unwrap_or(matches!(self.schedule, Schedule::At { .. }));
+        let mut job = CronJob::new(self.name, self.schedule, self.session_target, self.payload);
+        job.description = self.description;
+        job.delivery = self.delivery;
+        job.enabled = self.enabled;
+        job.agent_id = self.agent_id;
+        job.delete_after_run = delete_after_run;
+        job.thread_id = self.thread_id;
+        job
     }
 }
 
@@ -846,6 +925,71 @@ mod tests {
             .unwrap();
 
         assert_eq!(store.get(&id).unwrap().thread_id, None);
+    }
+
+    #[test]
+    fn add_request_accepts_the_documented_camelcase_shape() {
+        // Regression for #443: the tool documented `everyMs`, `sessionTarget`,
+        // `threadId` etc., but the add path deserialized the full stored
+        // `CronJob` — which demands server-owned `jobId`/`createdMs` and
+        // rejected the snake_case `every_ms` the docs never mention. The
+        // documented shape must parse, and the server fields are generated.
+        let req: CronAddRequest = serde_json::from_value(serde_json::json!({
+            "name": "ci-watch",
+            "schedule": { "kind": "every", "everyMs": 600000 },
+            "sessionTarget": "main",
+            "payload": { "kind": "agentTurn", "message": "check CI" },
+            "threadId": 1,
+        }))
+        .expect("documented add shape must deserialize");
+
+        let job = req.into_job();
+        assert!(!job.job_id.is_empty(), "jobId is generated server-side");
+        assert!(job.created_ms > 0, "createdMs is generated server-side");
+        assert_eq!(job.name.as_deref(), Some("ci-watch"));
+        assert_eq!(job.session_target, SessionTarget::Main);
+        assert_eq!(job.thread_id, Some(1));
+        match job.schedule {
+            Schedule::Every { every_ms, .. } => assert_eq!(every_ms, 600000),
+            other => panic!("expected every schedule, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_snake_case_fields_still_parse() {
+        // Jobs persisted before the camelCase rename (`every_ms`,
+        // `timeout_seconds`) must keep loading: the store file is read on
+        // every gateway start, so a format flip without an alias would strand
+        // every existing job.
+        let req: CronAddRequest = serde_json::from_value(serde_json::json!({
+            "schedule": { "kind": "every", "every_ms": 600000 },
+            "payload": { "kind": "agentTurn", "message": "hi", "timeout_seconds": 30 },
+        }))
+        .expect("legacy snake_case fields must still parse");
+
+        let job = req.into_job();
+        match job.schedule {
+            Schedule::Every { every_ms, .. } => assert_eq!(every_ms, 600000),
+            other => panic!("expected every schedule, got {other:?}"),
+        }
+        match job.payload {
+            Payload::AgentTurn {
+                timeout_seconds, ..
+            } => assert_eq!(timeout_seconds, Some(30)),
+            other => panic!("expected agent turn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_request_defaults_session_target_to_main() {
+        let req: CronAddRequest = serde_json::from_value(serde_json::json!({
+            "schedule": { "kind": "at", "at": "2026-01-01T09:00:00Z" },
+            "payload": { "kind": "systemEvent", "text": "wake" },
+        }))
+        .unwrap();
+        let job = req.into_job();
+        assert_eq!(job.session_target, SessionTarget::Main);
+        assert!(job.delete_after_run, "At schedules delete after run");
     }
 
     #[test]
