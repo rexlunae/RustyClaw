@@ -100,7 +100,6 @@ fn age_days(t: std::time::SystemTime) -> u64 {
         .unwrap_or(0)
 }
 
-/// Search persisted thread history.
 /// Read the stored threads, whichever layout they are in.
 ///
 /// `Ok(None)` means "nothing stored yet", which is not an error.
@@ -120,7 +119,19 @@ fn age_days(t: std::time::SystemTime) -> u64 {
 fn load_history(legacy_path: &Path) -> Result<Option<ThreadManager>, String> {
     let store = crate::threads::ThreadStore::at_legacy_path(legacy_path);
     match store.load() {
-        Ok(mgr) => return Ok(Some(mgr)),
+        // An empty store is not proof there is nothing to find. `persist`
+        // creates the directory before it writes `state.json`, so a migration
+        // interrupted between the two leaves a `threads/` directory holding
+        // nothing while the legacy file is still there. `load` reports that as
+        // success with no threads, and returning it would have answered
+        // "nothing matched" over a full history — the same silent-empty answer
+        // this whole change exists to fix, one condition over.
+        //
+        // `load_or_migrate` and `peek` both gate on `state.json` for exactly
+        // this reason; falling through when the store yields nothing matches
+        // them without needing the private path.
+        Ok(mgr) if !mgr.list().is_empty() => return Ok(Some(mgr)),
+        Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("Could not read conversation history: {e}")),
     }
@@ -134,6 +145,7 @@ fn load_history(legacy_path: &Path) -> Result<Option<ThreadManager>, String> {
     }
 }
 
+/// Search persisted thread history.
 pub fn exec_session_search(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let query = args
         .get("query")
@@ -438,6 +450,36 @@ mod load_history_tests {
                 .iter()
                 .any(|t| t.messages.iter().any(|m| m.content.contains("legacy"))),
             "the legacy message did not come back"
+        );
+    }
+
+    /// An interrupted migration leaves a `threads/` directory with nothing in
+    /// it and the legacy file still on disk. Treating "the directory exists"
+    /// as "the history lives here" answers "nothing matched" over a full
+    /// history — the same silent-empty result this change exists to fix.
+    #[test]
+    fn an_empty_store_falls_through_to_the_legacy_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let legacy = dir.path().join("threads.json");
+
+        // The shape `persist` leaves behind if it dies before `state.json`.
+        std::fs::create_dir_all(dir.path().join("threads")).expect("store dir");
+
+        let mut manager = crate::threads::ThreadManager::new();
+        let id = manager.create_thread("a thread");
+        manager.add_message(id, MessageRole::User, "message from before the migration");
+        manager.save_to_file(&legacy).expect("legacy file writes");
+
+        let loaded = load_history(&legacy)
+            .expect("loading succeeds")
+            .expect("the legacy history is still found");
+        assert!(
+            loaded.list().iter().any(|t| {
+                t.messages
+                    .iter()
+                    .any(|m| m.content.contains("before the migration"))
+            }),
+            "an empty store directory hid the legacy history"
         );
     }
 
