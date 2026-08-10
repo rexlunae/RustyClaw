@@ -67,6 +67,19 @@ fn confinement_unavailable(caps: &SandboxCapabilities) -> Option<String> {
     None
 }
 
+/// A per-user scratch directory for servers that declare no `cwd`.
+///
+/// Under the system temp directory rather than the gateway's cwd, so the
+/// read-write workspace bind grants access to somewhere disposable instead of
+/// wherever the process happened to start.
+fn private_workspace() -> PathBuf {
+    let dir = std::env::temp_dir().join("rustyclaw-mcp-workspace");
+    // Best effort: if this cannot be created, bwrap will fail loudly on the
+    // bind rather than silently confining to nothing.
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
 /// Decide how to launch `config`.
 ///
 /// `Err` means the server must not start at all — only reachable via
@@ -107,15 +120,34 @@ pub(crate) fn plan_spawn(
         };
     }
 
-    let workspace = config
-        .cwd
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    // A server with no `cwd` gets a private directory, not the gateway's.
+    //
+    // The first version fell back to `std::env::current_dir()`, and the
+    // workspace is bind-mounted read-write. Most configs — including the
+    // examples in SANDBOX.md — set no `cwd`, so "confined" would have meant
+    // read-write access to whatever directory the gateway was started in. If
+    // that is the user's home, the server gets the vault: exactly the thing
+    // issue #230 is about, handed over by the fix for it.
+    let workspace = match config.cwd.as_ref() {
+        Some(cwd) => PathBuf::from(cwd),
+        None => private_workspace(),
+    };
 
-    let policy = SandboxPolicy {
-        workspace: workspace.clone(),
-        ..SandboxPolicy::default()
+    // And the credentials directory is denied outright, the way every other
+    // sandbox construction site in this crate does it (see
+    // `tools::helpers::init_sandbox`). `SandboxPolicy::default()` carries
+    // empty deny lists; using it here meant a configured `cwd` that happened
+    // to be an ancestor of the vault exposed it.
+    let policy = match crate::runtime_ctx::get_settings_dir() {
+        Some(settings) => {
+            SandboxPolicy::protect_credentials(settings.join("credentials"), &workspace)
+        }
+        // No settings directory registered: nothing to protect, and inventing
+        // a path would deny something arbitrary.
+        None => SandboxPolicy {
+            workspace: workspace.clone(),
+            ..SandboxPolicy::default()
+        },
     };
     let extra: Vec<PathBuf> = config.allow_paths.iter().map(PathBuf::from).collect();
 
@@ -146,6 +178,7 @@ pub(crate) fn plan_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::collections::HashMap;
 
     fn capable() -> SandboxCapabilities {
@@ -257,6 +290,25 @@ mod tests {
         );
     }
 
+    /// The 🟥 from review: with no `cwd`, the workspace fell back to the
+    /// gateway's current directory — which bwrap binds **read-write**. If the
+    /// gateway started in the user's home, "confined" meant read-write access
+    /// to `~/.rustyclaw/credentials`, the exact thing #230 is about.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_server_without_a_cwd_does_not_get_the_gateways_directory() {
+        let mut cfg = server(McpSandbox::Auto);
+        cfg.cwd = None;
+        let plan = plan_spawn(&cfg, &capable()).expect("plans");
+
+        let here = std::env::current_dir().expect("a current directory");
+        assert!(
+            !plan.args.iter().any(|a| a == &here.display().to_string()),
+            "the gateway's own directory was bound into the sandbox: {:?}",
+            plan.args
+        );
+    }
+
     /// A server told about a directory gets that directory, and only it.
     #[cfg(target_os = "linux")]
     #[test]
@@ -268,8 +320,19 @@ mod tests {
         assert!(
             plan.args
                 .windows(2)
+                .any(|w| w[0] == "--ro-bind" && w[1] == "/usr/share"),
+            "expected a read-only bind for the allowed path: {:?}",
+            plan.args
+        );
+        // Read-only specifically. The doc comment said "read-only mounts"
+        // while the code emitted `--bind`, so listing a directory in
+        // allow_paths silently granted write and delete too.
+        assert!(
+            !plan
+                .args
+                .windows(2)
                 .any(|w| w[0] == "--bind" && w[1] == "/usr/share"),
-            "expected a bind for the allowed path: {:?}",
+            "the allowed path was mounted writable: {:?}",
             plan.args
         );
         assert!(

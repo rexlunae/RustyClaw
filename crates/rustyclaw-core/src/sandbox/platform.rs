@@ -36,7 +36,11 @@ pub fn wrap_argv_with_bwrap(
     let mut args = bwrap_confinement_args(policy);
     for path in extra_binds {
         if path.exists() {
-            args.push("--bind".to_string());
+            // `--ro-bind`, matching the doc comment above. It said
+            // "read-only mounts" while emitting `--bind`, so a reader granting
+            // an MCP server sight of a directory was silently granting it
+            // write and delete as well.
+            args.push("--ro-bind".to_string());
             args.push(path.display().to_string());
             args.push(path.display().to_string());
         }
@@ -47,6 +51,8 @@ pub fn wrap_argv_with_bwrap(
     ("bwrap".to_string(), args)
 }
 
+/// Non-Linux stub: bubblewrap does not exist here, so this panics. Callers
+/// check [`SandboxCapabilities`](crate::sandbox::SandboxCapabilities) first.
 #[cfg(not(target_os = "linux"))]
 pub fn wrap_argv_with_bwrap(
     _program: &str,

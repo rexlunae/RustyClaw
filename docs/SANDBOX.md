@@ -221,7 +221,7 @@ args = ["-y", "@modelcontextprotocol/server-time"]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/docs"]
 sandbox = "required"           # refuse to start rather than run unconfined
-allow_paths = ["/home/user/docs"]  # the only directory it can see
+allow_paths = ["/home/user/docs"]  # read-only; the only extra directory it sees
 ```
 
 | `sandbox` | Behaviour |
@@ -232,8 +232,10 @@ allow_paths = ["/home/user/docs"]  # the only directory it can see
 
 A confined server gets:
 
-- its working directory (`cwd`), plus anything in `allow_paths`, and nothing
-  else writable
+- its working directory (`cwd`) read-write. A server that sets no `cwd` gets a
+  private scratch directory, **not** the directory the gateway was started in
+- anything in `allow_paths`, mounted **read-only**
+- never the credentials directory, which is denied explicitly
 - a read-only `/usr`, `/lib`, `/bin`, `/etc`, a private `/tmp`, and its own
   `/proc`
 - a **cleared environment**, rebuilt from `PATH`, `HOME`, `LANG`, `LC_ALL`,
