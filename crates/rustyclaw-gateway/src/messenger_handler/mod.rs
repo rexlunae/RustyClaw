@@ -556,17 +556,25 @@ pub async fn run_messenger_loop(
                     // that neither mention the agent nor reply to one of its
                     // messages are dropped before any token spend, history
                     // lookup, or typing indicator.
-                    let tokens = tokens_by_account
-                        .get(&account_name)
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[]);
-                    if !is_message_relevant(
-                        &config,
-                        &account_name,
-                        &msg,
-                        tokens,
-                        &sent_tracker.lock().unwrap(),
-                    ) {
+                    //
+                    // An account absent from `tokens_by_account` means we
+                    // cannot determine its mention names: do not drop its
+                    // group messages on an empty token list, pass them
+                    // through instead (legacy behavior for unknown accounts).
+                    let relevant = match tokens_by_account.get(&account_name) {
+                        Some(tokens) => is_message_relevant(
+                            &config,
+                            &account_name,
+                            &msg,
+                            tokens,
+                            // A poisoned lock (a panicked task) must not
+                            // take the whole messenger poll down with it:
+                            // recover the guard and continue.
+                            &sent_tracker.lock().unwrap_or_else(|e| e.into_inner()),
+                        ),
+                        None => true,
+                    };
+                    if !relevant {
                         debug!(
                             account_name,
                             sender = %msg.sender,
@@ -1101,9 +1109,12 @@ async fn process_incoming_message(
                 Ok(msg_id) => {
                     // Remember the sent ID so a reply to it counts as
                     // relevant under `relevance_filter = "mentions"`.
+                    // Poisoned-lock recovery: one panicked task must not
+                    // stop reply tracking (and with it, all messenger
+                    // handling).
                     sent_tracker
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|e| e.into_inner())
                         .record(&channel_key(account_name, msg.channel.as_deref()), &msg_id);
                     debug!(
                         message_id = %msg_id,

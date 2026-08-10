@@ -32,13 +32,15 @@ const TRACKER_CAP_PER_CHANNEL: usize = 512;
 /// a conversation is covered. Messages sent by scheduled jobs or triggers
 /// that do not go through the messenger handler are out of scope for the
 /// rule tier; the classifier tier will not depend on this tracker.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SentMessageTracker {
     by_channel: HashMap<String, VecDeque<String>>,
     cap: usize,
 }
 
 impl SentMessageTracker {
+    /// Construct an empty tracker with the default per-channel cap
+    /// ([`TRACKER_CAP_PER_CHANNEL`]).
     pub fn new() -> Self {
         Self {
             by_channel: HashMap::new(),
@@ -72,6 +74,15 @@ impl SentMessageTracker {
         self.by_channel
             .get(key)
             .is_some_and(|queue| queue.iter().any(|id| id == message_id))
+    }
+}
+
+// Manual `Default` (not derived): the derived one would leave `cap` at 0,
+// silently keeping at most one entry per channel. Default must behave like
+// the real constructor.
+impl Default for SentMessageTracker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -118,15 +129,26 @@ pub fn contains_mention(content: &str, name: &str) -> bool {
 
     // Whole-word match: "name:" after a call-out, "name," mid-sentence, or
     // the bare name on its own. The character before and after the match
-    // must not be alphanumeric.
+    // must not be alphanumeric. `offset` tracks the match position in the
+    // *full* haystack: without it, a name repeated inside one word (e.g.
+    // "AdaAda") would pass the `pos == 0` boundary check on the second
+    // pass over the remainder.
     let mut rest = haystack.as_str();
+    let mut offset = 0usize;
     while let Some(pos) = rest.find(&needle) {
-        let before_ok = pos == 0 || !rest[..pos].chars().next_back().unwrap().is_alphanumeric();
+        let abs = offset + pos;
+        let before_ok = abs == 0
+            || !haystack[..abs]
+                .chars()
+                .next_back()
+                .unwrap()
+                .is_alphanumeric();
         let after = &rest[pos + needle.len()..];
         let after_ok = after.is_empty() || !after.chars().next().unwrap().is_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
+        offset = abs + needle.len();
         rest = after;
     }
     false
@@ -210,6 +232,23 @@ mod tests {
         assert!(!contains_mention("madam", "Ada"));
     }
 
+    /// Regression for Devin review #441 (BUG_0001): a name glued to itself
+    /// inside a single word ("AdaAda") must not count as a mention — the
+    /// second occurrence used to pass the boundary check because `pos == 0`
+    /// was tested against the loop remainder, not the full haystack.
+    #[test]
+    fn name_repeated_inside_one_word_is_not_a_mention() {
+        assert!(!contains_mention("AdaAda", "Ada"));
+        assert!(!contains_mention("hey AdaAda!", "Ada"));
+        assert!(!contains_mention("adaAda", "Ada"));
+        // Same-name sequence split by a real boundary still counts.
+        assert!(contains_mention("Ada, Ada", "Ada"));
+        assert!(contains_mention("Ada Ada", "Ada"));
+        // Longer needles are not fooled either.
+        assert!(!contains_mention("rustyrusty", "rusty"));
+        assert!(contains_mention("rusty, rusty", "rusty"));
+    }
+
     #[test]
     fn empty_names_and_content_never_mention() {
         assert!(!contains_mention("hello", ""));
@@ -238,6 +277,21 @@ mod tests {
         assert!(!tracker.contains("acct:room", "out-0"));
         assert!(!tracker.contains("acct:room", "out-1"));
         assert!(tracker.contains("acct:room", "out-4"));
+    }
+
+    /// Regression for Devin review #441 (BUG_0001/job 2): the derived
+    /// `Default` used to leave `cap` at 0, silently collapsing the tracker
+    /// to a single entry per channel. `Default` must behave like `new()`.
+    #[test]
+    fn default_tracker_behaves_like_new() {
+        let mut tracker = SentMessageTracker::default();
+        assert_eq!(tracker.cap, TRACKER_CAP_PER_CHANNEL);
+        for i in 0..(TRACKER_CAP_PER_CHANNEL + 10) {
+            tracker.record("acct:room", &format!("out-{i}"));
+        }
+        assert!(tracker.contains("acct:room", "out-511"));
+        assert!(tracker.contains("acct:room", "out-521"));
+        assert!(!tracker.contains("acct:room", "out-0"));
     }
 
     #[test]
