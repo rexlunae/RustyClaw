@@ -114,6 +114,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "task_describe" => task_tools::task_describe_params(),
         "thread_describe" => thread_describe_params(),
         "set_thread_caption" => set_thread_caption_params(),
+        "threads_list" => threads_list_params(),
         "model_list" => model_tools::model_list_params(),
         "model_enable" => model_tools::model_id_param(),
         "model_disable" => model_tools::model_id_param(),

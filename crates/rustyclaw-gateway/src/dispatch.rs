@@ -1224,7 +1224,18 @@ pub(crate) async fn dispatch_text_message(
                                 if let Some(id) = turn_thread {
                                     thread_mgr.lock().await.set_description(id, description);
                                 }
-                                output = format!("Thread description set to: {}", description);
+                                // Name the thread in the reply: the agent that
+                                // set the description learns the id it would
+                                // otherwise have no way to read (issue #444).
+                                output = match turn_thread {
+                                    Some(id) => format!(
+                                        "Thread #{} description set to: {}",
+                                        id.0, description
+                                    ),
+                                    None => {
+                                        format!("Thread description set to: {}", description)
+                                    }
+                                };
                                 send_threads_update_shared(
                                     writer,
                                     thread_mgr,
@@ -1248,7 +1259,12 @@ pub(crate) async fn dispatch_text_message(
                                     }
                                 };
                                 if renamed {
-                                    output = format!("Thread caption set to: {}", caption);
+                                    output = match turn_thread {
+                                        Some(id) => {
+                                            format!("Thread #{} caption set to: {}", id.0, caption)
+                                        }
+                                        None => format!("Thread caption set to: {}", caption),
+                                    };
                                     send_threads_update_shared(
                                         writer,
                                         thread_mgr,

@@ -511,6 +511,15 @@ pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
     // stops the key from being confirmed.
     let caller = crate::tool_caller::current();
 
+    // An interactive turn carries `thread:<id>` as its caller identity, so
+    // this is the one place the agent can learn which thread it is in —
+    // the id it needs to pin a cron job to this conversation (issue #444).
+    if let Some(identity) = &caller {
+        if let Some(tid) = identity.strip_prefix("thread:") {
+            output.push_str(&format!("Current thread: {}\n", tid));
+        }
+    }
+
     if let Some(key) = session_key {
         match mgr.get(key) {
             Some(session) if session.visible_to(caller.as_deref()) => {
