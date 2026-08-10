@@ -25,7 +25,7 @@
 //! API keys are *not* in boot.toml: they already resolve per-provider from
 //! the vault or `*_API_KEY` env vars (see `crate::providers`).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 

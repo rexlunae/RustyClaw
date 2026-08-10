@@ -898,7 +898,10 @@ mod tests {
         .unwrap();
         let config = Config::load(Some(dir.path().join("config.toml"))).unwrap();
         assert_eq!(config.model.unwrap().provider, "ollama");
-        assert_eq!(config.workspace_dir, Some(std::path::PathBuf::from("/tmp/ws")));
+        assert_eq!(
+            config.workspace_dir,
+            Some(std::path::PathBuf::from("/tmp/ws"))
+        );
         assert!(
             !dir.path().join("config.toml").exists(),
             "corrupt extended config is quarantined"
@@ -911,7 +914,11 @@ mod tests {
     fn unreadable_boot_file_is_fatal_through_config_load() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_full_config(dir.path(), "");
-        std::fs::write(dir.path().join("boot.toml"), "garbage that parses as nothing").unwrap();
+        std::fs::write(
+            dir.path().join("boot.toml"),
+            "garbage that parses as nothing",
+        )
+        .unwrap();
         let err = Config::load(Some(path)).unwrap_err();
         assert!(err.to_string().contains("unreadable"), "{err}");
     }
