@@ -77,6 +77,7 @@ pub(crate) fn config_set(config: &mut Config, path: &str, value: &str) -> Result
                     provider: String::new(),
                     model: None,
                     base_url: None,
+                    tls_ca_cert: None,
                 });
             m.provider = value.to_string();
         }
@@ -87,6 +88,7 @@ pub(crate) fn config_set(config: &mut Config, path: &str, value: &str) -> Result
                     provider: String::new(),
                     model: None,
                     base_url: None,
+                    tls_ca_cert: None,
                 });
             m.model = Some(value.to_string());
         }

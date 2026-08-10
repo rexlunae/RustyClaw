@@ -15,6 +15,16 @@ pub struct ModelProvider {
     pub model: Option<String>,
     /// API base URL (only required for custom/proxy providers)
     pub base_url: Option<String>,
+    /// Path to a PEM certificate to pin as the trust anchor for this
+    /// provider's TLS connections (see issue #234).
+    ///
+    /// When set, `http_client_builder` adds the certificate to the trust
+    /// store via `add_root_certificate`, so only chains rooted at this cert
+    /// are accepted for provider requests — a defence against a compromised
+    /// CA, a corporate TLS proxy, or a targeted MITM intercepting API keys
+    /// and model responses. Unset (the default) uses the system trust store.
+    #[serde(default)]
+    pub tls_ca_cert: Option<PathBuf>,
 }
 
 /// Sandbox configuration for agent isolation.
@@ -740,6 +750,17 @@ impl Config {
                 }
             }
         }
+
+        // TLS pin for provider connections (RustyClaw#234): the pin is a
+        // boot-time decision, so it is applied here, once, when the config
+        // is first loaded — never on a later reload. An unreadable pin file
+        // is a hard failure, not a warning: silently continuing without the
+        // pin would leave the operator believing provider traffic is
+        // protected when it is not.
+        if let Some(pin) = config.model.as_ref().and_then(|m| m.tls_ca_cert.as_deref()) {
+            crate::providers::set_provider_tls_pin(pin)?;
+        }
+
         Ok(config)
     }
 

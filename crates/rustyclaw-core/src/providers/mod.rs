@@ -561,28 +561,73 @@ pub fn provider_read_timeout() -> Option<std::time::Duration> {
     }
 }
 
+/// The pinned trust anchor for provider TLS connections, set from the
+/// `model.tls_ca_cert` config (see [`set_provider_tls_pin`]). `None` means
+/// "use the system trust store".
+static PROVIDER_TLS_PIN: std::sync::OnceLock<Option<reqwest::tls::Certificate>> =
+    std::sync::OnceLock::new();
+
+/// Pin the TLS trust anchor for provider connections to the certificate in
+/// the given PEM file (issue #234).
+///
+/// Called once at config load when `model.tls_ca_cert` is set. Only the
+/// first call takes effect — the pin is a boot-time decision, and letting a
+/// later config reload silently swap it would defeat the purpose. A file
+/// that cannot be read or parsed is a hard error: a silently-ignored pin is
+/// worse than no pin, because the operator believes the connection is
+/// protected when it is not.
+pub fn set_provider_tls_pin(path: &std::path::Path) -> Result<()> {
+    let pem = std::fs::read(path).map_err(wrap_err)?;
+    let cert = reqwest::tls::Certificate::from_pem(&pem).map_err(wrap_err)?;
+    match PROVIDER_TLS_PIN.set(Some(cert)) {
+        Ok(()) => {
+            tracing::info!(
+                path = %path.display(),
+                "Pinned provider TLS trust anchor"
+            );
+            Ok(())
+        }
+        Err(_) => Err(anyhow::anyhow!(
+            "provider TLS pin was already set; refusing to overwrite it (set {} only at boot)",
+            path.display()
+        )
+        .into()),
+    }
+}
+
+/// Apply the configured TLS pin (if any) to a client builder.
+fn apply_tls_pin(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    match PROVIDER_TLS_PIN.get().and_then(|p| p.as_ref()) {
+        Some(cert) => builder.add_root_certificate(cert.clone()),
+        None => builder,
+    }
+}
+
 /// The configured builder behind [`http_client`], for the rare caller that
 /// needs to add to it — the IPv4-only retry binds a local address before
 /// building. Going through here is what keeps that retry bounded by the same
 /// deadlines as the request it is retrying.
 pub fn http_client_builder() -> reqwest::ClientBuilder {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
-        // Pool hygiene, which matters as much as the deadlines. A pooled
-        // keep-alive connection whose peer went away silently — a network
-        // change, a NAT rebind, a suspend — is not detectably dead until
-        // something writes to it. Without these, every later request is handed
-        // one of those corpses and hangs on it in turn, so a single network
-        // blip reads as "the model is down" for the life of the process while
-        // the gateway keeps answering connections and completing auth. Both of
-        // these end that: idle connections are retired rather than reused, and
-        // keepalive probes surface a dead one before a request picks it up.
-        .pool_idle_timeout(PROVIDER_POOL_IDLE_TIMEOUT)
-        .tcp_keepalive(PROVIDER_TCP_KEEPALIVE);
+    let builder = apply_tls_pin(
+        reqwest::Client::builder()
+            .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
+            // Pool hygiene, which matters as much as the deadlines. A pooled
+            // keep-alive connection whose peer went away silently — a network
+            // change, a NAT rebind, a suspend — is not detectably dead until
+            // something writes to it. Without these, every later request is handed
+            // one of those corpses and hangs on it in turn, so a single network
+            // blip reads as "the model is down" for the life of the process while
+            // the gateway keeps answering connections and completing auth. Both of
+            // these end that: idle connections are retired rather than reused, and
+            // keepalive probes surface a dead one before a request picks it up.
+            .pool_idle_timeout(PROVIDER_POOL_IDLE_TIMEOUT)
+            .tcp_keepalive(PROVIDER_TCP_KEEPALIVE),
+    );
     if let Some(read) = provider_read_timeout() {
-        builder = builder.read_timeout(read);
+        builder.read_timeout(read)
+    } else {
+        builder
     }
-    builder
 }
 
 /// A `reqwest::Client` for talking to model providers.

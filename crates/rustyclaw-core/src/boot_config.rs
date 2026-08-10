@@ -210,6 +210,7 @@ impl BootConfig {
                 provider: provider.clone(),
                 model,
                 base_url,
+                tls_ca_cert: None,
             });
         } else if let Some(model) = &self.model {
             // A model without a provider only makes sense on an existing one.
@@ -380,6 +381,7 @@ ssh_bind = "0.0.0.0:2222"
                 provider: "openai".into(),
                 model: Some("gpt-4o".into()),
                 base_url: Some("https://proxy.example".into()),
+                tls_ca_cert: None,
             }),
             workspace_dir: Some(PathBuf::from("/old")),
             ssh: None,
@@ -424,6 +426,7 @@ ssh_bind = "0.0.0.0:2222"
                 provider: "openai".into(),
                 model: Some("gpt-4o".into()),
                 base_url: Some("https://proxy.example".into()),
+                tls_ca_cert: None,
             }),
             ..Config::default()
         };
@@ -455,6 +458,7 @@ ssh_bind = "0.0.0.0:2222"
                 provider: "openai".into(),
                 model: Some("gpt-4o".into()),
                 base_url: Some("https://api.openai.com/v1".into()),
+                tls_ca_cert: None,
             }),
             ..Config::default()
         };
@@ -487,6 +491,7 @@ ssh_bind = "0.0.0.0:2222"
                 provider: "openai".into(),
                 model: Some("gpt-4o".into()),
                 base_url: Some("https://proxy.example".into()),
+                tls_ca_cert: None,
             }),
             ..Config::default()
         };
@@ -510,6 +515,7 @@ ssh_bind = "0.0.0.0:2222"
                 provider: "openai".into(),
                 model: None,
                 base_url: None,
+                tls_ca_cert: None,
             }),
             ..Config::default()
         };
