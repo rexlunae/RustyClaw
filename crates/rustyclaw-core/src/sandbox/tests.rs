@@ -161,3 +161,39 @@ fn test_path_validation_allows_workspace() {
         ));
     }
 }
+
+/// The user-namespace check decided whether MCP confinement applied at all,
+/// and it was reading a sysctl that only Debian and Ubuntu have.
+#[cfg(target_os = "linux")]
+#[cfg(test)]
+mod userns_detection_tests {
+    use super::super::userns_allowed;
+
+    fn s(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    /// The regression: on Fedora, Arch, RHEL and mainline neither knob may be
+    /// present. Reading that as "denied" reported confinement as impossible on
+    /// hosts where bubblewrap works, so `auto` ran MCP servers unconfined and
+    /// `required` refused to start.
+    #[test]
+    fn absent_knobs_mean_permitted() {
+        assert!(userns_allowed(None, None));
+    }
+
+    /// Debian's knob still wins when it is present and says no.
+    #[test]
+    fn an_explicit_zero_from_either_knob_is_a_denial() {
+        assert!(!userns_allowed(s("0\n"), None));
+        assert!(!userns_allowed(None, s("0\n")));
+        assert!(!userns_allowed(s("1"), s("0")));
+    }
+
+    /// And present-and-permitting is permitted — a rule that always said yes
+    /// would pass the first test and tell nobody anything.
+    #[test]
+    fn present_and_permitting_is_permitted() {
+        assert!(userns_allowed(s("1\n"), s("15000\n")));
+    }
+}

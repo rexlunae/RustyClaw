@@ -54,11 +54,41 @@ impl McpClient {
             return Err(anyhow::anyhow!("MCP server command rejected: {}", e));
         }
 
-        let mut cmd = Command::new(&self.config.command);
-        cmd.args(&self.config.args);
+        // Decide how to launch before touching a Command, so the decision is
+        // a value that can be logged and tested rather than a sequence of
+        // mutations (issue #230).
+        // `cached()` so the probes run once per process rather than once per
+        // server, and `spawn_blocking` because they are process spawns and
+        // this is a tokio worker thread.
+        let caps = tokio::task::spawn_blocking(crate::sandbox::SandboxCapabilities::cached)
+            .await
+            .map_err(|e| anyhow::anyhow!("Sandbox capability probe failed: {e}"))?;
+        let plan = super::spawn::plan_spawn(&self.config, caps).map_err(|reason| {
+            anyhow::anyhow!(
+                "MCP server '{}' is configured with sandbox = \"required\" but {reason}",
+                self.name
+            )
+        })?;
 
-        // Set environment variables
-        for (key, value) in &self.config.env {
+        match &plan.unconfined_reason {
+            Some(reason) => warn!(
+                server = %self.name,
+                reason = %reason,
+                "MCP server is running WITHOUT process confinement — it can read \
+                 anything this process can, including the vault. Set sandbox = \
+                 \"required\" to refuse instead, or sandbox = \"off\" to silence this."
+            ),
+            None if plan.confined => info!(server = %self.name, "MCP server confined"),
+            None => debug!(server = %self.name, "MCP server confinement disabled by config"),
+        }
+
+        let mut cmd = Command::new(&plan.program);
+        cmd.args(&plan.args);
+
+        if plan.clear_env {
+            cmd.env_clear();
+        }
+        for (key, value) in &plan.env {
             cmd.env(key, value);
         }
 

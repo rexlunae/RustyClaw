@@ -43,12 +43,20 @@ mod client;
 mod config;
 #[cfg(feature = "mcp")]
 mod manager;
+
+// Ungated for the same reason as `config`, and one more: these are the tests
+// that prove a server is actually confined, and CI's unit-test job runs with
+// default features and with none — neither of which turns `mcp` on. Gating
+// this module would mean the confinement tests never ran in CI at all, which
+// is the kind of coverage that looks present and is not.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+mod spawn;
 #[cfg(feature = "mcp")]
 mod tools;
 
 #[cfg(feature = "mcp")]
 pub use client::McpClient;
-pub use config::{McpConfig, McpServerConfig};
+pub use config::{McpConfig, McpSandbox, McpServerConfig};
 #[cfg(feature = "mcp")]
 pub use manager::{McpManager, McpServerStatus, McpStatus};
 #[cfg(feature = "mcp")]
