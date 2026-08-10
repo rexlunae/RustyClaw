@@ -13,7 +13,7 @@
 
 use super::config::{McpSandbox, McpServerConfig};
 use crate::sandbox::{SandboxCapabilities, SandboxPolicy, platform};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Environment variables a confined server keeps from the parent.
 ///
@@ -69,11 +69,15 @@ fn confinement_unavailable(caps: &SandboxCapabilities) -> Option<String> {
 
 /// A per-user scratch directory for servers that declare no `cwd`.
 ///
-/// Under the system temp directory rather than the gateway's cwd, so the
-/// read-write workspace bind grants access to somewhere disposable instead of
-/// wherever the process happened to start.
-fn private_workspace() -> PathBuf {
-    let dir = std::env::temp_dir().join("rustyclaw-mcp-workspace");
+/// Under the settings directory, deliberately **not** the system temp dir.
+/// `bwrap_confinement_args` emits the workspace bind and then `--tmpfs /tmp`,
+/// and bubblewrap applies mounts in argument order — so a workspace under
+/// `/tmp` is hidden by the tmpfs that follows it, `--chdir` then targets a
+/// path that does not exist in the namespace, and bwrap exits fatally. The
+/// first version of this put the scratch directory in `/tmp`, which would
+/// have stopped every server without a `cwd` from starting at all.
+fn private_workspace(settings_dir: &Path) -> PathBuf {
+    let dir = settings_dir.join("mcp-workspace");
     // Best effort: if this cannot be created, bwrap will fail loudly on the
     // bind rather than silently confining to nothing.
     std::fs::create_dir_all(&dir).ok();
@@ -128,9 +132,23 @@ pub(crate) fn plan_spawn(
     // read-write access to whatever directory the gateway was started in. If
     // that is the user's home, the server gets the vault: exactly the thing
     // issue #230 is about, handed over by the fix for it.
-    let workspace = match config.cwd.as_ref() {
-        Some(cwd) => PathBuf::from(cwd),
-        None => private_workspace(),
+    let settings_dir = crate::runtime_ctx::get_settings_dir();
+    let workspace = match (config.cwd.as_ref(), settings_dir.as_ref()) {
+        (Some(cwd), _) => PathBuf::from(cwd),
+        (None, Some(settings)) => private_workspace(settings),
+        // Nowhere safe to put a scratch directory. Reported through the same
+        // path as any other reason confinement cannot happen, so `auto` warns
+        // and `required` refuses — rather than falling back to the gateway's
+        // own directory, which is what this branch exists to avoid.
+        (None, None) => {
+            let reason = "no settings directory is registered, so there is nowhere to \
+                          put a private workspace for a server with no `cwd`"
+                .to_string();
+            return match config.sandbox {
+                McpSandbox::Required => Err(reason),
+                _ => Ok(unconfined(Some(reason))),
+            };
+        }
     };
 
     // And the credentials directory is denied outright, the way every other
@@ -138,9 +156,22 @@ pub(crate) fn plan_spawn(
     // `tools::helpers::init_sandbox`). `SandboxPolicy::default()` carries
     // empty deny lists; using it here meant a configured `cwd` that happened
     // to be an ancestor of the vault exposed it.
-    let policy = match crate::runtime_ctx::get_settings_dir() {
+    let policy = match settings_dir.as_ref() {
         Some(settings) => {
-            SandboxPolicy::protect_credentials(settings.join("credentials"), &workspace)
+            let credentials = settings.join("credentials");
+            // A workspace that *contains* the credentials directory cannot be
+            // both bound and denied: the deny match is bidirectional, so the
+            // workspace bind is dropped entirely and `--chdir` then fails with
+            // an opaque bwrap exit. Saying so is more use than dying.
+            if credentials.starts_with(&workspace) {
+                return Err(format!(
+                    "the working directory {} contains the credentials directory, so it \
+                     cannot be made available to a confined server without exposing the \
+                     vault — set a narrower `cwd`, or `sandbox = \"off\"` to accept that",
+                    workspace.display()
+                ));
+            }
+            SandboxPolicy::protect_credentials(credentials, &workspace)
         }
         // No settings directory registered: nothing to protect, and inventing
         // a path would deny something arbitrary.
@@ -294,19 +325,38 @@ mod tests {
     /// gateway's current directory — which bwrap binds **read-write**. If the
     /// gateway started in the user's home, "confined" meant read-write access
     /// to `~/.rustyclaw/credentials`, the exact thing #230 is about.
-    #[cfg(target_os = "linux")]
+    ///
+    /// No settings directory is registered under test, so this exercises the
+    /// branch that refuses to invent a workspace. Asserting on the reason
+    /// rather than on the absence of a path: an earlier version of this test
+    /// checked only that the current directory was missing from the argv,
+    /// which the unconfined plan satisfies trivially — it has no argv to
+    /// speak of.
     #[test]
-    fn a_server_without_a_cwd_does_not_get_the_gateways_directory() {
+    fn a_server_without_a_cwd_never_falls_back_to_the_gateways_directory() {
         let mut cfg = server(McpSandbox::Auto);
         cfg.cwd = None;
-        let plan = plan_spawn(&cfg, &capable()).expect("plans");
+        let plan = plan_spawn(&cfg, &capable()).expect("auto degrades rather than failing");
+
+        assert!(!plan.confined, "confinement needs a workspace it can name");
+        let reason = plan.unconfined_reason.expect("a reason must be attached");
+        assert!(reason.contains("workspace"), "got: {reason}");
 
         let here = std::env::current_dir().expect("a current directory");
         assert!(
             !plan.args.iter().any(|a| a == &here.display().to_string()),
-            "the gateway's own directory was bound into the sandbox: {:?}",
+            "the gateway's own directory reached the plan: {:?}",
             plan.args
         );
+    }
+
+    /// And `required` refuses outright rather than running unconfined.
+    #[test]
+    fn required_refuses_when_there_is_nowhere_to_put_a_workspace() {
+        let mut cfg = server(McpSandbox::Required);
+        cfg.cwd = None;
+        let err = plan_spawn(&cfg, &capable()).expect_err("required must refuse");
+        assert!(err.contains("workspace"), "got: {err}");
     }
 
     /// A server told about a directory gets that directory, and only it.
