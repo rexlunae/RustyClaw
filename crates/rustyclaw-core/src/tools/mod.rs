@@ -22,6 +22,7 @@ mod file;
 pub mod freenet;
 mod gateway_tools;
 pub(crate) mod helpers;
+pub mod http;
 #[cfg(feature = "image-gen")]
 mod image_gen;
 mod kernel_tools;
@@ -80,6 +81,7 @@ use file::{
 use runtime::{exec_execute_command, exec_process};
 
 // Web operations
+use http::exec_http_request;
 use web::{exec_web_fetch, exec_web_search};
 use web_extract::exec_web_extract_stub;
 
@@ -308,6 +310,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "execute_command" => "Run shell commands",
         "web_fetch" => "Fetch content from URLs",
         "web_search" => "Search the web",
+        "http_request" => "Make HTTP requests to APIs",
         "process" => "Manage background processes",
         "memory_search" => "Search agent memory files",
         "memory_get" => "Read agent memory files",
@@ -472,6 +475,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &EXECUTE_COMMAND,
         &WEB_FETCH,
         &WEB_SEARCH,
+        &HTTP_REQUEST,
         &PROCESS,
         #[cfg(feature = "semantic-memory")]
         &MEMORY_SEARCH,
@@ -656,6 +660,7 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "process",
     "web_fetch",
     "web_search",
+    "http_request",
     "read_file",
     "write_file",
     "edit_file",
@@ -745,6 +750,7 @@ pub async fn execute_tool_streaming(
             "process" => runtime::exec_process_async(args, workspace_dir).await,
             "web_fetch" => web::exec_web_fetch_async(args, workspace_dir).await,
             "web_search" => web::exec_web_search_async(args, workspace_dir).await,
+            "http_request" => http::exec_http_request_async(args, workspace_dir).await,
             "read_file" => file::exec_read_file_async(args, workspace_dir).await,
             "write_file" => file::exec_write_file_async(args, workspace_dir).await,
             "edit_file" => file::exec_edit_file_async(args, workspace_dir).await,

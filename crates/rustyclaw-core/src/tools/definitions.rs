@@ -108,6 +108,28 @@ pub static WEB_FETCH: ToolDef = ToolDef {
     execute: exec_web_fetch,
 };
 
+pub static HTTP_REQUEST: ToolDef = ToolDef {
+    name: "http_request",
+    description: "Make an HTTP request with the method, headers and body under your control. \
+                  Use this for APIs; use web_fetch for reading web pages.\n\n\
+                  Differences from web_fetch that matter:\n\
+                  - Any method: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.\n\
+                  - Send a body with 'json' (an object, sent as application/json), \
+                  'form' (an object, sent form-encoded), or 'body' (a raw string). \
+                  Give at most one of the three.\n\
+                  - The response is returned as the status line, the headers worth \
+                  reading, and the body verbatim — not extracted or converted to \
+                  markdown, so JSON comes back as JSON.\n\
+                  - **A failing status is returned, not raised.** A 404 or a 422 comes \
+                  back with its body, because that body is where the API explains \
+                  itself. Read the status line to see what happened.\n\n\
+                  Auth: pass 'authorization' (e.g. 'Bearer <token>') or use 'headers' \
+                  for API-key headers. Private, loopback and cloud-metadata addresses \
+                  are refused, on the first request and on every redirect.",
+    parameters: vec![],
+    execute: exec_http_request,
+};
+
 pub static WEB_SEARCH: ToolDef = ToolDef {
     name: "web_search",
     description: "Search the web using Brave Search API. Returns titles, URLs, and snippets. \

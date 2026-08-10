@@ -53,6 +53,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "execute_command" => execute_command_params(),
         "web_fetch" => web_fetch_params(),
         "web_search" => web_search_params(),
+        "http_request" => crate::tools::http::http_request_params(),
         "process" => process_params(),
         "memory_search" => memory_search_params(),
         "memory_get" => memory_get_params(),

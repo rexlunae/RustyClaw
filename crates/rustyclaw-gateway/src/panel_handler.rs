@@ -1027,7 +1027,7 @@ fn tool_category(name: &str) -> &'static str {
         "read_file" | "write_file" | "edit_file" | "list_directory" | "search_files"
         | "find_files" | "apply_patch" | "document" => "files",
         "execute_command" | "process" => "runtime",
-        "web_fetch" | "web_search" | "web_extract" => "web",
+        "web_fetch" | "web_search" | "web_extract" | "http_request" => "web",
         "memory_search" | "memory_get" | "save_memory" | "search_history" | "add_memory" => {
             "memory"
         }
