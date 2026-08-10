@@ -32,6 +32,15 @@ use crate::{
 /// messenger handlers).
 const MAX_TOOL_ROUNDS: usize = 25;
 
+/// Upper bound on one model call inside a scheduled turn, matching the
+/// spawned-run and subagent runners.
+///
+/// This is a *total* deadline, not a silence detector. The shared provider
+/// client's read timeout only fires between bytes, so a trickling or stalled
+/// connection can otherwise hold the turn open for hours while the scheduler
+/// sits in its sequential loop behind it (observed: a 5.6 h hang, issue #447).
+const MODEL_CALL_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Upper bound on one scheduler sleep. The loop wakes on edits anyway;
 /// this bounds how long a missed notify (or clock weirdness) can delay a
 /// fire.
@@ -458,7 +467,17 @@ async fn run_agent_turn(
         let mut final_response = String::new();
 
         for _round in 0..MAX_TOOL_ROUNDS {
-            let model_resp = providers::call_with_tools(&http, &resolved, None).await?;
+            let model_resp = tokio::time::timeout(
+                MODEL_CALL_TIMEOUT,
+                providers::call_with_tools(&http, &resolved, None),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "model call timed out after {}s",
+                    MODEL_CALL_TIMEOUT.as_secs()
+                )
+            })??;
 
             if !model_resp.text.is_empty() {
                 final_response.push_str(&model_resp.text);
