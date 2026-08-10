@@ -168,6 +168,26 @@ pub(crate) fn plan_spawn(
             ..SandboxPolicy::default()
         },
     };
+    // A workspace *inside* something denied cannot be bound at all, so the
+    // server would start somewhere other than where it was told to. The argv
+    // builder falls back to the sandbox home rather than dying, but silently
+    // relocating a server is not an improvement on saying so.
+    if policy
+        .deny_read
+        .iter()
+        .any(|deny| policy.workspace.starts_with(deny))
+    {
+        let reason = format!(
+            "the working directory {} is inside the credentials directory, which a \
+             confined server cannot be given",
+            policy.workspace.display()
+        );
+        return match config.sandbox {
+            McpSandbox::Required => Err(reason),
+            _ => Ok(unconfined(Some(reason))),
+        };
+    }
+
     let extra: Vec<PathBuf> = config.allow_paths.iter().map(PathBuf::from).collect();
 
     let (program, args) =

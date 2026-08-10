@@ -35,16 +35,21 @@ pub fn wrap_argv_with_bwrap(
 ) -> (String, Vec<String>) {
     let mut args = bwrap_confinement_args(policy);
     for path in extra_binds {
-        // Through the same deny list as every other mount. Appending these
-        // past it meant `allow_paths = ["/home/user"]` re-exposed the
-        // credentials directory the policy had just been built to protect —
-        // read-only, but that is quite enough for a vault.
-        if path.exists()
-            && !policy
-                .deny_read
-                .iter()
-                .any(|d| path.starts_with(d) || d.starts_with(path))
-        {
+        // Through the deny lists like every other mount. Appending these past
+        // them meant `allow_paths = ["/home/user"]` re-exposed the credentials
+        // directory the policy had just been built to protect — read-only, but
+        // that is quite enough for a vault.
+        //
+        // All three lists, not just `deny_read`. The call sites today populate
+        // them identically, so checking one happened to be sufficient; a
+        // policy built with the `deny_write`/`deny_exec` builders alone would
+        // have had its protected path quietly re-mounted, readable and
+        // executable.
+        let denied = [&policy.deny_read, &policy.deny_write, &policy.deny_exec]
+            .into_iter()
+            .flatten()
+            .any(|d| path.starts_with(d) || d.starts_with(path));
+        if path.exists() && !denied {
             // `--ro-bind`, matching the doc comment above. It said
             // "read-only mounts" while emitting `--bind`, so a reader granting
             // an MCP server sight of a directory was silently granting it
@@ -151,7 +156,8 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
     // `cwd = "/home/user"` could no longer write anywhere in its own home. The
     // read fix without the write fix is half a fix.
     let inside = |denies: &[PathBuf]| denies.iter().any(|d| policy.workspace.starts_with(d));
-    if !inside(&policy.deny_read) {
+    let workspace_bound = !inside(&policy.deny_read);
+    if workspace_bound {
         if inside(&policy.deny_write) {
             args.push("--ro-bind".to_string());
         } else {
@@ -192,9 +198,20 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
     args.push("--dev".to_string());
     args.push("/dev".to_string());
 
-    // Working directory
+    // Working directory.
+    //
+    // Only if the workspace was actually bound. `--chdir` at a path absent
+    // from the namespace is fatal to bwrap, so a workspace inside a denied
+    // path — skipped above, because there is nothing to bind — took the
+    // process down with an error that named none of this. The sandbox home
+    // always exists, so it is the safe fallback; `plan_spawn` reports the
+    // condition separately rather than relocating a server in silence.
     args.push("--chdir".to_string());
-    args.push(policy.workspace.display().to_string());
+    if workspace_bound {
+        args.push(policy.workspace.display().to_string());
+    } else {
+        args.push(SANDBOX_HOME.to_string());
+    }
 
     // Die with parent
     args.push("--die-with-parent".to_string());
@@ -1077,6 +1094,25 @@ mod confinement_tests {
         assert!(
             !pairs(&args, "--bind").contains(&"/home/user/.rustyclaw/credentials/sub".to_string()),
             "a workspace inside the vault was bound: {args:?}"
+        );
+    }
+
+    /// `--chdir` at a path absent from the namespace is fatal to bwrap, so
+    /// skipping the workspace bind and then chdir'ing to it anyway took the
+    /// process down with an error naming none of this. The test that pinned
+    /// the skip did not check where the process would then start.
+    #[test]
+    fn an_unbound_workspace_does_not_leave_chdir_pointing_at_nothing() {
+        let policy = policy_with_credentials_under(
+            "/home/user/.rustyclaw/credentials/sub",
+            "/home/user/.rustyclaw/credentials",
+        );
+        let args = bwrap_confinement_args(&policy);
+        let chdir = pairs(&args, "--chdir");
+        assert_eq!(
+            chdir,
+            vec![SANDBOX_HOME.to_string()],
+            "chdir must target something that exists: {args:?}"
         );
     }
 
