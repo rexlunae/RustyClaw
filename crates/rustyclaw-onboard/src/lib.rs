@@ -755,6 +755,7 @@ pub fn run_onboard_wizard(
         } else {
             Some(base_url)
         },
+        tls_ca_cert: None,
     });
     config.messengers = configured_messengers;
 

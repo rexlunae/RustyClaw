@@ -162,6 +162,7 @@ pub(crate) async fn handle_model_switch(
             provider: provider.clone(),
             model: Some(model.clone()),
             base_url: base,
+            tls_ca_cert: None,
         });
         crate::helpers::persist_config(&cfg);
     }

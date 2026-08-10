@@ -536,3 +536,46 @@ fn the_override_is_honoured_including_the_opt_out() {
 
     unsafe { std::env::remove_var("RUSTYCLAW_PROVIDER_READ_TIMEOUT_SECS") };
 }
+
+/// A missing pin file must fail loudly, not silently disable the pin: an
+/// operator who configured a pin believes provider traffic is protected, and
+/// a quietly-ignored pin would betray that.
+#[test]
+fn a_missing_pin_file_is_a_hard_error() {
+    let err = super::set_provider_tls_pin(std::path::Path::new(
+        "/nonexistent/rustyclaw-provider-ca.pem",
+    ));
+    assert!(err.is_err(), "a missing pin file must fail");
+}
+
+/// Pinning a valid certificate installs the pin; pinning a *second* one is
+/// refused — the pin is a boot-time decision, and a later reload silently
+/// swapping it would defeat the purpose. Uses a real generated cert so the
+/// parse path is exercised, not just the lock.
+#[test]
+fn a_second_pin_set_is_refused() {
+    // Self-signed cert, so the test never trips on a foreign CA.
+    let signing_key = rcgen::KeyPair::generate().expect("key pair");
+    let params =
+        rcgen::CertificateParams::new(vec!["rustyclaw-pin-test".to_string()]).expect("cert params");
+    let cert = params.self_signed(&signing_key).expect("generate cert");
+    let pem = cert.pem();
+
+    let dir = std::env::temp_dir().join(format!("rustyclaw-tls-pin-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("ca.pem");
+    std::fs::write(&path, pem.as_bytes()).expect("write pem");
+
+    let first = super::set_provider_tls_pin(&path);
+    assert!(
+        first.is_ok(),
+        "a valid cert must install: {}",
+        first.err().map(|e| e.to_string()).unwrap_or_default()
+    );
+    let second = super::set_provider_tls_pin(&path);
+    assert!(
+        second.is_err(),
+        "a second set must be refused once a pin is installed"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

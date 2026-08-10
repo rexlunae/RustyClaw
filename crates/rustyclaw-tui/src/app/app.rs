@@ -795,6 +795,7 @@ impl App {
                                             config.model.as_ref().map(|m| m.provider.as_str()),
                                             config.model.as_ref().and_then(|m| m.base_url.clone()),
                                         ),
+                                    tls_ca_cert: None,
                                 });
                                 crate::app::events::persist_config(config, &gw_tx);
                                 // Reload gateway
@@ -873,6 +874,7 @@ impl App {
                                                     .as_ref()
                                                     .and_then(|m| m.base_url.clone()),
                                             ),
+                                        tls_ca_cert: None,
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
                                     client
@@ -956,6 +958,7 @@ impl App {
                                                     .as_ref()
                                                     .and_then(|m| m.base_url.clone()),
                                             ),
+                                        tls_ca_cert: None,
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
                                     client
@@ -1139,6 +1142,7 @@ impl App {
                             config.model.as_ref().map(|m| m.provider.as_str()),
                             config.model.as_ref().and_then(|m| m.base_url.clone()),
                         ),
+                        tls_ca_cert: None,
                     });
                     crate::app::events::persist_config(config, &gw_tx);
                     // Reload gateway
@@ -1195,6 +1199,7 @@ impl App {
                         provider: provider.clone(),
                         model: Some(model.clone()),
                         base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                        tls_ca_cert: None,
                     });
                     if let Err(e) = config.save(None) {
                         crate::app::events::emit(

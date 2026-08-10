@@ -178,3 +178,4 @@ landlock = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+rcgen = "0.14"
