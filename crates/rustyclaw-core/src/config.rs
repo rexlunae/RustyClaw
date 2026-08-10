@@ -25,6 +25,30 @@ pub struct ModelProvider {
     /// and model responses. Unset (the default) uses the system trust store.
     #[serde(default)]
     pub tls_ca_cert: Option<PathBuf>,
+
+    /// Reasoning effort hint, when the provider supports it.
+    ///
+    /// One of `none`, `low`, `medium`, `high`, `xhigh`, `max` (legacy
+    /// `minimal`), or a `budget:N` token budget. Passed through to the
+    /// provider via genai's `ReasoningEffort`; providers that do not
+    /// support reasoning effort ignore it.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+
+    /// Override the default maximum completion tokens (16384) for this
+    /// provider's models. Unset keeps the built-in default.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+
+    /// Sampling temperature. Unset lets the provider use its default.
+    #[serde(default)]
+    pub temperature: Option<f64>,
+
+    /// Total token budget (input + output) for this model across the
+    /// gateway's lifetime. Displayed in the analytics panel as usage vs.
+    /// budget; purely informational, does not gate requests.
+    #[serde(default)]
+    pub token_budget: Option<u64>,
 }
 
 /// Sandbox configuration for agent isolation.

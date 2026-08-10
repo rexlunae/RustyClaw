@@ -145,6 +145,10 @@ pub(crate) fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                             model: Some(parts[1].to_string()),
                             base_url: None,
                             tls_ca_cert: None,
+                            reasoning_effort: None,
+                            max_tokens: None,
+                            temperature: None,
+                            token_budget: None,
                         });
                         println!("  {} Model: {}", "✓".green(), model_str.cyan());
                         imported_count += 1;

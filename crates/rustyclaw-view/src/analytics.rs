@@ -8,6 +8,10 @@ pub struct UsageTotalsData {
     pub total_output_tokens: u64,
     pub total_latency_ms: u64,
     pub period: String,
+    /// Lifetime token budget (`model.token_budget`) when configured.
+    pub budget: Option<u64>,
+    /// All-time tokens used against the budget.
+    pub budget_used: u64,
 }
 
 impl From<&rustyclaw_core::gateway::protocol::frames::UsageTotalsDto> for UsageTotalsData {
@@ -18,6 +22,8 @@ impl From<&rustyclaw_core::gateway::protocol::frames::UsageTotalsDto> for UsageT
             total_output_tokens: dto.total_output_tokens,
             total_latency_ms: dto.total_latency_ms,
             period: dto.period.clone(),
+            budget: dto.budget,
+            budget_used: dto.budget_used,
         }
     }
 }

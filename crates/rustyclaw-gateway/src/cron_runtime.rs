@@ -277,8 +277,8 @@ async fn provider_context(
         None => None,
     };
 
+    let configured = deps.config.read().await.model.clone();
     let base_url = {
-        let configured = deps.config.read().await.model.clone();
         resolve_base_url(
             provider,
             configured.as_ref().map(|m| m.provider.as_str()),
@@ -291,6 +291,9 @@ async fn provider_context(
         model,
         base_url,
         api_key,
+        reasoning_effort: configured.as_ref().and_then(|m| m.reasoning_effort.clone()),
+        max_tokens: configured.as_ref().and_then(|m| m.max_tokens),
+        temperature: configured.as_ref().and_then(|m| m.temperature),
     })
 }
 
@@ -460,6 +463,9 @@ async fn run_agent_turn(
             api_key: effective_key,
             messages,
             allowed_tools: None,
+            reasoning_effort: model_ctx.reasoning_effort.clone(),
+            max_tokens: model_ctx.max_tokens,
+            temperature: model_ctx.temperature,
         };
 
         let http = rustyclaw_core::providers::http_client();

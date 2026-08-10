@@ -285,6 +285,9 @@ pub(crate) async fn handle_thread_switch(
                 api_key: ctx.api_key.clone(),
                 // Summarisation never needs tools.
                 allowed_tools: Some(Vec::new()),
+                reasoning_effort: ctx.reasoning_effort.clone(),
+                max_tokens: ctx.max_tokens,
+                temperature: ctx.temperature,
             };
 
             // Summarising is housekeeping on the thread being *left*, and

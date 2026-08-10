@@ -796,6 +796,10 @@ impl App {
                                             config.model.as_ref().and_then(|m| m.base_url.clone()),
                                         ),
                                     tls_ca_cert: None,
+                                    reasoning_effort: None,
+                                    max_tokens: None,
+                                    temperature: None,
+                                    token_budget: None,
                                 });
                                 crate::app::events::persist_config(config, &gw_tx);
                                 // Reload gateway
@@ -875,6 +879,10 @@ impl App {
                                                     .and_then(|m| m.base_url.clone()),
                                             ),
                                         tls_ca_cert: None,
+                                        reasoning_effort: None,
+                                        max_tokens: None,
+                                        temperature: None,
+                                        token_budget: None,
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
                                     client
@@ -959,6 +967,10 @@ impl App {
                                                     .and_then(|m| m.base_url.clone()),
                                             ),
                                         tls_ca_cert: None,
+                                        reasoning_effort: None,
+                                        max_tokens: None,
+                                        temperature: None,
+                                        token_budget: None,
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
                                     client
@@ -1143,6 +1155,10 @@ impl App {
                             config.model.as_ref().and_then(|m| m.base_url.clone()),
                         ),
                         tls_ca_cert: None,
+                        reasoning_effort: None,
+                        max_tokens: None,
+                        temperature: None,
+                        token_budget: None,
                     });
                     crate::app::events::persist_config(config, &gw_tx);
                     // Reload gateway
@@ -1200,6 +1216,10 @@ impl App {
                         model: Some(model.clone()),
                         base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                         tls_ca_cert: None,
+                        reasoning_effort: None,
+                        max_tokens: None,
+                        temperature: None,
+                        token_budget: None,
                     });
                     if let Err(e) = config.save(None) {
                         crate::app::events::emit(

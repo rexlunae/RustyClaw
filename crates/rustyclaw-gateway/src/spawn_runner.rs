@@ -347,6 +347,9 @@ async fn run_session(
             ),
         ],
         allowed_tools: None,
+        reasoning_effort: ctx.model_ctx.reasoning_effort.clone(),
+        max_tokens: ctx.model_ctx.max_tokens,
+        temperature: ctx.model_ctx.temperature,
     };
 
     let mut last_text = String::new();
@@ -522,6 +525,9 @@ mod tests {
                 model: "gpt-4o-mini".to_string(),
                 base_url: "http://localhost".to_string(),
                 api_key: Some(String::new()),
+                reasoning_effort: None,
+                max_tokens: None,
+                temperature: None,
             }),
             vault: Arc::new(tokio::sync::Mutex::new(
                 rustyclaw_core::secrets::SecretsManager::new(tmp),

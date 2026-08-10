@@ -94,7 +94,7 @@ pub async fn handle_panel_request(
         }
 
         // ── Analytics / logs (from the stats observer) ───────────────────
-        ClientPayload::UsageStatsRequest { period } => usage_stats(period),
+        ClientPayload::UsageStatsRequest { period } => usage_stats(period, config),
         ClientPayload::LogsRequest { source, tail, .. } => logs(source, tail).await,
 
         // ── Still stubbed: no backing subsystem yet ──────────────────────
@@ -163,11 +163,30 @@ fn period_start_ms(period: &str) -> Option<u64> {
     Some(now.saturating_sub(window))
 }
 
-fn usage_stats(period: Option<String>) -> ServerFrame {
+fn usage_stats(period: Option<String>, config: &Config) -> ServerFrame {
     let period = period.unwrap_or_else(|| "all".into());
-    let usage = rustyclaw_core::runtime_ctx::get_stats_observer()
+    let observer = rustyclaw_core::runtime_ctx::get_stats_observer();
+    let usage = observer
+        .as_ref()
         .map(|stats| stats.usage(period_start_ms(&period)))
         .unwrap_or_default();
+
+    // Budget is a lifetime cap for the configured model, so the "used"
+    // figure is always the all-time total regardless of the requested
+    // period.
+    let (budget, budget_used) = match config.model.as_ref().and_then(|m| m.token_budget) {
+        Some(b) => {
+            let lifetime = observer
+                .as_ref()
+                .map(|stats| stats.usage(None))
+                .unwrap_or_default();
+            let used = lifetime
+                .total_input_tokens
+                .saturating_add(lifetime.total_output_tokens);
+            (Some(b), used)
+        }
+        None => (None, 0),
+    };
 
     ServerFrame {
         frame_type: ServerFrameType::UsageStatsResult,
@@ -178,6 +197,8 @@ fn usage_stats(period: Option<String>) -> ServerFrame {
                 total_output_tokens: usage.total_output_tokens,
                 total_latency_ms: usage.total_latency_ms,
                 period,
+                budget,
+                budget_used,
             },
             per_model: usage
                 .per_model

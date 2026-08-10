@@ -86,6 +86,10 @@ pub struct ProviderRequest {
     /// focused subagent runs). `None` presents the full registry;
     /// `Some(vec![])` presents no tools at all.
     pub allowed_tools: Option<Vec<String>>,
+    /// Model options (see `ModelProvider` config for semantics).
+    pub reasoning_effort: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f64>,
 }
 
 // ── Model context (resolved once at startup) ────────────────────────────────
@@ -102,6 +106,10 @@ pub struct ModelContext {
     pub model: String,
     pub base_url: String,
     pub api_key: Option<String>,
+    /// Model options resolved from the `[model]` config section.
+    pub reasoning_effort: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f64>,
 }
 
 impl ModelContext {
@@ -147,6 +155,9 @@ impl ModelContext {
             model,
             base_url,
             api_key,
+            reasoning_effort: mp.reasoning_effort.clone(),
+            max_tokens: mp.max_tokens,
+            temperature: mp.temperature,
         })
     }
 
@@ -184,7 +195,16 @@ impl ModelContext {
             model,
             base_url,
             api_key,
+            reasoning_effort: mp.reasoning_effort.clone(),
+            max_tokens: mp.max_tokens,
+            temperature: mp.temperature,
         })
+    }
+
+    /// Whether this context carries model options beyond the default
+    /// (reasoning effort, max tokens, temperature).
+    pub fn has_model_options(&self) -> bool {
+        self.reasoning_effort.is_some() || self.max_tokens.is_some() || self.temperature.is_some()
     }
 }
 

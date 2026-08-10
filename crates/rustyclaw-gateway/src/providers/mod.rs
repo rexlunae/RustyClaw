@@ -153,6 +153,9 @@ pub fn resolve_request(
         base_url,
         api_key,
         allowed_tools: None,
+        reasoning_effort: ctx.and_then(|c| c.reasoning_effort.clone()),
+        max_tokens: ctx.and_then(|c| c.max_tokens),
+        temperature: ctx.and_then(|c| c.temperature),
     })
 }
 
@@ -511,6 +514,9 @@ pub async fn compact_conversation(
         base_url: resolved.base_url.clone(),
         api_key: resolved.api_key.clone(),
         allowed_tools: Some(Vec::new()),
+        reasoning_effort: resolved.reasoning_effort.clone(),
+        max_tokens: resolved.max_tokens,
+        temperature: resolved.temperature,
     };
 
     let summary_result = tokio::time::timeout(

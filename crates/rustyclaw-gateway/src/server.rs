@@ -4870,6 +4870,9 @@ mod tests {
                 model: "mock-model".to_string(),
                 base_url: format!("http://{addr}/v1"),
                 api_key: Some("test-key".to_string()),
+                reasoning_effort: None,
+                max_tokens: None,
+                temperature: None,
             },
         ))))
     }
@@ -5213,6 +5216,9 @@ mod tests {
             model: "mock-model".to_string(),
             base_url: format!("http://{addr}/v1"),
             api_key: Some("test-key".to_string()),
+            reasoning_effort: None,
+            max_tokens: None,
+            temperature: None,
         }));
 
         // Back to `stale`, then away from it again — the switch that should
@@ -5814,6 +5820,9 @@ mod tests {
                 model: "mock-model".to_string(),
                 base_url: format!("http://{addr}/v1"),
                 api_key: Some("test-key".to_string()),
+                reasoning_effort: None,
+                max_tokens: None,
+                temperature: None,
             },
         ))));
 
@@ -5928,6 +5937,9 @@ mod tests {
                 model: "mock-model".to_string(),
                 base_url: format!("http://{addr}/v1"),
                 api_key: Some("test-key".to_string()),
+                reasoning_effort: None,
+                max_tokens: None,
+                temperature: None,
             },
         ))));
 
