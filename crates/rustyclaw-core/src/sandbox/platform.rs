@@ -35,7 +35,16 @@ pub fn wrap_argv_with_bwrap(
 ) -> (String, Vec<String>) {
     let mut args = bwrap_confinement_args(policy);
     for path in extra_binds {
-        if path.exists() {
+        // Through the same deny list as every other mount. Appending these
+        // past it meant `allow_paths = ["/home/user"]` re-exposed the
+        // credentials directory the policy had just been built to protect —
+        // read-only, but that is quite enough for a vault.
+        if path.exists()
+            && !policy
+                .deny_read
+                .iter()
+                .any(|d| path.starts_with(d) || d.starts_with(path))
+        {
             // `--ro-bind`, matching the doc comment above. It said
             // "read-only mounts" while emitting `--bind`, so a reader granting
             // an MCP server sight of a directory was silently granting it
@@ -118,8 +127,30 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
         args.push("/etc".to_string());
     }
 
-    // Workspace: read-only if in deny_write, writable otherwise, skip if in deny_read
-    if !is_read_denied(&policy.workspace) {
+    // Writable /tmp.
+    //
+    // Emitted *before* the workspace bind, not after. bubblewrap applies
+    // mounts in argument order, so a tmpfs laid over /tmp hides every bind
+    // that came earlier underneath it — a workspace at /tmp/work would vanish
+    // and the `--chdir` below would then fail fatally, taking the whole server
+    // down. Ordering it first means later binds land on top, which is what a
+    // caller naming a path under /tmp asks for.
+    args.push("--tmpfs".to_string());
+    args.push("/tmp".to_string());
+
+    // Workspace: read-only if in deny_write, writable otherwise.
+    //
+    // "Denied" here means the workspace sits *inside* something denied — then
+    // there is nothing to bind. A denied path inside the workspace is the
+    // opposite case and is handled by masking below: refusing to bind the
+    // whole workspace because it contains the credentials directory left
+    // `--chdir` pointing at a path absent from the namespace, which bwrap
+    // treats as fatal, so a server with `cwd = "/home/user"` simply died.
+    let workspace_inside_denied = policy
+        .deny_read
+        .iter()
+        .any(|deny| policy.workspace.starts_with(deny));
+    if !workspace_inside_denied {
         if is_write_denied(&policy.workspace) {
             args.push("--ro-bind".to_string());
         } else {
@@ -127,11 +158,18 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
         }
         args.push(policy.workspace.display().to_string());
         args.push(policy.workspace.display().to_string());
-    }
 
-    // Writable /tmp
-    args.push("--tmpfs".to_string());
-    args.push("/tmp".to_string());
+        // Mask anything denied that lives under the workspace we just bound.
+        // An empty tmpfs over the credentials directory means the server gets
+        // its working directory and the vault stays out of reach, instead of
+        // having to choose between the two.
+        for deny in &policy.deny_read {
+            if deny.starts_with(&policy.workspace) && deny != &policy.workspace && deny.exists() {
+                args.push("--tmpfs".to_string());
+                args.push(deny.display().to_string());
+            }
+        }
+    }
 
     // Set up /proc for basic functionality
     args.push("--proc".to_string());

@@ -234,7 +234,11 @@ A confined server gets:
 
 - its working directory (`cwd`) read-write. A server that sets no `cwd` gets a
   private scratch directory, **not** the directory the gateway was started in
-- anything in `allow_paths`, mounted **read-only**
+- anything in `allow_paths`, mounted **read-only**, and filtered through the
+  same deny list as everything else — listing a directory that contains the
+  credentials folder does not re-expose it
+- `HOME` pointing at `/tmp/home` on the sandbox's own tmpfs, not the real home
+  directory, so `npx` and `uvx` have somewhere to write their caches
 - never the credentials directory, which is denied explicitly
 - a read-only `/usr`, `/lib`, `/bin`, `/etc`, a private `/tmp`, and its own
   `/proc`

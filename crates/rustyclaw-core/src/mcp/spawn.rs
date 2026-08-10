@@ -23,6 +23,10 @@ use std::path::{Path, PathBuf};
 /// hands it over without the server having to touch the disk at all.
 const ENV_PASSTHROUGH: &[&str] = &["PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR"];
 
+/// Where `HOME` points inside the sandbox: on the writable tmpfs, so tools
+/// that insist on a home-directory cache have somewhere to put one.
+const SANDBOX_HOME: &str = "/tmp/home";
+
 /// What to spawn, and how.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpawnPlan {
@@ -159,18 +163,6 @@ pub(crate) fn plan_spawn(
     let policy = match settings_dir.as_ref() {
         Some(settings) => {
             let credentials = settings.join("credentials");
-            // A workspace that *contains* the credentials directory cannot be
-            // both bound and denied: the deny match is bidirectional, so the
-            // workspace bind is dropped entirely and `--chdir` then fails with
-            // an opaque bwrap exit. Saying so is more use than dying.
-            if credentials.starts_with(&workspace) {
-                return Err(format!(
-                    "the working directory {} contains the credentials directory, so it \
-                     cannot be made available to a confined server without exposing the \
-                     vault — set a narrower `cwd`, or `sandbox = \"off\"` to accept that",
-                    workspace.display()
-                ));
-            }
             SandboxPolicy::protect_credentials(credentials, &workspace)
         }
         // No settings directory registered: nothing to protect, and inventing
@@ -189,6 +181,16 @@ pub(crate) fn plan_spawn(
         .iter()
         .filter_map(|key| std::env::var(key).ok().map(|v| ((*key).to_string(), v)))
         .collect();
+    // HOME was passed through pointing at the real home directory, which is
+    // not mounted in the namespace. `npx` writes to `$HOME/.npm` and `uvx` to
+    // `$HOME/.cache/uv`, so both failed on a path that does not exist —
+    // including the example in SANDBOX.md. Point it at the tmpfs instead: the
+    // caches are disposable, and a confined server has no business reading
+    // the real home anyway.
+    env.retain(|(k, _)| k != "HOME");
+    env.push(("HOME".to_string(), SANDBOX_HOME.to_string()));
+    env.retain(|(k, _)| k != "TMPDIR");
+    env.push(("TMPDIR".to_string(), "/tmp".to_string()));
     // The server's own configuration wins over the inherited value, so a
     // server that sets its own HOME or PATH still gets it.
     for (key, value) in configured_env {
@@ -357,6 +359,44 @@ mod tests {
         cfg.cwd = None;
         let err = plan_spawn(&cfg, &capable()).expect_err("required must refuse");
         assert!(err.contains("workspace"), "got: {err}");
+    }
+
+    /// bubblewrap applies mounts in order, so `--tmpfs /tmp` emitted after a
+    /// bind under /tmp hid it, and the `--chdir` that followed died on a path
+    /// absent from the namespace. A `cwd` under /tmp is ordinary.
+    #[test]
+    fn a_workspace_under_tmp_is_not_hidden_by_the_tmpfs() {
+        let plan = plan_spawn(&server(McpSandbox::Auto), &capable()).expect("plans");
+        let tmpfs = plan
+            .args
+            .windows(2)
+            .position(|w| w[0] == "--tmpfs" && w[1] == "/tmp")
+            .expect("a tmpfs over /tmp");
+        let bind = plan
+            .args
+            .iter()
+            .position(|a| a == "/tmp/ws")
+            .expect("the workspace bind");
+        assert!(
+            bind > tmpfs,
+            "the tmpfs hides the workspace: {:?}",
+            plan.args
+        );
+    }
+
+    /// npx writes to `$HOME/.npm` and uvx to `$HOME/.cache/uv`. HOME pointed
+    /// at the real home directory, which is not mounted, so both failed —
+    /// including the documented example.
+    #[test]
+    fn home_points_somewhere_that_exists_inside_the_sandbox() {
+        let plan = plan_spawn(&server(McpSandbox::Auto), &capable()).expect("plans");
+        let home = plan
+            .env
+            .iter()
+            .find(|(k, _)| k == "HOME")
+            .map(|(_, v)| v.clone())
+            .expect("HOME is set");
+        assert_eq!(home, "/tmp/home", "HOME must be on the writable tmpfs");
     }
 
     /// A server told about a directory gets that directory, and only it.
