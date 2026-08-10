@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::memory_flush::MemoryFlushConfig;
 use crate::services::ServiceDef;
@@ -606,6 +606,21 @@ impl Config {
 
     // ── Load / save ─────────────────────────────────────────────────
 
+    /// A default config whose `settings_dir` is anchored at `config_path`'s
+    /// parent directory (falling back to the home default when there is no
+    /// parent). Used when a config file is corrupt or missing: the user's
+    /// state — and boot.toml — lives next to the config file they asked
+    /// for, not necessarily in the home directory.
+    fn anchored_default(config_path: &Path) -> Self {
+        let mut fallback = Config::default();
+        if let Some(parent) = config_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fallback.settings_dir = parent.to_path_buf();
+            }
+        }
+        fallback
+    }
+
     /// Load configuration from file, with OpenClaw compatibility
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
         let config_path = if let Some(p) = path {
@@ -642,13 +657,7 @@ impl Config {
                             // the user's state — and boot.toml — actually
                             // lives, especially when --config pointed at a
                             // custom location.
-                            let mut fallback = Config::default();
-                            if let Some(parent) = config_path.parent() {
-                                if !parent.as_os_str().is_empty() {
-                                    fallback.settings_dir = parent.to_path_buf();
-                                }
-                            }
-                            fallback
+                            Self::anchored_default(&config_path)
                         }
                         // Could not even rename it: better to stop than to
                         // silently shadow a file the next save would clobber.
@@ -662,7 +671,11 @@ impl Config {
             crate::providers::set_custom_providers(&config.custom_providers);
             config
         } else {
-            Config::default()
+            // Same anchoring for a *missing* config file: when --config
+            // pointed at a path that does not exist (first run, wrong dir),
+            // boot.toml must still be looked up next to it, not in the
+            // home directory.
+            Self::anchored_default(&config_path)
         };
 
         // Boot config (RustyClaw#175, migration rung 1): the stable,
@@ -921,5 +934,23 @@ mod tests {
         .unwrap();
         let err = Config::load(Some(path)).unwrap_err();
         assert!(err.to_string().contains("unreadable"), "{err}");
+    }
+
+    /// Regression for Devin review #442 (BUG_0002): a missing config file at
+    /// a custom path must still find boot.toml next to it, instead of
+    /// falling back to the home directory.
+    #[test]
+    fn boot_next_to_missing_custom_config_is_honored() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("custom/config.toml");
+        std::fs::create_dir_all(dir.path().join("custom")).unwrap();
+        std::fs::write(
+            dir.path().join("custom/boot.toml"),
+            "[provider]\nname = \"ollama\"\n",
+        )
+        .unwrap();
+        let config = Config::load(Some(config_path)).unwrap();
+        assert_eq!(config.model.unwrap().provider, "ollama");
+        assert_eq!(config.settings_dir, dir.path().join("custom"));
     }
 }

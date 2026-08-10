@@ -95,17 +95,18 @@ impl BootConfig {
             Ok(file) => Some(file),
             Err(toml_err) => match serde_json::from_str::<BootFile>(&content) {
                 Ok(file) => {
-                    eprintln!(
-                        "WARNING: boot config {} is JSON, not TOML — continuing (it will be \
-                         expected as TOML next time; consider renaming the file).",
-                        path.display()
+                    tracing::warn!(
+                        file = %path.display(),
+                        "Boot config is JSON, not TOML — continuing (it will be expected as \
+                         TOML next time; consider renaming the file)"
                     );
                     Some(file)
                 }
                 Err(_) => {
-                    eprintln!(
-                        "ERROR: boot config {} failed to parse as TOML ({toml_err}) or JSON.",
-                        path.display()
+                    tracing::error!(
+                        file = %path.display(),
+                        %toml_err,
+                        "Boot config failed to parse as TOML or JSON"
                     );
                     None
                 }
@@ -143,10 +144,10 @@ impl BootConfig {
         // instead: the extended config or CLI can still supply a valid one.
         if let Some(bind) = &boot.ssh_bind {
             if bind.parse::<std::net::SocketAddr>().is_err() {
-                eprintln!(
-                    "WARNING: boot config {} has an invalid gateway.ssh_bind {:?} — ignoring it.",
-                    path.display(),
-                    bind
+                tracing::warn!(
+                    file = %path.display(),
+                    %bind,
+                    "Boot config has an invalid gateway.ssh_bind — ignoring it"
                 );
                 boot.ssh_bind = None;
             }
@@ -163,14 +164,24 @@ impl BootConfig {
     ///
     /// Boot wins over the extended config for the fields it sets (they are
     /// the stable, rarely-changed source of truth), while preserving details
-    /// the boot schema does not carry (e.g. a custom provider's `base_url`).
+    /// the boot schema does not carry — provided they still make sense.
     pub fn apply(&self, config: &mut Config) {
         if let Some(provider) = &self.provider {
+            let existing = config.model.as_ref();
+            // A custom `base_url` belongs to the provider it was configured
+            // for. Carrying it across a provider switch would silently
+            // redirect model traffic to the previous provider's endpoint, so
+            // it is preserved only when the provider is unchanged.
+            let same_provider = existing.is_some_and(|m| m.provider.eq_ignore_ascii_case(provider));
             let model = self
                 .model
                 .clone()
-                .or_else(|| config.model.as_ref().and_then(|m| m.model.clone()));
-            let base_url = config.model.as_ref().and_then(|m| m.base_url.clone());
+                .or_else(|| existing.and_then(|m| m.model.clone()));
+            let base_url = if same_provider {
+                existing.and_then(|m| m.base_url.clone())
+            } else {
+                None
+            };
             config.model = Some(ModelProvider {
                 provider: provider.clone(),
                 model,
@@ -188,8 +199,22 @@ impl BootConfig {
         }
 
         if let Some(bind) = &self.ssh_bind {
-            let ssh = config.ssh.get_or_insert_with(SshGatewayConfig::default);
-            ssh.bind = bind.clone();
+            match config.ssh.as_mut() {
+                Some(ssh) => ssh.bind = bind.clone(),
+                // The gateway only listens on the bind when SSH is enabled
+                // and in standalone mode (main.rs), so creating a section
+                // with the default `enabled: false` would silently ignore
+                // the boot bind. Create an enabled standalone section.
+                None => {
+                    config.ssh = Some(SshGatewayConfig {
+                        enabled: true,
+                        mode: crate::config::SshMode::Standalone,
+                        bind: bind.clone(),
+                        host_key: None,
+                        authorized_keys: None,
+                    });
+                }
+            }
         }
     }
 }
@@ -321,7 +346,7 @@ ssh_bind = "0.0.0.0:2222"
     }
 
     #[test]
-    fn apply_overrides_boot_fields_and_preserves_base_url() {
+    fn apply_preserves_base_url_when_provider_is_unchanged() {
         let mut config = Config {
             model: Some(crate::config::ModelProvider {
                 provider: "openai".into(),
@@ -333,19 +358,55 @@ ssh_bind = "0.0.0.0:2222"
             ..Config::default()
         };
         let boot = BootConfig {
-            provider: Some("anthropic".into()),
-            model: Some("claude-sonnet-4-20250514".into()),
+            provider: Some("openai".into()),
+            model: Some("gpt-4o".into()),
             workspace: Some(PathBuf::from("/new")),
             ssh_bind: Some("0.0.0.0:2222".into()),
         };
         boot.apply(&mut config);
 
         let m = config.model.unwrap();
-        assert_eq!(m.provider, "anthropic");
-        assert_eq!(m.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(m.provider, "openai");
+        assert_eq!(m.model.as_deref(), Some("gpt-4o"));
         assert_eq!(m.base_url.as_deref(), Some("https://proxy.example"));
         assert_eq!(config.workspace_dir, Some(PathBuf::from("/new")));
-        assert_eq!(config.ssh.unwrap().bind, "0.0.0.0:2222");
+        let ssh = config.ssh.unwrap();
+        assert_eq!(ssh.bind, "0.0.0.0:2222");
+        // No ssh section existed: the boot bind creates an *enabled*
+        // standalone section, not a disabled default that main.rs would
+        // silently ignore.
+        assert!(ssh.enabled, "boot ssh_bind must enable the SSH transport");
+        assert_eq!(ssh.mode, crate::config::SshMode::Standalone);
+    }
+
+    /// Regression for Devin review #442 (BUG_0001 / SEC_0001): switching the
+    /// provider in boot.toml must NOT carry the old provider's custom
+    /// base_url over — that would silently redirect model traffic to the
+    /// previous provider's endpoint.
+    #[test]
+    fn apply_clears_base_url_when_provider_switches() {
+        let mut config = Config {
+            model: Some(crate::config::ModelProvider {
+                provider: "openai".into(),
+                model: Some("gpt-4o".into()),
+                base_url: Some("https://proxy.example".into()),
+            }),
+            ..Config::default()
+        };
+        let boot = BootConfig {
+            provider: Some("anthropic".into()),
+            model: Some("claude-sonnet-4-20250514".into()),
+            ..BootConfig::default()
+        };
+        boot.apply(&mut config);
+
+        let m = config.model.unwrap();
+        assert_eq!(m.provider, "anthropic");
+        assert_eq!(m.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert!(
+            m.base_url.is_none(),
+            "provider switch must drop old base_url"
+        );
     }
 
     #[test]
