@@ -283,7 +283,7 @@ pub struct CronAddRequest {
     pub schedule: Schedule,
     /// Where the wake lands: main session or an isolated one. Defaults to
     /// main, matching the tool's documented `sessionTarget: "main"`.
-    #[serde(default)]
+    #[serde(default, alias = "session_target")]
     pub session_target: SessionTarget,
     /// What the scheduler runs.
     pub payload: Payload,
@@ -294,15 +294,19 @@ pub struct CronAddRequest {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Agent the job runs under.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "agent_id")]
     pub agent_id: Option<String>,
     /// For one-shot jobs, delete after successful run. Defaults to true for
     /// `At` schedules, false otherwise (the `CronJob::new` behaviour).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "delete_after_run"
+    )]
     pub delete_after_run: Option<bool>,
     /// Thread the wake lands in. `None` targets the foreground thread at
     /// fire time.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "thread_id")]
     pub thread_id: Option<u64>,
 }
 
