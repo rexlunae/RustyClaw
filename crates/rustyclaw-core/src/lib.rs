@@ -16,6 +16,7 @@
 pub mod agents;
 pub mod args;
 pub mod auto_fetch;
+pub mod boot_config;
 pub mod canvas;
 pub mod client_prefs;
 pub mod commands;
