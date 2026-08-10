@@ -365,7 +365,7 @@ Everything an agent needs to be useful:
 |----------|-------|
 | **Files** | `read_file`, `write_file`, `edit_file`, `list_directory`, `search_files` |
 | **Execution** | `execute_command`, `process`, `apply_patch` |
-| **Web** | `web_fetch`, `web_search`, `browser` |
+| **Web** | `web_fetch`, `web_search`, `http_request`, `browser` |
 | **Memory** | `memory_search`, `memory_get` |
 | **Scheduling** | `cron`, heartbeat system |
 | **Multi-Agent** | `sessions_spawn`, `sessions_send`, `sessions_steer` |
