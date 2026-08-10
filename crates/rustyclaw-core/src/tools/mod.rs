@@ -327,6 +327,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "sessions_kill" => "Stop a background sub-agent",
         "sessions_send" => "Send messages to sessions",
         "sessions_history" => "Read session message history",
+        "session_search" => "Search past conversations",
         "session_status" => "Check session status & usage",
         "agents_list" => "List available agent types",
         "agents_create" => "Create a new persistent agent in this installation",

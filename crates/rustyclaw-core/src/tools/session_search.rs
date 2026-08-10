@@ -100,6 +100,51 @@ fn age_days(t: std::time::SystemTime) -> u64 {
         .unwrap_or(0)
 }
 
+/// Read the stored threads, whichever layout they are in.
+///
+/// `Ok(None)` means "nothing stored yet", which is not an error.
+///
+/// This originally read `threads.json` directly, which made the whole tool
+/// answer "No conversation history yet." on every install that had run once.
+/// Threads moved to a per-thread store in a `threads/` directory, and
+/// `ThreadStore::load_or_migrate` renames the legacy file to
+/// `threads.json.migrated` the first time it runs — so the path this looked
+/// at was guaranteed to be absent exactly when there was history to find.
+///
+/// Read-only on purpose: `load_or_migrate` would be the obvious call and it
+/// writes. A search is not a reason to rewrite state on disk, and running one
+/// against a not-yet-migrated install should not decide the migration moment.
+/// So the store is tried first and the legacy file second, without moving
+/// anything.
+fn load_history(legacy_path: &Path) -> Result<Option<ThreadManager>, String> {
+    let store = crate::threads::ThreadStore::at_legacy_path(legacy_path);
+    match store.load() {
+        // An empty store is not proof there is nothing to find. `persist`
+        // creates the directory before it writes `state.json`, so a migration
+        // interrupted between the two leaves a `threads/` directory holding
+        // nothing while the legacy file is still there. `load` reports that as
+        // success with no threads, and returning it would have answered
+        // "nothing matched" over a full history — the same silent-empty answer
+        // this whole change exists to fix, one condition over.
+        //
+        // `load_or_migrate` and `peek` both gate on `state.json` for exactly
+        // this reason; falling through when the store yields nothing matches
+        // them without needing the private path.
+        Ok(mgr) if !mgr.list().is_empty() => return Ok(Some(mgr)),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Could not read conversation history: {e}")),
+    }
+
+    // No store directory: either a fresh install, or one that has not been
+    // opened since the store landed and still has its legacy file.
+    match ThreadManager::load_from_file(legacy_path) {
+        Ok(mgr) => Ok(Some(mgr)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Could not read conversation history: {e}")),
+    }
+}
+
 /// Search persisted thread history.
 pub fn exec_session_search(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let query = args
@@ -139,16 +184,11 @@ pub fn exec_session_search(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .join("sessions")
         .join("threads.json");
 
-    let manager = match ThreadManager::load_from_file(&path) {
-        Ok(mgr) => mgr,
-        // No file yet is an empty history, not a failure: a fresh install has
-        // nothing to search and should say so plainly.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok("No conversation history yet.".to_string());
-        }
-        Err(e) => {
-            return Err(format!("Could not read conversation history: {e}").into());
-        }
+    let manager = match load_history(&path)? {
+        Some(mgr) => mgr,
+        // Nothing stored yet is an empty history, not a failure: a fresh
+        // install has nothing to search and should say so plainly.
+        None => return Ok("No conversation history yet.".to_string()),
     };
 
     let mut hits: Vec<Hit> = Vec::new();
@@ -346,5 +386,133 @@ mod tests {
     #[test]
     fn an_empty_query_matches_nothing_rather_than_everything() {
         assert_eq!(score_message("anything at all", &[]), 0.0);
+    }
+}
+
+/// The loader, against both storage layouts.
+///
+/// These exist because the tool shipped reading `threads.json` directly and
+/// therefore answered "No conversation history yet." on every install that had
+/// migrated — a whole feature that never returned a result. Unit tests on the
+/// scoring could not see that, because the scoring was fine.
+#[cfg(test)]
+mod load_history_tests {
+    use super::load_history;
+    use crate::threads::{MessageRole, ThreadStore};
+
+    /// The regression: history persisted through the store must be found.
+    /// Before the fix this returned `None`, because the store writes to
+    /// `threads/` and nothing writes `threads.json` any more.
+    #[test]
+    fn history_written_by_the_store_is_found() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let legacy = dir.path().join("threads.json");
+
+        let store = ThreadStore::at_legacy_path(&legacy);
+        let mut manager = crate::threads::ThreadManager::new();
+        let id = manager.create_thread("a thread");
+        manager.add_message(id, MessageRole::User, "how do I deploy the gateway");
+        store.persist(&mut manager).expect("store persists");
+
+        assert!(!legacy.exists(), "the store must not write the legacy file");
+
+        let loaded = load_history(&legacy)
+            .expect("loading succeeds")
+            .expect("the store's history is found");
+        assert!(
+            loaded
+                .list()
+                .iter()
+                .any(|t| t.messages.iter().any(|m| m.content.contains("deploy"))),
+            "the stored message did not come back"
+        );
+    }
+
+    /// An install that has not been opened since the store landed still has
+    /// its legacy file and no `threads/` directory. That history is still
+    /// searchable.
+    #[test]
+    fn history_still_in_the_legacy_file_is_found() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let legacy = dir.path().join("threads.json");
+
+        let mut manager = crate::threads::ThreadManager::new();
+        let id = manager.create_thread("a thread");
+        manager.add_message(id, MessageRole::User, "legacy message about deploys");
+        manager.save_to_file(&legacy).expect("legacy file writes");
+
+        let loaded = load_history(&legacy)
+            .expect("loading succeeds")
+            .expect("the legacy history is found");
+        assert!(
+            loaded
+                .list()
+                .iter()
+                .any(|t| t.messages.iter().any(|m| m.content.contains("legacy"))),
+            "the legacy message did not come back"
+        );
+    }
+
+    /// An interrupted migration leaves a `threads/` directory with nothing in
+    /// it and the legacy file still on disk. Treating "the directory exists"
+    /// as "the history lives here" answers "nothing matched" over a full
+    /// history — the same silent-empty result this change exists to fix.
+    #[test]
+    fn an_empty_store_falls_through_to_the_legacy_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let legacy = dir.path().join("threads.json");
+
+        // The shape `persist` leaves behind if it dies before `state.json`.
+        std::fs::create_dir_all(dir.path().join("threads")).expect("store dir");
+
+        let mut manager = crate::threads::ThreadManager::new();
+        let id = manager.create_thread("a thread");
+        manager.add_message(id, MessageRole::User, "message from before the migration");
+        manager.save_to_file(&legacy).expect("legacy file writes");
+
+        let loaded = load_history(&legacy)
+            .expect("loading succeeds")
+            .expect("the legacy history is still found");
+        assert!(
+            loaded.list().iter().any(|t| {
+                t.messages
+                    .iter()
+                    .any(|m| m.content.contains("before the migration"))
+            }),
+            "an empty store directory hid the legacy history"
+        );
+    }
+
+    /// Reading must not migrate. A search is not a reason to rewrite state on
+    /// disk, and it should not be what decides when a migration happens.
+    #[test]
+    fn searching_does_not_move_or_rewrite_anything() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let legacy = dir.path().join("threads.json");
+
+        let mut manager = crate::threads::ThreadManager::new();
+        let id = manager.create_thread("a thread");
+        manager.add_message(id, MessageRole::User, "hello");
+        manager.save_to_file(&legacy).expect("legacy file writes");
+
+        load_history(&legacy).expect("loading succeeds");
+
+        assert!(legacy.exists(), "the legacy file was moved by a read");
+        assert!(
+            !dir.path().join("threads").exists(),
+            "a read created the store directory"
+        );
+    }
+
+    /// Neither layout present is "nothing yet", not an error.
+    #[test]
+    fn a_fresh_install_has_no_history_rather_than_an_error() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("threads.json");
+        assert!(
+            load_history(&missing)
+                .expect("a fresh install is not an error")
+                .is_none()
+        );
     }
 }
