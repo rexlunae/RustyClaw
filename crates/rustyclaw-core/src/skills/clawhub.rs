@@ -318,56 +318,22 @@ fn is_local_host(u: &url::Url) -> bool {
 /// The address half of [`is_local_host`], split out so the same rule can be
 /// applied to an address DNS returned as to one written in the URL.
 ///
-/// The ranges track the list in [`crate::security::SsrfValidator`], which is
-/// what the web tools use. They are two lists in one codebase and they have
-/// already drifted once — see issue #432 for merging them; the near-duplicate
-/// is called out here so the next person does not assume this one is the only
-/// copy.
+/// One list, shared with the web tools. This used to be a second copy of the
+/// ranges, and the two had already drifted in both directions — `fc00::/7` was
+/// missing here and the mapped-IPv4 handling was missing there — which is what
+/// issue #432 was about. A duplicated security list does not stay duplicated;
+/// it stays *nearly* duplicated, and the gap is wherever nobody looked last.
+///
+/// `allow_private_ips` is deliberately false and not configurable from here.
+/// That switch is a web-tool affordance for local development; a skill
+/// registry naming an upload target inside the caller's network is a different
+/// question, and it gets the strict answer whatever the web tools are set to.
 fn is_local_addr(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(ip) => {
-            // 169.254.0.0/16 is `is_link_local`, which is where the cloud
-            // metadata endpoint at 169.254.169.254 lives. `0.0.0.0/8` is
-            // matched whole rather than via `is_unspecified`, which is only
-            // the single address — on Linux `0.0.0.0` reaches loopback.
-            let [a, b, ..] = ip.octets();
-            // Carrier-grade NAT, 100.64.0.0/10. Routable on the far side of
-            // a provider's NAT but not from here, which makes it a fine
-            // place to hide something only the caller can reach.
-            let cgnat = a == 100 && (64..128).contains(&b);
-            // IETF protocol assignments (192.0.0.0/24) and the benchmarking
-            // range (198.18.0.0/15) — neither is a destination on the public
-            // internet, so a registry naming one is not naming storage.
-            let protocol_assignments = a == 192 && b == 0 && ip.octets()[2] == 0;
-            let benchmarking = a == 198 && (b == 18 || b == 19);
-            ip.is_loopback()
-                || ip.is_private()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_multicast()
-                // 240.0.0.0/4, reserved.
-                || a >= 240
-                || a == 0
-                || cgnat
-                || protocol_assignments
-                || benchmarking
-        }
-        std::net::IpAddr::V6(ip) => {
-            // `is_unique_local` and `is_unicast_link_local` are still
-            // unstable, so the ranges are matched by prefix: fc00::/7 for
-            // unique-local (fd00::/8 in practice) and fe80::/10 for
-            // link-local. Without these, `https://[fd00::1]/x` walked
-            // straight through a check written to stop exactly that.
-            let first = ip.segments()[0];
-            let unique_local = (first & 0xfe00) == 0xfc00;
-            let link_local = (first & 0xffc0) == 0xfe80;
-            // An IPv4 address wearing an IPv6 hat is still that address.
-            let mapped_v4 = ip
-                .to_ipv4_mapped()
-                .is_some_and(|v4| is_local_addr(std::net::IpAddr::V4(v4)));
-            ip.is_loopback() || ip.is_unspecified() || unique_local || link_local || mapped_v4
-        }
-    }
+    static STRICT: std::sync::OnceLock<crate::security::SsrfValidator> = std::sync::OnceLock::new();
+    STRICT
+        .get_or_init(|| crate::security::SsrfValidator::new(false))
+        .validate_ip(&ip)
+        .is_err()
 }
 
 /// A DNS resolver that refuses to hand back an address inside this machine or
@@ -1586,6 +1552,58 @@ mod route_tests {
 
 #[cfg(test)]
 mod upload_target_tests {
+    /// Every range the hand-written copy of this list used to block must still
+    /// be blocked now that it delegates to `SsrfValidator`.
+    ///
+    /// The two lists had already drifted in both directions before they were
+    /// merged, so "the existing tests pass" is not evidence of equivalence —
+    /// those only covered what someone had thought to write down. This
+    /// enumerates a representative address from each range the old
+    /// `is_local_addr` matched by hand, and fails if the shared list is
+    /// narrower anywhere.
+    #[test]
+    fn the_shared_list_covers_everything_the_local_copy_used_to() {
+        use super::is_local_addr;
+        use std::net::IpAddr;
+
+        let must_block = [
+            ("loopback", "127.0.0.1"),
+            ("loopback range", "127.9.9.9"),
+            ("rfc1918 10/8", "10.0.0.1"),
+            ("rfc1918 172.16/12", "172.16.0.1"),
+            ("rfc1918 192.168/16", "192.168.1.1"),
+            ("link-local, cloud metadata", "169.254.169.254"),
+            ("broadcast", "255.255.255.255"),
+            ("multicast", "224.0.0.1"),
+            ("reserved 240/4", "240.0.0.1"),
+            ("this-network 0/8", "0.0.0.0"),
+            ("this-network 0/8, not just the one address", "0.1.2.3"),
+            ("carrier-grade NAT", "100.64.0.1"),
+            ("protocol assignments", "192.0.0.1"),
+            ("benchmarking", "198.18.0.1"),
+            ("benchmarking upper half", "198.19.0.1"),
+            ("v6 loopback", "::1"),
+            ("v6 unspecified", "::"),
+            ("v6 unique-local", "fd00::1"),
+            ("v6 unique-local, fc half", "fc00::1"),
+            ("v6 link-local", "fe80::1"),
+            ("mapped loopback", "::ffff:127.0.0.1"),
+            ("mapped rfc1918", "::ffff:10.0.0.1"),
+            ("mapped metadata", "::ffff:169.254.169.254"),
+        ];
+        for (what, addr) in must_block {
+            let ip: IpAddr = addr.parse().expect("a valid address");
+            assert!(is_local_addr(ip), "{what} ({addr}) is no longer blocked");
+        }
+
+        // And the shared list must not have become so broad that an ordinary
+        // registry is refused.
+        for addr in ["93.184.216.34", "1.1.1.1", "2606:4700::1111"] {
+            let ip: IpAddr = addr.parse().expect("a valid address");
+            assert!(!is_local_addr(ip), "{addr} should be reachable");
+        }
+    }
+
     use super::upload_target_is_acceptable;
 
     fn check(registry: &str, upload: &str) -> Result<(), String> {
