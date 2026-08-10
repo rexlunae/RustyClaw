@@ -209,6 +209,116 @@ pub struct RegistrySkillDetail {
     pub categories: Vec<String>,
 }
 
+/// Where a name from an archive is allowed to land under `base`, or a phrase
+/// saying why it is not allowed anywhere.
+///
+/// `Path::join` looks like appending but is not: given an absolute path it
+/// *replaces* the base entirely, and `..` components walk upward from it. The
+/// installer joined archive entry names straight onto the skill directory, so
+/// an entry called `../../.ssh/authorized_keys` or `/etc/cron.d/x` was written
+/// wherever it asked, as the user running RustyClaw (issue #428).
+///
+/// This refuses rather than sanitises. Stripping the `..` from a hostile name
+/// would install a file the archive did not describe, under a name nobody
+/// saw, and still report success — the install would be wrong in a way that
+/// looks exactly like it working.
+///
+/// Written out rather than delegated to `ZipFile::enclosed_name`, which
+/// answers `None` without saying which rule was broken, and which cannot be
+/// pointed at the slug — the other string that reaches a `join` here.
+fn contained_path(base: &Path, relative: &str) -> Result<PathBuf, String> {
+    if relative.is_empty() {
+        return Err("the empty string".to_string());
+    }
+    if relative.contains('\0') {
+        return Err(format!("`{relative}`, which contains a NUL byte"));
+    }
+    // Zip entry names use `/` as the separator, always. A backslash is either
+    // a Windows path — which would mean a directory on one platform and a
+    // filename character on another — or a name chosen to read differently to
+    // the checker than to the filesystem. Neither is worth supporting.
+    if relative.contains('\\') {
+        return Err(format!("`{relative}`, which uses a backslash"));
+    }
+    // `C:\x` and `C:x` are absolute and drive-relative on Windows. On Unix
+    // `Path::components` sees `C:x` as one ordinary filename, so a check via
+    // `Path` alone would only work on the platform that needs it least, and
+    // the Linux-hosted tests would pass while Windows stayed open.
+    if relative.as_bytes().get(1) == Some(&b':') {
+        return Err(format!("`{relative}`, which names a drive"));
+    }
+    if relative.starts_with('/') {
+        return Err(format!("`{relative}`, which is an absolute path"));
+    }
+
+    let mut out = base.to_path_buf();
+    for part in relative.split('/') {
+        match part {
+            // `a//b`, and the trailing slash that marks a directory entry.
+            "" | "." => continue,
+            ".." => {
+                return Err(format!(
+                    "`{relative}`, which climbs above {}",
+                    base.display()
+                ));
+            }
+            _ => out.push(part),
+        }
+    }
+    Ok(out)
+}
+
+/// Unpack a downloaded skill archive into `skill_dir`.
+///
+/// Split out of `install_from_registry` so it can be run against a hostile
+/// archive in a test — the previous version was reachable only behind an HTTP
+/// download, which is why the escape below went unnoticed.
+///
+/// Every entry is checked before any entry is written. A one-pass version that
+/// refused on reaching a bad entry would still have written whatever came
+/// before it, which for an archive that puts its payload last is the whole
+/// payload.
+fn extract_archive_into(skill_dir: &Path, zip_bytes: &[u8]) -> Result<(), SkillError> {
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| SkillError::context("Invalid zip archive", e))?;
+
+    let mut planned = Vec::with_capacity(archive.len());
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)?;
+        let raw_name = file.name().to_string();
+
+        // A symlink entry is the other way out of a directory: the link is
+        // created inside, and points anywhere. Today's extractor writes the
+        // target path into a regular file rather than creating a link, so
+        // this is not currently an escape — it is refused so that teaching
+        // the extractor about links later cannot quietly open one.
+        if file.unix_mode().is_some_and(|mode| mode & 0xF000 == 0xA000) {
+            return Err(SkillError::msg(format!(
+                "Refusing archive entry `{raw_name}`, which is a symlink"
+            )));
+        }
+
+        let dest = contained_path(skill_dir, &raw_name)
+            .map_err(|why| SkillError::msg(format!("Refusing archive entry {why}")))?;
+        planned.push((i, dest, file.is_dir()));
+    }
+
+    for (i, dest, is_dir) in planned {
+        if is_dir {
+            std::fs::create_dir_all(&dest)?;
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = archive.by_index(i)?;
+        let mut outfile = std::fs::File::create(&dest)?;
+        std::io::copy(&mut file, &mut outfile)?;
+    }
+    Ok(())
+}
+
 impl SkillManager {
     // ── ClawHub registry operations ─────────────────────────────────
 
@@ -340,28 +450,14 @@ impl SkillManager {
             .cloned()
             .ok_or(SkillError::NoSkillsDir)?;
 
-        let skill_dir = skills_dir.join(name);
+        // The slug reaches this from a tool argument or a registry search
+        // result, and lands in a `join` — so it gets the same treatment as an
+        // archive entry rather than being trusted for having arrived earlier.
+        let skill_dir = contained_path(&skills_dir, name)
+            .map_err(|why| SkillError::msg(format!("Refusing to install a skill named {why}")))?;
         std::fs::create_dir_all(&skill_dir)?;
 
-        // Extract zip to skill directory
-        let cursor = std::io::Cursor::new(zip_bytes);
-        let mut archive = zip::ZipArchive::new(cursor)
-            .map_err(|e| SkillError::context("Invalid zip archive", e))?;
-
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i)?;
-            let outpath = skill_dir.join(file.name());
-
-            if file.name().ends_with('/') {
-                std::fs::create_dir_all(&outpath)?;
-            } else {
-                if let Some(parent) = outpath.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let mut outfile = std::fs::File::create(&outpath)?;
-                std::io::copy(&mut file, &mut outfile)?;
-            }
-        }
+        extract_archive_into(&skill_dir, &zip_bytes)?;
 
         // Write .clawhub metadata
         let clawhub_dir = skill_dir.join(".clawhub");
@@ -799,5 +895,142 @@ impl SkillManager {
             .json()
             .map_err(|e| SkillError::context("Failed to parse skill detail response", e))?;
         Ok(detail)
+    }
+}
+
+/// Extraction is where a downloaded archive gets to choose filenames, so the
+/// tests here build hostile archives and run the real extractor against them
+/// rather than asserting on a path-checking helper in isolation.
+#[cfg(test)]
+mod extract_tests {
+    use super::{contained_path, extract_archive_into};
+    use std::io::Write;
+    use std::path::Path;
+    use zip::write::SimpleFileOptions;
+
+    /// An archive containing exactly the named entries, each holding `payload`.
+    fn archive_of(entries: &[&str], payload: &[u8]) -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            for entry in entries {
+                if let Some(dir) = entry.strip_suffix('/') {
+                    zip.add_directory(dir, opts).expect("directory entry");
+                } else {
+                    zip.start_file(*entry, opts).expect("file entry");
+                    zip.write_all(payload).expect("entry body");
+                }
+            }
+            zip.finish().expect("archive finishes");
+        }
+        buf.into_inner()
+    }
+
+    /// A scratch skill directory, plus the directory it must not escape from.
+    fn scratch() -> (tempfile::TempDir, std::path::PathBuf) {
+        let root = tempfile::tempdir().expect("temp dir");
+        let skill_dir = root.path().join("skills").join("some-skill");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        (root, skill_dir)
+    }
+
+    /// The reported gap in issue #428: `Path::join` with `..` walks upward, so
+    /// an entry named this way was written outside the skill directory.
+    #[test]
+    fn an_entry_that_climbs_out_is_refused_and_writes_nothing() {
+        let (root, skill_dir) = scratch();
+        let zip = archive_of(&["../../pwned.txt"], b"payload");
+
+        let err = extract_archive_into(&skill_dir, &zip).expect_err("must be refused");
+        assert!(err.to_string().contains("climbs above"), "got: {err}");
+        assert!(
+            !root.path().join("pwned.txt").exists(),
+            "the escaping entry was written anyway"
+        );
+    }
+
+    /// And the other half of the same `join` surprise: an absolute path does
+    /// not append to the base, it replaces it.
+    #[test]
+    fn an_absolute_entry_is_refused() {
+        let (_root, skill_dir) = scratch();
+        let zip = archive_of(&["/etc/cron.d/anything"], b"payload");
+
+        let err = extract_archive_into(&skill_dir, &zip).expect_err("must be refused");
+        assert!(err.to_string().contains("absolute path"), "got: {err}");
+    }
+
+    /// A symlink entry points out of the directory without any `..` in its
+    /// name. Today's extractor writes the target as a regular file rather than
+    /// creating a link, so this is refusing a door before it is opened.
+    #[test]
+    fn a_symlink_entry_is_refused() {
+        let (_root, skill_dir) = scratch();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            zip.add_symlink("link", "/etc/passwd", SimpleFileOptions::default())
+                .expect("symlink entry");
+            zip.finish().expect("archive finishes");
+        }
+
+        let err = extract_archive_into(&skill_dir, &buf.into_inner()).expect_err("must be refused");
+        assert!(err.to_string().contains("symlink"), "got: {err}");
+    }
+
+    /// The reason every entry is checked before any is written: an archive
+    /// that puts its payload first and its escape last would otherwise have
+    /// delivered the payload before the refusal.
+    #[test]
+    fn a_refusal_late_in_the_archive_still_writes_nothing() {
+        let (_root, skill_dir) = scratch();
+        let zip = archive_of(&["SKILL.md", "../escape"], b"payload");
+
+        assert!(extract_archive_into(&skill_dir, &zip).is_err());
+        assert!(
+            !skill_dir.join("SKILL.md").exists(),
+            "an entry before the bad one was written"
+        );
+    }
+
+    /// An ordinary archive must still install, nested directories and all —
+    /// a check that refuses everything would pass every test above.
+    #[test]
+    fn an_ordinary_archive_extracts() {
+        let (_root, skill_dir) = scratch();
+        let zip = archive_of(&["SKILL.md", "scripts/", "scripts/run.sh"], b"hello");
+
+        extract_archive_into(&skill_dir, &zip).expect("an ordinary archive installs");
+        assert_eq!(
+            std::fs::read(skill_dir.join("SKILL.md")).expect("SKILL.md exists"),
+            b"hello"
+        );
+        assert!(skill_dir.join("scripts").join("run.sh").exists());
+    }
+
+    /// Windows-shaped names, checked on whatever platform the tests run on:
+    /// on Unix `Path` reads `C:x` as one ordinary filename, so a check built
+    /// only on `Path::components` would pass here and leave Windows open.
+    #[test]
+    fn windows_shaped_names_are_refused_everywhere() {
+        let base = Path::new("/skills/some-skill");
+        for name in ["C:\\Windows\\evil", "C:evil", "..\\..\\evil", "sub\\evil"] {
+            assert!(
+                contained_path(base, name).is_err(),
+                "{name} should be refused"
+            );
+        }
+    }
+
+    /// The slug goes through the same check, because it reaches the same
+    /// `join` from a tool argument.
+    #[test]
+    fn a_slug_that_climbs_out_is_refused() {
+        let base = Path::new("/skills");
+        assert!(contained_path(base, "../../etc").is_err());
+        assert!(contained_path(base, "").is_err());
+        assert!(contained_path(base, "ordinary-skill").is_ok());
     }
 }

@@ -653,6 +653,16 @@ impl SkillManager {
                 reason: "must be a simple identifier (no slashes or spaces)",
             });
         }
+        // The comment above claimed "no dots-leading" and nothing enforced it,
+        // so `..` — no slash, no space, not empty — passed every check and
+        // `skills_dir.join("..")` wrote SKILL.md a directory above the skills
+        // directory.
+        if name.starts_with('.') {
+            return Err(SkillError::InvalidName {
+                name: name.to_string(),
+                reason: "cannot start with a dot",
+            });
+        }
 
         let skills_dir = self
             .primary_skills_dir()
