@@ -251,14 +251,54 @@ pub fn web_search_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "count".into(),
-            description: "Number of results to return (1-10). Default: 5.".into(),
+            description: "Number of results to return. Brave allows 1-10, Exa 1-25. \
+                          Default: 5."
+                .into(),
             param_type: "integer".into(),
             required: false,
         },
         ToolParam {
+            name: "provider".into(),
+            description: "Search backend: 'auto' (default), 'brave' or 'exa'. Auto uses \
+                          Brave when BRAVE_API_KEY is set and falls back to Exa when only \
+                          EXA_API_KEY is. Brave is keyword search and cheaper. Exa is \
+                          semantic search and returns page text with each result — better \
+                          for research questions where the right page may not contain the \
+                          words you searched for, and more expensive per query."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "search_type".into(),
+            description: "Exa only. 'auto' (default), 'neural', 'keyword', 'hybrid', \
+                          'fast' or 'instant'. Ignored by Brave."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "category".into(),
+            description: "Exa only. Narrow results to one kind of source: 'company', \
+                          'publication', 'news', 'personal site', 'financial report' or \
+                          'people'. Ignored by Brave."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "use_autoprompt".into(),
+            description: "Exa only. Let Exa rewrite the query into the form its index \
+                          answers best. The rewritten query is shown with the results. \
+                          Ignored by Brave."
+                .into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+        ToolParam {
             name: "country".into(),
-            description: "2-letter country code for region-specific results (e.g., 'DE', 'US'). \
-                          Default: 'US'."
+            description: "Brave only. 2-letter country code for region-specific results \
+                          (e.g., 'DE', 'US'). Default: 'US'."
                 .into(),
             param_type: "string".into(),
             required: false,

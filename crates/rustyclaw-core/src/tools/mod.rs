@@ -17,6 +17,7 @@ mod cron_tool;
 mod devices;
 #[cfg(feature = "office-docs")]
 pub mod document;
+pub mod exa;
 pub mod exo_ai;
 mod file;
 pub mod freenet;
@@ -33,6 +34,7 @@ mod patch;
 mod pdf;
 mod runtime;
 mod schema;
+mod search_provider;
 mod secrets_tools;
 pub(crate) mod session_search;
 mod sessions_tools;

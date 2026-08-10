@@ -132,9 +132,20 @@ pub static HTTP_REQUEST: ToolDef = ToolDef {
 
 pub static WEB_SEARCH: ToolDef = ToolDef {
     name: "web_search",
-    description: "Search the web using Brave Search API. Returns titles, URLs, and snippets. \
-                  Requires BRAVE_API_KEY environment variable to be set. \
-                  Use for finding current information, research, and fact-checking.",
+    description: "Search the web. Use for finding current information, research, and \
+                  fact-checking.\n\n\
+                  Two backends, chosen with 'provider':\n\
+                  - **brave** — keyword search. Returns titles, URLs and snippets. Cheap \
+                  and fast. Needs BRAVE_API_KEY.\n\
+                  - **exa** — semantic search. Returns page text with each result, so you \
+                  often do not need a follow-up web_fetch. Finds pages that do not contain \
+                  the words you searched for, which is what you want for research \
+                  questions. Costs more per query. Needs EXA_API_KEY. Supports \
+                  search_type, category and use_autoprompt, and up to 25 results.\n\
+                  - **auto** (default) — Brave if its key is set, otherwise Exa.\n\n\
+                  Reach for exa when the question is conceptual (\"papers arguing X\", \
+                  \"companies doing Y\") and brave when you know roughly what the page \
+                  says.",
     parameters: vec![],
     execute: exec_web_search,
 };

@@ -905,16 +905,34 @@ fn test_web_search_no_api_key() {
 #[test]
 fn test_web_search_params_defined() {
     let params = web_search_params();
-    assert_eq!(params.len(), 5);
-    assert!(params.iter().any(|p| p.name == "query" && p.required));
-    assert!(params.iter().any(|p| p.name == "count" && !p.required));
-    assert!(params.iter().any(|p| p.name == "country" && !p.required));
-    assert!(
-        params
-            .iter()
-            .any(|p| p.name == "search_lang" && !p.required)
-    );
-    assert!(params.iter().any(|p| p.name == "freshness" && !p.required));
+
+    // `query` is the only thing a caller must supply. Asserted as "exactly
+    // one required parameter" rather than against a total count: the count
+    // broke the moment the Exa options were added, which is a change to
+    // notice and not a defect. Making a parameter required by accident is
+    // the defect, and this catches that.
+    let required: Vec<&str> = params
+        .iter()
+        .filter(|p| p.required)
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(required, vec!["query"]);
+
+    for name in [
+        "count",
+        "country",
+        "search_lang",
+        "freshness",
+        "provider",
+        "search_type",
+        "category",
+        "use_autoprompt",
+    ] {
+        assert!(
+            params.iter().any(|p| p.name == name),
+            "{name} is missing from the schema, so the model cannot pass it"
+        );
+    }
 }
 
 // ── process ─────────────────────────────────────────────────────

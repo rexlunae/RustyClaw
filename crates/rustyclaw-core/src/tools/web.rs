@@ -296,11 +296,18 @@ pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> ToolR
 
     tracing::Span::current().record("query", query);
 
-    let count = args
-        .get("count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(5)
-        .clamp(1, 10) as usize;
+    // Clamped per provider below: Brave stops at 10, Exa goes to 25, and
+    // clamping to the smaller before the provider is known would silently cap
+    // Exa at Brave's limit.
+    let requested_count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(5);
+
+    let provider = super::search_provider::choose(args)?;
+    if provider == super::search_provider::Provider::Exa {
+        let count = requested_count.clamp(1, 25) as usize;
+        return super::exa::search(args, query, count).await;
+    }
+
+    let count = requested_count.clamp(1, 10) as usize;
 
     let country = args.get("country").and_then(|v| v.as_str()).unwrap_or("US");
 
@@ -605,11 +612,29 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: query".to_string())?;
 
-    let count = args
-        .get("count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(5)
-        .clamp(1, 10) as usize;
+    let requested_count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(5);
+
+    // This path is the registry's declared executor. Dispatch normally routes
+    // web_search to the async implementation, so it is rarely taken — which
+    // is exactly why it must not quietly ignore `provider` and search Brave
+    // instead. Rather than grow a second blocking Exa client, the Exa branch
+    // runs the one implementation on a worker thread.
+    if super::search_provider::choose(args)? == super::search_provider::Provider::Exa {
+        let args = args.clone();
+        let query = query.to_string();
+        let count = requested_count.clamp(1, 25) as usize;
+        return std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| ToolError::context("Failed to build a runtime for Exa search", e))?
+                .block_on(super::exa::search(&args, &query, count))
+        })
+        .join()
+        .map_err(|_| "Exa search worker thread panicked".to_string())?;
+    }
+
+    let count = requested_count.clamp(1, 10) as usize;
 
     let country = args.get("country").and_then(|v| v.as_str()).unwrap_or("US");
 
