@@ -437,6 +437,13 @@ Use `tracing::{error!, warn!, info!, debug!, trace!}`. No `println!` or `eprintl
 code (`rustyclaw-core`, `rustyclaw-tui`). User-facing CLI output in `rustyclaw-cli` is the
 exception.
 
+One narrow library exception is allowed: **boot-time diagnostics before the tracing subscriber
+is installed.** `Config::load` (and the boot-config reader it drives) runs before the gateway
+installs its subscriber, so a `tracing` event there would be silently dropped and the user would
+never learn their boot file was unreadable. Those sites use `eprintln!` deliberately, and each
+one carries a code comment saying so. Keep this exception minimal — if the message can
+reasonably be emitted after the subscriber is up, it must go through `tracing`.
+
 ```rust
 // ✅ library
 tracing::info!(session_id = %id, "Session started");
