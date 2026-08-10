@@ -663,6 +663,16 @@ impl SkillManager {
                 reason: "cannot start with a dot",
             });
         }
+        // `C:x` is drive-relative on Windows: `join` discards the base and
+        // resolves against drive C's current directory. The same check exists
+        // in `contained_path` for archive entries and slugs — this function
+        // was the third door into the same `join` and did not have it.
+        if name.as_bytes().get(1) == Some(&b':') {
+            return Err(SkillError::InvalidName {
+                name: name.to_string(),
+                reason: "cannot name a drive",
+            });
+        }
 
         let skills_dir = self
             .primary_skills_dir()

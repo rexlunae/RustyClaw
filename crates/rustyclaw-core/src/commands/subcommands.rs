@@ -130,17 +130,59 @@ pub(crate) fn handle_skill_subcommand(
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
                 return CommandResponse {
-                    messages: vec!["Usage: /skill publish <name>".to_string()],
+                    messages: vec![
+                        "Usage: /skill publish <name> <version> accept-license-terms".to_string(),
+                    ],
                     action: CommandAction::None,
                 };
             }
-            match context.skill_manager.publish_to_registry(name) {
+            // Publishing licenses the skill to everyone under MIT-0, and the
+            // registry refuses a publish that does not say so. Checked here,
+            // before anything is uploaded: without it the command mints an
+            // upload URL, sends the file, and only then gets rejected.
+            // The version is the publisher's to choose. It used to be a
+            // hardcoded "0.1.0", which only looked harmless while publish
+            // reached no real endpoint — sent for real, it means a skill can
+            // be published once and never updated.
+            let version = parts
+                .get(2)
+                .copied()
+                .filter(|v| *v != "accept-license-terms")
+                .unwrap_or("");
+            if version.is_empty() {
+                return CommandResponse {
+                    // `parts` starts at the subcommand, so joining it drops
+                    // the leading `/skill` and prints something that is not a
+                    // command.
+                    messages: vec![format!(
+                        "Give the version to publish, e.g. `/skill publish {name} 1.2.0 \
+                         accept-license-terms`."
+                    )],
+                    action: CommandAction::None,
+                };
+            }
+            let accepted = parts[2..].contains(&"accept-license-terms");
+            if !accepted {
+                return CommandResponse {
+                    messages: vec![
+                        "Publishing licenses the skill to everyone under MIT-0.".to_string(),
+                        format!(
+                            "Re-run as `/skill publish {name} {version} accept-license-terms` to agree."
+                        ),
+                    ],
+                    action: CommandAction::None,
+                };
+            }
+            match context
+                .skill_manager
+                .publish_to_registry(name, version, None, accepted)
+            {
                 Ok(msg) => CommandResponse {
                     messages: vec![msg],
                     action: CommandAction::None,
                 },
                 Err(e) => CommandResponse {
-                    messages: vec![format!("Publish failed: {}", e)],
+                    messages: vec![e.publish_outcome_line()],
                     action: CommandAction::None,
                 },
             }
@@ -658,10 +700,9 @@ pub(crate) fn handle_clawhub_subcommand(
                 if !p.bio.is_empty() {
                     msgs.push(format!("  Bio: {}", p.bio));
                 }
-                msgs.push(format!(
-                    "  Published: {}  Starred: {}",
-                    p.published_count, p.starred_count
-                ));
+                if let (Some(published), Some(starred)) = (p.published_count, p.starred_count) {
+                    msgs.push(format!("  Published: {published}  Starred: {starred}"));
+                }
                 if !p.joined.is_empty() {
                     msgs.push(format!("  Joined: {}", p.joined));
                 }
@@ -778,17 +819,54 @@ pub(crate) fn handle_clawhub_subcommand(
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
                 return CommandResponse {
-                    messages: vec!["Usage: /clawhub publish <name>".to_string()],
+                    messages: vec![
+                        "Usage: /clawhub publish <name> <version> accept-license-terms".to_string(),
+                    ],
                     action: CommandAction::None,
                 };
             }
-            match context.skill_manager.publish_to_registry(name) {
+            // Same gate as `/skill publish` and the CLI: refuse before the
+            // upload rather than after it.
+            // The version is the publisher's to choose. It used to be a
+            // hardcoded "0.1.0", which only looked harmless while publish
+            // reached no real endpoint — sent for real, it means a skill can
+            // be published once and never updated.
+            let version = parts
+                .get(2)
+                .copied()
+                .filter(|v| *v != "accept-license-terms")
+                .unwrap_or("");
+            if version.is_empty() {
+                return CommandResponse {
+                    messages: vec![format!(
+                        "Give the version to publish, e.g. `/clawhub publish {name} 1.2.0 \
+                         accept-license-terms`."
+                    )],
+                    action: CommandAction::None,
+                };
+            }
+            let accepted = parts[2..].contains(&"accept-license-terms");
+            if !accepted {
+                return CommandResponse {
+                    messages: vec![
+                        "Publishing licenses the skill to everyone under MIT-0.".to_string(),
+                        format!(
+                            "Re-run as `/clawhub publish {name} {version} accept-license-terms` to agree."
+                        ),
+                    ],
+                    action: CommandAction::None,
+                };
+            }
+            match context
+                .skill_manager
+                .publish_to_registry(name, version, None, accepted)
+            {
                 Ok(msg) => CommandResponse {
                     messages: vec![format!("✓ {}", msg)],
                     action: CommandAction::None,
                 },
                 Err(e) => CommandResponse {
-                    messages: vec![format!("Publish failed: {}", e)],
+                    messages: vec![e.publish_outcome_line()],
                     action: CommandAction::None,
                 },
             }

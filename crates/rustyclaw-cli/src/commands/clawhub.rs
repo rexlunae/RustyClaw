@@ -83,6 +83,22 @@ pub(crate) enum ClawHubSub {
         /// Skill name to publish
         #[arg(value_name = "NAME")]
         name: String,
+        /// Version to publish, e.g. 1.2.0.
+        ///
+        /// Required: it used to be a hardcoded 0.1.0, which meant a skill
+        /// could be published once and never updated.
+        #[arg(long, value_name = "SEMVER")]
+        version: String,
+        /// What changed in this version
+        #[arg(long, value_name = "TEXT")]
+        changelog: Option<String>,
+        /// Accept ClawHub's MIT-0 skill terms for this publish.
+        ///
+        /// Required, and deliberately not a default: publishing licenses the
+        /// skill to everyone under MIT-0, which is the publisher's decision
+        /// to make rather than this client's.
+        #[arg(long)]
+        accept_license_terms: bool,
     },
 }
 
@@ -373,10 +389,10 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
                 if !p.bio.is_empty() {
                     println!("  Bio: {}", p.bio);
                 }
-                println!(
-                    "  Published: {}  Starred: {}",
-                    p.published_count, p.starred_count
-                );
+                // Printed only when the registry actually said so.
+                if let (Some(published), Some(starred)) = (p.published_count, p.starred_count) {
+                    println!("  Published: {published}  Starred: {starred}");
+                }
                 if !p.joined.is_empty() {
                     println!("  Joined: {}", p.joined);
                 }
@@ -443,13 +459,42 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
                 }
             }
         }
-        Some(ClawHubSub::Publish { name }) => match sm.publish_to_registry(&name) {
-            Ok(msg) => println!("{}", t::icon_ok(&msg)),
-            Err(e) => {
-                println!("{}", t::icon_fail(&format!("Publish failed: {}", e)));
+        Some(ClawHubSub::Publish {
+            name,
+            version,
+            changelog,
+            accept_license_terms,
+        }) => {
+            if !accept_license_terms {
+                println!(
+                    "{}",
+                    t::warn(
+                        "Publishing licenses the skill to everyone under MIT-0. \
+                         Re-run with --accept-license-terms to agree."
+                    )
+                );
+                // Every other refusal in this command exits non-zero. A
+                // publish that uploaded nothing must not report success to a
+                // script that checks the status.
                 std::process::exit(1);
             }
-        },
+            match sm.publish_to_registry(&name, &version, changelog, accept_license_terms) {
+                Ok(msg) => println!("{}", t::icon_ok(&msg)),
+                Err(e) => {
+                    // An unconfirmed publish is not a failure, so it does not
+                    // get the failure icon or the word. It still exits
+                    // non-zero: a script must not read "we could not tell"
+                    // as "published".
+                    let line = e.publish_outcome_line();
+                    if e.outcome_is_unknown() {
+                        println!("{}", t::icon_warn(&line));
+                    } else {
+                        println!("{}", t::icon_fail(&line));
+                    }
+                    std::process::exit(1);
+                }
+            }
+        }
     }
     Ok(())
 }

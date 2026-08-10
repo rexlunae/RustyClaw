@@ -3,6 +3,51 @@
 #![allow(unused_imports)]
 use super::*;
 
+/// The registry's actual HTTP routes.
+///
+/// Gathered in one place because they were previously invented at each call
+/// site, and half of them did not exist: `/api/v1/auth/verify`,
+/// `/api/v1/auth/login`, `/api/v1/profile`, `/api/v1/categories`,
+/// `/api/v1/starred`, `/api/v1/skills/{slug}/star` and `/skills/publish` all
+/// 404 (see issue #411). Auth never succeeded, and publish posted to the SPA,
+/// got HTML and a 200 back, and reported success having stored nothing.
+///
+/// Taken from the registry's own route table — `packages/schema/src/routes.ts`
+/// in `github.com/openclaw/clawhub`, published as `clawhub-schema` — rather
+/// than from observed behaviour, so the names are the ones the server matches
+/// on and not a guess that happened to work once.
+pub mod routes {
+    /// `GET`, bearer token. The identity endpoint; there is no `/auth/verify`
+    /// and no `/profile`.
+    pub const WHOAMI: &str = "/api/v1/whoami";
+    /// `GET ?q=`.
+    pub const SEARCH: &str = "/api/v1/search";
+    /// `GET ?q=`, the older search endpoint. Still served, and still what
+    /// this client uses: the response parsing here was written against it,
+    /// and the v1 shape has not been confirmed from a live call (see #411 —
+    /// clawhub.ai is unreachable from CI). Named so it reads as a deliberate
+    /// choice rather than another invented path.
+    pub const LEGACY_SEARCH: &str = "/api/search";
+    /// `GET ?slug=&version=`.
+    pub const DOWNLOAD: &str = "/api/v1/download";
+    /// `GET`.
+    pub const TRENDING: &str = "/api/v1/trending";
+    /// `GET /{slug}` for detail. `POST` publishes via upload tickets.
+    pub const SKILLS: &str = "/api/v1/skills";
+    /// `POST` to star, `DELETE` to unstar. Not `/skills/{slug}/star`, and
+    /// there is no route that lists what a user has starred.
+    pub const STARS: &str = "/api/v1/stars";
+
+    /// `POST`, bearer token: mints a one-shot Convex storage upload URL.
+    pub const CLI_UPLOAD_URL: &str = "/api/cli/upload-url";
+    /// `POST`, bearer token: registers the uploaded files as a version.
+    pub const CLI_PUBLISH: &str = "/api/cli/publish";
+    /// `POST`: starts the device-code login the official CLI uses.
+    pub const CLI_DEVICE_CODE: &str = "/api/cli/device/code";
+    /// `POST`: exchanges a device code for a token.
+    pub const CLI_DEVICE_TOKEN: &str = "/api/cli/device/token";
+}
+
 // ── ClawHub registry types ──────────────────────────────────────────────────
 
 /// Manifest used when publishing a skill to ClawHub.
@@ -108,39 +153,37 @@ pub struct Category {
     pub count: u64,
 }
 
-/// Response wrapper for categories.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CategoriesResponse {
-    #[serde(default)]
-    categories: Vec<Category>,
-}
-
 /// ClawHub user profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClawHubProfile {
+    /// The account's handle, or empty for an account that has not chosen one.
     #[serde(default)]
     pub username: String,
+    /// Falls back to the handle when whoami sends no display name.
     #[serde(default)]
     pub display_name: String,
+    /// Empty — whoami does not return an address, and nothing else fills it.
     #[serde(default)]
     pub email: String,
+    /// Empty — whoami does not return a bio, and nothing else fills it.
     #[serde(default)]
     pub bio: String,
+    /// `None` when the registry did not report it.
+    ///
+    /// Not `0`: whoami carries no counts, and a defaulted zero renders as
+    /// "Published: 0  Starred: 0" — a claim about the user's activity that
+    /// this client made up. Leaving a field at its default is still
+    /// inventing data when the caller prints it unconditionally.
     #[serde(default)]
-    pub published_count: u64,
+    pub published_count: Option<u64>,
+    /// `None` when the registry did not report it, for the same reason as
+    /// [`ClawHubProfile::published_count`].
     #[serde(default)]
-    pub starred_count: u64,
+    pub starred_count: Option<u64>,
+    /// Empty when the registry did not report it — whoami carries no join
+    /// date, and the callers omit the line rather than printing a blank one.
     #[serde(default)]
     pub joined: String,
-}
-
-/// Response wrapper for profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProfileResponse {
-    #[serde(default)]
-    pub profile: Option<ClawHubProfile>,
-    #[serde(default)]
-    pub error: Option<String>,
 }
 
 /// A starred skill entry.
@@ -157,11 +200,381 @@ pub struct StarredEntry {
     pub starred_at: String,
 }
 
-/// Response wrapper for starred skills.
+/// What `/api/v1/whoami` actually returns.
+///
+/// Nothing like the `{ok, token, username}` shape the client used to expect
+/// from its imaginary `/auth/verify`: the handle is nested, and nullable for
+/// an account that has not chosen one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StarredResponse {
+struct WhoamiResponse {
+    user: WhoamiUser,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WhoamiUser {
     #[serde(default)]
-    results: Vec<StarredEntry>,
+    handle: Option<String>,
+    #[serde(rename = "displayName", default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    image: Option<String>,
+}
+
+/// One-shot Convex storage URL from `/api/cli/upload-url`.
+#[derive(Debug, Clone, Deserialize)]
+struct UploadTicket {
+    #[serde(rename = "uploadUrl")]
+    upload_url: String,
+}
+
+/// Convex storage answers a successful PUT with the id to register.
+#[derive(Debug, Clone, Deserialize)]
+struct StoredUpload {
+    #[serde(rename = "storageId")]
+    storage_id: String,
+}
+
+/// `/api/cli/publish` reply.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PublishAccepted {
+    /// `None` when the reply omitted the flag.
+    ///
+    /// Not `false`. The HTTP status is the primary success signal, and the
+    /// registry's schema declares this field — but that schema has not been
+    /// confirmed against the live service, and defaulting a missing flag to
+    /// "rejected" would report a stored skill as unpublished and send the
+    /// user into a re-publish that then collides as a duplicate version.
+    /// Only an explicit `false` is a rejection.
+    #[serde(default)]
+    ok: Option<bool>,
+    /// `null` and "absent" both land here as `None`. `#[serde(default)]` on
+    /// a `String` accepts the second but not the first.
+    #[serde(rename = "skillId", default)]
+    skill_id: Option<String>,
+}
+
+/// Join a route onto the configured registry URL.
+///
+/// `set_registry_url` stores whatever the user configured, and a trailing
+/// slash is a perfectly ordinary thing to configure — `https://clawhub.ai/`
+/// concatenated with `/api/v1/whoami` gives `//api/v1/whoami`, which is a
+/// different path as far as the router is concerned. One seam so there is
+/// one place for that to be handled, and something for a test to hold onto.
+pub(crate) fn endpoint(registry_url: &str, route: &str) -> String {
+    format!("{}{}", registry_url.trim_end_matches('/'), route)
+}
+
+/// Whether an upload target the registry named is safe to send a file to.
+///
+/// The registry hands back a URL and the client PUTs the skill to it, so the
+/// destination is chosen by whatever `clawhub_url` points at. A hostile or
+/// misconfigured registry could name a plaintext endpoint, or an address
+/// inside the caller's network, and the upload would go there.
+///
+/// The rule is relative rather than absolute, so self-hosting still works:
+/// the upload target may not be *less* protected than the registry the user
+/// chose. An https registry cannot redirect to http, and a registry on the
+/// public internet cannot redirect to loopback. A registry that is itself on
+/// localhost may name localhost, because that is a developer running both
+/// halves on one machine.
+fn upload_target_is_acceptable(registry: &url::Url, upload: &url::Url) -> Result<(), String> {
+    if registry.scheme() == "https" && upload.scheme() != "https" {
+        return Err(format!(
+            "refused: the registry is https but named a {} upload target, which \
+             would send the skill in plaintext",
+            upload.scheme()
+        ));
+    }
+    if !is_local_host(registry) && is_local_host(upload) {
+        return Err(
+            "refused: a remote registry named an upload target inside this \
+             machine or network"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Loopback, link-local, or an RFC1918 address — somewhere only this machine
+/// or this network can reach.
+fn is_local_host(u: &url::Url) -> bool {
+    match u.host() {
+        Some(url::Host::Domain(name)) => {
+            let name = name.to_ascii_lowercase();
+            name == "localhost"
+                || name.ends_with(".localhost")
+                || name.ends_with(".internal")
+                // mDNS. `printer.local` is resolved by whatever is on the
+                // LAN, which is the definition of a name only this network
+                // can answer.
+                || name.ends_with(".local")
+        }
+        Some(url::Host::Ipv4(ip)) => is_local_addr(std::net::IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => is_local_addr(std::net::IpAddr::V6(ip)),
+        None => false,
+    }
+}
+
+/// The address half of [`is_local_host`], split out so the same rule can be
+/// applied to an address DNS returned as to one written in the URL.
+///
+/// The ranges track the list in [`crate::security::SsrfValidator`], which is
+/// what the web tools use. They are two lists in one codebase and they have
+/// already drifted once — see issue #432 for merging them; the near-duplicate
+/// is called out here so the next person does not assume this one is the only
+/// copy.
+fn is_local_addr(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            // 169.254.0.0/16 is `is_link_local`, which is where the cloud
+            // metadata endpoint at 169.254.169.254 lives. `0.0.0.0/8` is
+            // matched whole rather than via `is_unspecified`, which is only
+            // the single address — on Linux `0.0.0.0` reaches loopback.
+            let [a, b, ..] = ip.octets();
+            // Carrier-grade NAT, 100.64.0.0/10. Routable on the far side of
+            // a provider's NAT but not from here, which makes it a fine
+            // place to hide something only the caller can reach.
+            let cgnat = a == 100 && (64..128).contains(&b);
+            // IETF protocol assignments (192.0.0.0/24) and the benchmarking
+            // range (198.18.0.0/15) — neither is a destination on the public
+            // internet, so a registry naming one is not naming storage.
+            let protocol_assignments = a == 192 && b == 0 && ip.octets()[2] == 0;
+            let benchmarking = a == 198 && (b == 18 || b == 19);
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+                // 240.0.0.0/4, reserved.
+                || a >= 240
+                || a == 0
+                || cgnat
+                || protocol_assignments
+                || benchmarking
+        }
+        std::net::IpAddr::V6(ip) => {
+            // `is_unique_local` and `is_unicast_link_local` are still
+            // unstable, so the ranges are matched by prefix: fc00::/7 for
+            // unique-local (fd00::/8 in practice) and fe80::/10 for
+            // link-local. Without these, `https://[fd00::1]/x` walked
+            // straight through a check written to stop exactly that.
+            let first = ip.segments()[0];
+            let unique_local = (first & 0xfe00) == 0xfc00;
+            let link_local = (first & 0xffc0) == 0xfe80;
+            // An IPv4 address wearing an IPv6 hat is still that address.
+            let mapped_v4 = ip
+                .to_ipv4_mapped()
+                .is_some_and(|v4| is_local_addr(std::net::IpAddr::V4(v4)));
+            ip.is_loopback() || ip.is_unspecified() || unique_local || link_local || mapped_v4
+        }
+    }
+}
+
+/// A DNS resolver that refuses to hand back an address inside this machine or
+/// this network.
+///
+/// [`upload_target_is_acceptable`] inspects the *URL* the registry named, so it
+/// stops `http://169.254.169.254/…` but not `http://uploads.example.com/…`
+/// backed by an A record pointing there. Resolution happens later, inside the
+/// HTTP client, and the URL check never sees the result.
+///
+/// Checking after a separate `lookup_host` call would not close that: the
+/// client would resolve again, and a name with a one-second TTL can answer
+/// differently the second time. Doing it *as* the resolver removes the second
+/// lookup — reqwest connects to exactly the addresses returned here, so there
+/// is no window between the check and the connection.
+///
+/// Only installed when the registry itself is not local, matching the relative
+/// rule in [`upload_target_is_acceptable`]: a developer running a registry on
+/// localhost is meant to be able to upload to localhost.
+///
+/// # What a proxy does to this
+///
+/// A `Resolve` implementation resolves whatever host the connector is about to
+/// dial. With no proxy that is the upload host, which is the point. With a
+/// proxy it is the *proxy*, and the upload host is resolved at the far end,
+/// out of reach.
+///
+/// So under a proxy this check neither helps nor should fire: `exempt_hosts`
+/// carries the proxy names the environment configures, and those skip the
+/// screen. Without it, publishing simply failed on any network whose proxy
+/// resolves to an RFC1918 address — with an error blaming the registry for
+/// the user's own proxy.
+///
+/// The honest consequence: when a proxy carries the upload, the DNS half of
+/// the guard does not apply and [`upload_target_is_acceptable`] is what is
+/// left. That is a limit of where the client sits, not something the client
+/// can check from here.
+struct RefuseLocalAddresses {
+    exempt_hosts: std::collections::BTreeSet<String>,
+}
+
+impl reqwest::dns::Resolve for RefuseLocalAddresses {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        let exempt = self.exempt_hosts.clone();
+        Box::pin(async move {
+            // Port 0: reqwest substitutes the port from the URL, or the
+            // scheme's default, over whatever comes back here.
+            let resolved = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+            let addrs = screen_resolved(&host, resolved.collect(), &exempt)?;
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// The decision [`RefuseLocalAddresses`] makes, separated from the lookup that
+/// feeds it so it can be tested without asking DNS anything.
+fn screen_resolved(
+    host: &str,
+    addrs: Vec<std::net::SocketAddr>,
+    exempt: &std::collections::BTreeSet<String>,
+) -> Result<Vec<std::net::SocketAddr>, String> {
+    if addrs.is_empty() {
+        // An empty answer would otherwise sail past the check below and reach
+        // the connector as "no addresses", which is a confusing way to fail.
+        return Err(format!("refused: the host {host} resolved to nothing"));
+    }
+    // A configured proxy is the user's own machine-level choice, and being
+    // inside the network is the normal shape of one.
+    if exempt.contains(&host.to_ascii_lowercase()) {
+        return Ok(addrs);
+    }
+    // Refusing the whole name rather than filtering the offending address
+    // out: a name that answers with even one internal address is not one a
+    // remote registry should be sending an upload to, and quietly connecting
+    // to the rest of its answer set would hide that it tried.
+    if let Some(bad) = addrs.iter().find(|a| is_local_addr(a.ip())) {
+        return Err(format!(
+            "refused: the upload host {host} resolves to {}, which is inside \
+             this machine or network",
+            bad.ip()
+        ));
+    }
+    Ok(addrs)
+}
+
+/// Decide what a 2xx reply from `/api/cli/publish` actually says.
+///
+/// Two different things were being conflated here, and the previous version
+/// got it backwards.
+///
+/// **The reply is JSON of the right shape but omits `ok`.** Not a rejection:
+/// the status already said yes, and defaulting the missing flag to `false`
+/// would report a stored skill as unpublished and send the user into a
+/// re-publish that collides as a duplicate version.
+///
+/// **The reply is not JSON at all.** Different, and `resp.json()
+/// .unwrap_or_default()` turned it into the first case. A 200 carrying HTML —
+/// an SPA fallback, a captive portal, a proxy interstitial — became the
+/// default value and was announced as a successful publish. That is precisely
+/// the failure issue #411 exists to fix, reintroduced one layer down. The
+/// route names in this file have not been confirmed against the live service,
+/// so it is not hypothetical.
+///
+/// The error says the outcome is *unknown*, never that the publish failed.
+/// "Failed" sends the user to re-publish, which is the one action that is
+/// wrong if the skill was in fact stored.
+fn read_publish_reply(
+    body: &str,
+    name: &str,
+    version: &str,
+) -> Result<PublishAccepted, SkillError> {
+    let done: PublishAccepted = serde_json::from_str(body).map_err(|_| {
+        let excerpt: String = body.chars().take(200).collect();
+        let excerpt = excerpt.trim();
+        SkillError::PublishUnconfirmed(format!(
+            "ClawHub accepted the publish request but its reply was not the \
+             documented JSON, so whether {name} v{version} was stored is \
+             unknown — check the registry before publishing again. The reply \
+             began: {}",
+            if excerpt.is_empty() {
+                "(empty)"
+            } else {
+                excerpt
+            }
+        ))
+    })?;
+    // An explicit `false` is the one case where the outcome *is* known, so it
+    // says so plainly rather than repeating the go-and-look advice above.
+    if done.ok == Some(false) {
+        return Err(SkillError::msg(format!(
+            "ClawHub rejected the publish of {name} v{version}"
+        )));
+    }
+    Ok(done)
+}
+
+/// Hostnames the environment names as an HTTP proxy.
+///
+/// reqwest's blocking client reads these by default, so they are the hosts it
+/// may dial in place of the upload host.
+fn configured_proxy_hosts() -> std::collections::BTreeSet<String> {
+    const VARS: &[&str] = &[
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+    proxy_hosts_in(VARS.iter().filter_map(|var| std::env::var(var).ok()))
+}
+
+/// The hostname inside each proxy setting, lowercased.
+///
+/// A free function over the values rather than over the environment, so the
+/// parsing can be tested without a test that sets process-wide env vars and
+/// races every other test in the binary.
+fn proxy_hosts_in(values: impl IntoIterator<Item = String>) -> std::collections::BTreeSet<String> {
+    values
+        .into_iter()
+        .filter_map(|value| {
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                return None;
+            }
+            // curl and friends accept a bare `host:port` as well as a full
+            // URL, and reqwest follows suit, so both have to parse here or
+            // the exemption misses exactly the setups it exists for.
+            //
+            // The fallback is chosen on *having a host*, not on the first
+            // parse failing: `Url::parse("squid.internal:8080")` succeeds,
+            // reading `squid.internal` as the scheme and `8080` as the path,
+            // so an `or_else` on the error never runs and the bare form —
+            // the one this branch exists for — silently contributed nothing.
+            url::Url::parse(&value)
+                .ok()
+                .filter(|u| u.host_str().is_some())
+                .or_else(|| url::Url::parse(&format!("http://{value}")).ok())
+                .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        })
+        .collect()
+}
+
+/// Build a profile from what whoami actually returns.
+///
+/// A free function rather than inline in `profile()` so it can be exercised
+/// against a real response body — the alternative was a test that built a
+/// `ClawHubProfile` and asserted the defaults it had just written, which is
+/// the kind of test `CONTRIBUTING.md` asks contributors not to write.
+///
+/// whoami carries a handle, a display name and an avatar. It carries no
+/// counts, no bio and no join date, so those stay `None`/empty and the
+/// callers omit them, rather than rendering a zero the registry never sent.
+fn profile_from_whoami(whoami: WhoamiResponse) -> ClawHubProfile {
+    ClawHubProfile {
+        username: whoami.user.handle.clone().unwrap_or_default(),
+        display_name: whoami
+            .user
+            .display_name
+            .or(whoami.user.handle)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
 }
 
 /// Auth response from ClawHub login.
@@ -378,10 +791,9 @@ impl SkillManager {
 
     /// Internal: attempt a remote registry search.
     fn search_registry_remote(&self, query: &str) -> Result<Vec<RegistryEntry>, SkillError> {
-        // ClawHub API: /api/search?q=<query>
         let url = format!(
-            "{}/api/search?q={}",
-            self.registry_url,
+            "{}?q={}",
+            endpoint(&self.registry_url, routes::LEGACY_SEARCH),
             urlencoding::encode(query),
         );
 
@@ -421,8 +833,8 @@ impl SkillManager {
 
         // ClawHub download API: /api/v1/download?slug=<name>&version=<version>
         let mut url = format!(
-            "{}/api/v1/download?slug={}",
-            self.registry_url,
+            "{}?slug={}",
+            endpoint(&self.registry_url, routes::DOWNLOAD),
             urlencoding::encode(name)
         );
         if let Some(v) = version {
@@ -496,7 +908,25 @@ impl SkillManager {
     }
 
     /// Publish a local skill to the ClawHub registry.
-    pub fn publish_to_registry(&self, skill_name: &str) -> Result<String, SkillError> {
+    /// Publish a skill, having been told the publisher accepts the terms.
+    ///
+    /// The version is a parameter because it was a hardcoded `"0.1.0"`, which
+    /// was harmless only while publish posted to a route that did not exist.
+    /// Now that it reaches the registry, a constant version means a skill can
+    /// be published exactly once and never updated — every later attempt
+    /// collides with the version already stored, and the changelog has
+    /// nothing to attach to.
+    ///
+    /// `accept_license_terms` is a parameter rather than a constant because
+    /// the registry distributes skills under MIT-0 and requires the publisher
+    /// to agree. Assuming it here would agree on the user's behalf.
+    pub fn publish_to_registry(
+        &self,
+        skill_name: &str,
+        version: &str,
+        changelog: Option<String>,
+        accept_license_terms: bool,
+    ) -> Result<String, SkillError> {
         let skill = self
             .get_skill(skill_name)
             .ok_or_else(|| SkillError::NotFound(skill_name.to_string()))?;
@@ -512,7 +942,7 @@ impl SkillManager {
 
         let manifest = SkillManifest {
             name: skill.name.clone(),
-            version: "0.1.0".to_string(), // TODO: extract from frontmatter
+            version: version.to_string(),
             description: skill.description.clone().unwrap_or_default(),
             author: String::new(),
             license: "MIT".to_string(),
@@ -521,19 +951,112 @@ impl SkillManager {
             metadata: skill.metadata.clone(),
         };
 
-        let payload = serde_json::json!({
-            "manifest": manifest,
-            "skill_md": content,
-        });
-
         if !self.registry_reachable() {
             return Err(SkillError::Unreachable(self.registry_url.clone()));
         }
 
-        let url = format!("{}/skills/publish", self.registry_url);
+        // Publishing is three steps, not one. The old code posted a JSON blob
+        // to `/skills/publish`, which is not an API route at all — the SPA
+        // answered 200 with HTML and the command reported success having
+        // stored nothing.
+        //
+        // The real flow, as the official CLI uses it: mint a one-shot upload
+        // URL, PUT the file to Convex storage, then register the returned
+        // storage id as a version.
         let client = reqwest::blocking::Client::new();
+
+        let ticket_url = endpoint(&self.registry_url, routes::CLI_UPLOAD_URL);
+        let ticket: UploadTicket = client
+            .post(&ticket_url)
+            .bearer_auth(token)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .map_err(|e| SkillError::context("Failed to request an upload URL", e))?
+            .error_for_status()
+            .map_err(|e| SkillError::context("ClawHub refused the upload request", e))?
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse the upload URL response", e))?;
+
+        // Where the registry told us to send the file is the registry's
+        // choice, not ours — check it before handing over the contents.
+        let registry_is_local = {
+            let registry = url::Url::parse(&self.registry_url)
+                .map_err(|e| SkillError::msg(format!("Registry URL is not a URL: {e}")))?;
+            let upload = url::Url::parse(&ticket.upload_url).map_err(|e| {
+                SkillError::msg(format!(
+                    "ClawHub returned an upload URL that is not a URL: {e}"
+                ))
+            })?;
+            upload_target_is_acceptable(&registry, &upload).map_err(SkillError::msg)?;
+            is_local_host(&registry)
+        };
+
+        // A checked URL that 30x-redirects is an unchecked URL: reqwest
+        // follows up to ten by default, and the destination is never
+        // re-examined. Refusing to follow keeps the check meaningful — the
+        // upload URL is one-shot and issued for this request, so there is no
+        // legitimate reason for it to bounce.
+        let mut upload_builder =
+            reqwest::blocking::Client::builder().redirect(reqwest::redirect::Policy::none());
+        // The URL check above reads the hostname; this reads what the hostname
+        // resolves to, which is the half a registry controls with an A record.
+        // Skipped for a local registry, for the same reason the URL check is
+        // relative: both halves on one machine is a developer, not an attack.
+        if !registry_is_local {
+            upload_builder =
+                upload_builder.dns_resolver(std::sync::Arc::new(RefuseLocalAddresses {
+                    exempt_hosts: configured_proxy_hosts(),
+                }));
+        }
+        let upload_client = upload_builder
+            .build()
+            .map_err(|e| SkillError::context("Failed to build the upload client", e))?;
+        let stored: StoredUpload = upload_client
+            .post(&ticket.upload_url)
+            .header(reqwest::header::CONTENT_TYPE, "text/markdown")
+            .body(content.clone())
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .map_err(|e| SkillError::context("Failed to upload the skill", e))?
+            .error_for_status()
+            .map_err(|e| SkillError::context("Storage refused the upload", e))?
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse the storage response", e))?;
+
+        // The registry checks this against what it received, so it is the
+        // digest of exactly the bytes that were sent.
+        let sha256 = {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(content.as_bytes());
+            hasher
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+
+        let payload = serde_json::json!({
+            "slug": manifest.name,
+            "displayName": manifest.name,
+            "version": manifest.version,
+            "changelog": changelog.unwrap_or_default(),
+            // The registry publishes under MIT-0 terms and requires the
+            // publisher to say so. Passed through from the caller rather than
+            // hardcoded, so nobody agrees to a licence on the user's behalf.
+            "acceptLicenseTerms": accept_license_terms,
+            "files": [{
+                "path": "SKILL.md",
+                "size": content.len(),
+                "storageId": stored.storage_id,
+                "sha256": sha256,
+                "contentType": "text/markdown",
+            }],
+        });
+
+        let publish_url = endpoint(&self.registry_url, routes::CLI_PUBLISH);
         let resp = client
-            .post(&url)
+            .post(&publish_url)
             .bearer_auth(token)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(30))
@@ -548,9 +1071,24 @@ impl SkillManager {
             ));
         }
 
+        let body = resp
+            .text()
+            .map_err(|e| SkillError::context("Failed to read the publish reply", e))?;
+        let done = read_publish_reply(&body, &manifest.name, version)?;
+
+        // The id is only mentioned when the registry sent one. Appending it
+        // unconditionally renders "(skill )" on a reply that omitted it —
+        // the same fabrication as the profile counts, in the message that
+        // tells someone their publish worked.
         Ok(format!(
-            "Published {} v{} to {}",
-            manifest.name, manifest.version, self.registry_url,
+            "Published {} v{} to {}{}",
+            manifest.name,
+            manifest.version,
+            self.registry_url,
+            match done.skill_id.as_deref().filter(|id| !id.is_empty()) {
+                Some(id) => format!(" (skill {id})"),
+                None => String::new(),
+            },
         ))
     }
 
@@ -568,39 +1106,26 @@ impl SkillManager {
 
     /// Authenticate with ClawHub using a username and password.
     /// Returns the API token on success, which should be saved to config.
-    pub fn auth_login(&self, username: &str, password: &str) -> Result<AuthResponse, SkillError> {
-        let url = format!("{}/api/v1/auth/login", self.registry_url);
-        let client = reqwest::blocking::Client::new();
-        let payload = serde_json::json!({
-            "username": username,
-            "password": password,
-        });
-
-        let resp = client
-            .post(&url)
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .map_err(|e| {
-                SkillError::context("Failed to connect to ClawHub for authentication", e)
-            })?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(SkillError::status("ClawHub auth", status, body));
-        }
-
-        let auth: AuthResponse = resp
-            .json()
-            .map_err(|e| SkillError::context("Failed to parse auth response", e))?;
-        Ok(auth)
+    /// Password login, which this registry does not offer.
+    ///
+    /// The old implementation posted to `/api/v1/auth/login`, a route that
+    /// has never existed, so every attempt failed with a 404 dressed up as an
+    /// auth failure. There is no password API to point at instead: the
+    /// registry issues API tokens from its settings page, and the official
+    /// CLI uses a device-code flow. Say that, rather than making a request
+    /// that cannot succeed.
+    pub fn auth_login(&self, _username: &str, _password: &str) -> Result<AuthResponse, SkillError> {
+        Err(SkillError::msg(format!(
+            "ClawHub has no password login. Create an API token at \
+             {}/settings/tokens and run `clawhub auth login <token>`.",
+            self.registry_url
+        )))
     }
 
     /// Authenticate with ClawHub using a pre-existing API token.
     /// Validates the token and returns the profile info.
     pub fn auth_token(&self, token: &str) -> Result<AuthResponse, SkillError> {
-        let url = format!("{}/api/v1/auth/verify", self.registry_url);
+        let url = endpoint(&self.registry_url, routes::WHOAMI);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -622,10 +1147,16 @@ impl SkillManager {
             ));
         }
 
-        let auth: AuthResponse = resp
+        let whoami: WhoamiResponse = resp
             .json()
-            .map_err(|e| SkillError::context("Failed to parse auth response", e))?;
-        Ok(auth)
+            .map_err(|e| SkillError::context("Failed to parse whoami response", e))?;
+        Ok(AuthResponse {
+            ok: true,
+            // The caller already holds the token; whoami does not reissue it.
+            token: Some(token.to_string()),
+            username: whoami.user.handle,
+            message: None,
+        })
     }
 
     /// Check authentication status (whether a token is configured and valid).
@@ -642,6 +1173,20 @@ impl SkillManager {
                 Ok(_) => Ok(format!(
                     "Token configured but invalid on {}",
                     self.registry_url
+                )),
+                // A 404 used to be reported as "registry unreachable", which
+                // sent people to check their network for a bug in this client.
+                // The registry answered; it just had no such route.
+                Err(SkillError::Status { status, .. }) if status.as_u16() == 404 => Ok(format!(
+                    "Token configured, but {} did not recognise the identity \
+                     endpoint. The registry is reachable — this build is asking \
+                     for a route it does not serve.",
+                    self.registry_url
+                )),
+                Err(SkillError::Status { status, .. }) if status.as_u16() == 401 => Ok(format!(
+                    "Token configured but rejected by {}. Create a new one at \
+                     {}/settings/tokens.",
+                    self.registry_url, self.registry_url
                 )),
                 Err(_) => Ok(format!(
                     "Token configured but registry unreachable ({})",
@@ -661,7 +1206,7 @@ impl SkillManager {
         category: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<TrendingEntry>, SkillError> {
-        let mut url = format!("{}/api/v1/trending", self.registry_url);
+        let mut url = endpoint(&self.registry_url, routes::TRENDING);
         let mut params = vec![];
         if let Some(cat) = category {
             params.push(format!("category={}", urlencoding::encode(cat)));
@@ -707,30 +1252,16 @@ impl SkillManager {
 
     /// Fetch available categories from the ClawHub registry.
     pub fn categories(&self) -> Result<Vec<Category>, SkillError> {
-        let url = format!("{}/api/v1/categories", self.registry_url);
-        let client = reqwest::blocking::Client::new();
-        let mut req = client.get(&url);
-        if let Some(ref token) = self.registry_token {
-            req = req.bearer_auth(token);
-        }
-
-        let resp = req
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
-
-        if !resp.status().is_success() {
-            return Err(SkillError::status(
-                "ClawHub categories request",
-                resp.status(),
-                resp.text().unwrap_or_default(),
-            ));
-        }
-
-        let body: CategoriesResponse = resp
-            .json()
-            .map_err(|e| SkillError::context("Failed to parse categories response", e))?;
-        Ok(body.categories)
+        // `/api/v1/categories` has never existed; the old call 404'd and the
+        // failure was reported as if the registry were broken. There is no
+        // category route to move to — the catalogue is exposed through feeds
+        // and promotions instead — so this is an absence to state, not an
+        // endpoint to correct.
+        Err(SkillError::msg(
+            "ClawHub does not expose a categories API. Browse the catalogue at \
+             this registry's website, or use `search` and `trending`."
+                .to_string(),
+        ))
     }
 
     /// Fetch the authenticated user's profile from ClawHub.
@@ -740,7 +1271,7 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!("{}/api/v1/profile", self.registry_url);
+        let url = endpoint(&self.registry_url, routes::WHOAMI);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -758,46 +1289,21 @@ impl SkillManager {
             ));
         }
 
-        let body: ProfileResponse = resp
+        let whoami: WhoamiResponse = resp
             .json()
-            .map_err(|e| SkillError::context("Failed to parse profile response", e))?;
-        match body.profile {
-            Some(profile) => Ok(profile),
-            None => Err(SkillError::msg(
-                body.error.unwrap_or_else(|| "Profile not found".into()),
-            )),
-        }
+            .map_err(|e| SkillError::context("Failed to parse whoami response", e))?;
+        Ok(profile_from_whoami(whoami))
     }
 
     /// Fetch the authenticated user's starred skills from ClawHub.
     pub fn starred(&self) -> Result<Vec<StarredEntry>, SkillError> {
-        let token = self
-            .registry_token
-            .as_ref()
-            .ok_or(SkillError::NotAuthenticated)?;
-
-        let url = format!("{}/api/v1/starred", self.registry_url);
-        let client = reqwest::blocking::Client::new();
-
-        let resp = client
-            .get(&url)
-            .bearer_auth(token)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
-
-        if !resp.status().is_success() {
-            return Err(SkillError::status(
-                "ClawHub starred request",
-                resp.status(),
-                resp.text().unwrap_or_default(),
-            ));
-        }
-
-        let body: StarredResponse = resp
-            .json()
-            .map_err(|e| SkillError::context("Failed to parse starred response", e))?;
-        Ok(body.results)
+        // Stars can be added and removed (`POST`/`DELETE /api/v1/stars`) but
+        // not listed: there is no `GET`. The old `/api/v1/starred` 404'd.
+        Err(SkillError::msg(
+            "ClawHub has no API for listing starred skills — stars can only be \
+             added and removed. Your stars are visible on the registry website."
+                .to_string(),
+        ))
     }
 
     /// Star a skill on ClawHub.
@@ -807,16 +1313,15 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!(
-            "{}/api/v1/skills/{}/star",
-            self.registry_url,
-            urlencoding::encode(skill_name),
-        );
+        // One `stars` collection, with the slug in the body — not a
+        // `/skills/{slug}/star` sub-resource, which 404'd.
+        let url = endpoint(&self.registry_url, routes::STARS);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
             .post(&url)
             .bearer_auth(token)
+            .json(&serde_json::json!({ "slug": skill_name }))
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
@@ -839,16 +1344,13 @@ impl SkillManager {
             .as_ref()
             .ok_or(SkillError::NotAuthenticated)?;
 
-        let url = format!(
-            "{}/api/v1/skills/{}/star",
-            self.registry_url,
-            urlencoding::encode(skill_name),
-        );
+        let url = endpoint(&self.registry_url, routes::STARS);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
             .delete(&url)
             .bearer_auth(token)
+            .json(&serde_json::json!({ "slug": skill_name }))
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
@@ -867,8 +1369,8 @@ impl SkillManager {
     /// Get detailed info about a registry skill (not a locally installed one).
     pub fn registry_info(&self, skill_name: &str) -> Result<RegistrySkillDetail, SkillError> {
         let url = format!(
-            "{}/api/v1/skills/{}",
-            self.registry_url,
+            "{}/{}",
+            endpoint(&self.registry_url, routes::SKILLS),
             urlencoding::encode(skill_name),
         );
 
@@ -895,6 +1397,523 @@ impl SkillManager {
             .json()
             .map_err(|e| SkillError::context("Failed to parse skill detail response", e))?;
         Ok(detail)
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    /// The URLs the client actually builds.
+    ///
+    /// Replaces two change-detectors that asserted the route constants
+    /// equalled literal copies of themselves and that one hardcoded array
+    /// did not contain another — vacuous, and the pattern CONTRIBUTING.md
+    /// asks contributors not to write. This exercises the joining instead,
+    /// which is where a real defect lives: `set_registry_url` stores what
+    /// the user configured, and a trailing slash is an ordinary thing to
+    /// configure.
+    #[test]
+    fn a_trailing_slash_on_the_registry_url_does_not_double_up() {
+        for configured in [
+            "https://clawhub.ai",
+            "https://clawhub.ai/",
+            "https://clawhub.ai///",
+        ] {
+            assert_eq!(
+                endpoint(configured, routes::WHOAMI),
+                "https://clawhub.ai/api/v1/whoami",
+                "built from {configured}"
+            );
+        }
+    }
+
+    /// Every route, checked as a shape rather than against a copy of itself.
+    ///
+    /// The previous version of this test paired each constant with a literal
+    /// spelling of the same constant, which can only fail when someone edits
+    /// one and forgets the other — the change-detector `CONTRIBUTING.md` asks
+    /// contributors not to write, in the file whose review found the rule.
+    ///
+    /// These are properties `endpoint` depends on. A route written without
+    /// its leading slash concatenates into `https://clawhub.aiapi/v1/x`, a
+    /// trailing slash produces a double slash against a prefixed base, and
+    /// both are the kind of thing that gets typed once and never noticed.
+    #[test]
+    fn every_route_is_a_shape_endpoint_can_join() {
+        const ALL: &[(&str, &str)] = &[
+            ("WHOAMI", routes::WHOAMI),
+            ("SEARCH", routes::SEARCH),
+            ("LEGACY_SEARCH", routes::LEGACY_SEARCH),
+            ("DOWNLOAD", routes::DOWNLOAD),
+            ("TRENDING", routes::TRENDING),
+            ("SKILLS", routes::SKILLS),
+            ("STARS", routes::STARS),
+            ("CLI_UPLOAD_URL", routes::CLI_UPLOAD_URL),
+            ("CLI_PUBLISH", routes::CLI_PUBLISH),
+            ("CLI_DEVICE_CODE", routes::CLI_DEVICE_CODE),
+            ("CLI_DEVICE_TOKEN", routes::CLI_DEVICE_TOKEN),
+        ];
+        for (name, route) in ALL {
+            assert!(route.starts_with('/'), "{name} has no leading slash");
+            assert!(!route.ends_with('/'), "{name} has a trailing slash");
+            assert!(!route.contains("//"), "{name} contains an empty segment");
+            let built = endpoint("https://example.test/clawhub/", route);
+            assert!(
+                built.starts_with("https://example.test/clawhub/"),
+                "{name} escaped the configured base: {built}"
+            );
+            assert!(
+                !built[8..].contains("//"),
+                "{name} doubled a slash against a prefixed base: {built}"
+            );
+        }
+    }
+
+    /// A self-hosted registry under a path prefix keeps that prefix.
+    #[test]
+    fn a_registry_behind_a_path_prefix_keeps_it() {
+        assert_eq!(
+            endpoint("https://example.test/clawhub/", routes::WHOAMI),
+            "https://example.test/clawhub/api/v1/whoami"
+        );
+    }
+
+    /// The commands with no backing route refuse instead of requesting one.
+    ///
+    /// A 404 dressed up as "the registry is unreachable" sent people to check
+    /// their network for a missing feature. These have no endpoint to move
+    /// to, so the honest answer is that the registry does not offer them.
+    #[test]
+    fn unsupported_commands_say_so_without_a_request() {
+        let mgr = SkillManager::new(std::path::PathBuf::from("/nonexistent"));
+
+        let categories = mgr.categories().expect_err("no categories API exists");
+        assert!(
+            categories.to_string().contains("does not expose"),
+            "got: {categories}"
+        );
+
+        let starred = mgr.starred().expect_err("no starred-list API exists");
+        assert!(starred.to_string().contains("no API"), "got: {starred}");
+
+        // Password login is the same: refused locally rather than posted to a
+        // route that never existed.
+        let login = mgr
+            .auth_login("someone", "hunter2")
+            .expect_err("no password login exists");
+        assert!(
+            login.to_string().contains("no password login"),
+            "got: {login}"
+        );
+        assert!(
+            login.to_string().contains("/settings/tokens"),
+            "the refusal should say how to authenticate instead: {login}"
+        );
+        // The command it names has to be one that exists — `auth token` does
+        // not; the subcommand is `auth login <token>`.
+        assert!(
+            login.to_string().contains("auth login"),
+            "the refusal must point at a real command: {login}"
+        );
+    }
+
+    /// whoami reports no counts, so the profile must not claim any.
+    ///
+    /// Driven through the real deserialisation and mapping. The first attempt
+    /// at this test built a `ClawHubProfile` by hand and asserted the
+    /// defaults it had just set, which could only have failed if the type
+    /// changed — exactly what `CONTRIBUTING.md` says not to write.
+    #[test]
+    fn a_profile_from_whoami_claims_no_counts() {
+        let body =
+            r#"{"user":{"handle":"someone","displayName":"Someone","image":"https://x/y.png"}}"#;
+        let whoami: WhoamiResponse = serde_json::from_str(body).expect("whoami body parses");
+        let profile = profile_from_whoami(whoami);
+
+        assert_eq!(profile.username, "someone");
+        assert_eq!(profile.display_name, "Someone");
+        assert_eq!(profile.published_count, None, "whoami sends no counts");
+        assert_eq!(profile.starred_count, None, "whoami sends no counts");
+        assert!(profile.bio.is_empty());
+        assert!(profile.joined.is_empty());
+    }
+
+    /// A handle is nullable, and the display name is optional.
+    #[test]
+    fn a_profile_survives_the_fields_whoami_may_omit() {
+        // Only the required key, with the handle null.
+        let sparse: WhoamiResponse =
+            serde_json::from_str(r#"{"user":{"handle":null}}"#).expect("sparse body parses");
+        let profile = profile_from_whoami(sparse);
+        assert!(profile.username.is_empty());
+        assert!(profile.display_name.is_empty());
+
+        // No display name: the handle stands in, rather than showing blank.
+        let handle_only: WhoamiResponse =
+            serde_json::from_str(r#"{"user":{"handle":"someone"}}"#).expect("body parses");
+        let profile = profile_from_whoami(handle_only);
+        assert_eq!(profile.display_name, "someone");
+    }
+}
+
+#[cfg(test)]
+mod upload_target_tests {
+    use super::upload_target_is_acceptable;
+
+    fn check(registry: &str, upload: &str) -> Result<(), String> {
+        upload_target_is_acceptable(
+            &url::Url::parse(registry).unwrap(),
+            &url::Url::parse(upload).unwrap(),
+        )
+    }
+
+    /// The normal case: a hosted registry naming its storage bucket.
+    #[test]
+    fn a_https_registry_may_name_a_https_bucket() {
+        assert!(check("https://clawhub.ai", "https://files.convex.cloud/abc").is_ok());
+    }
+
+    /// The registry chooses where the file goes, so it must not be able to
+    /// choose plaintext — the skill would cross the network in the clear.
+    #[test]
+    fn a_https_registry_may_not_downgrade_the_upload_to_http() {
+        let err = check("https://clawhub.ai", "http://files.example/abc")
+            .expect_err("a downgrade must be refused");
+        assert!(err.contains("plaintext"), "got: {err}");
+    }
+
+    /// Nor point the upload inward: that turns publish into a request the
+    /// caller never intended to make against their own network.
+    #[test]
+    fn a_remote_registry_may_not_name_a_local_target() {
+        for inside in [
+            "https://localhost/upload",
+            "https://127.0.0.1/upload",
+            "https://10.1.2.3/upload",
+            "https://192.168.0.5/upload",
+            "https://169.254.169.254/latest/meta-data",
+            "https://build.internal/upload",
+            // Added after review pointed out the list was narrower than the
+            // one the web tools use in the same codebase.
+            "https://100.64.0.1/upload",
+            "https://192.0.0.1/upload",
+            "https://198.18.0.1/upload",
+            "https://printer.local/upload",
+        ] {
+            let err =
+                check("https://clawhub.ai", inside).expect_err("a local target must be refused");
+            assert!(err.contains("inside this"), "got: {err}");
+        }
+    }
+
+    /// IPv6 has its own inside-the-network ranges, and the first version of
+    /// this guard checked only loopback — so `[fd00::1]` walked through a
+    /// check written to stop exactly that.
+    #[test]
+    fn a_remote_registry_may_not_name_a_local_ipv6_target() {
+        for inside in [
+            "https://[::1]/upload",
+            "https://[fd00::1]/upload",
+            "https://[fdff:1234::5]/upload",
+            "https://[fe80::1]/upload",
+            "https://[::ffff:127.0.0.1]/upload",
+            "https://[::ffff:10.0.0.1]/upload",
+        ] {
+            assert!(
+                check("https://clawhub.ai", inside).is_err(),
+                "{inside} should be refused"
+            );
+        }
+    }
+
+    /// A routable IPv6 address is not inside the network and must still work.
+    #[test]
+    fn a_public_ipv6_target_is_fine() {
+        assert!(check("https://clawhub.ai", "https://[2606:4700::1111]/x").is_ok());
+    }
+
+    /// But a developer running the registry locally is not an attack, and
+    /// must keep working — which is why the rule is relative.
+    #[test]
+    fn a_local_registry_may_name_a_local_target() {
+        assert!(check("http://localhost:3000", "http://localhost:3000/upload").is_ok());
+        assert!(check("http://127.0.0.1:3000", "http://127.0.0.1:9000/x").is_ok());
+    }
+}
+
+/// A 2xx with the wrong body is how #411's original bug reported success on a
+/// publish that stored nothing, so these cover what counts as a confirmation.
+#[cfg(test)]
+mod publish_reply_tests {
+    use super::{SkillError, read_publish_reply};
+
+    /// The documented shape.
+    #[test]
+    fn the_documented_reply_is_accepted_with_its_id() {
+        let done = read_publish_reply(r#"{"ok":true,"skillId":"sk_1"}"#, "demo", "1.0.0")
+            .expect("a documented reply is a publish");
+        assert_eq!(done.skill_id.as_deref(), Some("sk_1"));
+    }
+
+    /// JSON of the right shape with the flag missing is not a rejection: the
+    /// status already said yes, and calling it a failure sends the user into a
+    /// re-publish that collides as a duplicate version.
+    #[test]
+    fn a_reply_that_omits_the_flag_is_still_a_publish() {
+        assert!(read_publish_reply(r#"{"skillId":"sk_1"}"#, "demo", "1.0.0").is_ok());
+        assert!(read_publish_reply("{}", "demo", "1.0.0").is_ok());
+    }
+
+    /// The regression this test exists for: `resp.json().unwrap_or_default()`
+    /// turned an HTML 200 into the default value and announced a successful
+    /// publish — the exact failure #411 is about, one layer down.
+    #[test]
+    fn an_html_reply_is_not_a_publish() {
+        let err = read_publish_reply(
+            "<!DOCTYPE html><html><body>ClawHub</body></html>",
+            "demo",
+            "1.0.0",
+        )
+        .expect_err("HTML is not a publish confirmation")
+        .to_string();
+        assert!(err.contains("not the documented JSON"), "got: {err}");
+        assert!(
+            err.contains("<!DOCTYPE html>"),
+            "the reply should be quoted: {err}"
+        );
+    }
+
+    /// And it must not claim the publish failed, because nobody knows. Telling
+    /// the user it failed sends them to re-publish, which is the one action
+    /// that is wrong if the skill was in fact stored.
+    ///
+    /// Asserted on the line a user actually reads, not on the error's own
+    /// `Display`. The previous version checked the message and passed, while
+    /// all three call sites printed "Publish failed: " in front of it — a test
+    /// on the message cannot see the caller.
+    #[test]
+    fn an_unreadable_reply_reports_the_outcome_as_unknown() {
+        let err =
+            read_publish_reply("not json", "demo", "1.0.0").expect_err("must not be a publish");
+        assert!(
+            err.outcome_is_unknown(),
+            "an unreadable reply is not a verdict"
+        );
+
+        let shown = err.publish_outcome_line();
+        assert!(shown.contains("unknown"), "got: {shown}");
+        assert!(
+            shown.contains("demo v1.0.0"),
+            "the user needs to know what to check for: {shown}"
+        );
+        assert!(
+            !shown.to_lowercase().contains("failed"),
+            "must not claim failure: {shown}"
+        );
+    }
+
+    /// Wrapping must not launder an unknown outcome back into a failure.
+    #[test]
+    fn context_does_not_turn_an_unknown_outcome_into_a_failure() {
+        let err =
+            read_publish_reply("not json", "demo", "1.0.0").expect_err("must not be a publish");
+        let wrapped = SkillError::context("While publishing", err);
+        assert!(wrapped.outcome_is_unknown(), "wrapping hid the distinction");
+        let shown = wrapped.publish_outcome_line();
+        assert!(!shown.to_lowercase().contains("failed"), "got: {shown}");
+    }
+
+    /// A real failure still says so. A rule that softened every error would
+    /// satisfy the tests above and tell users nothing.
+    #[test]
+    fn an_ordinary_error_is_still_shown_as_a_failure() {
+        let err = SkillError::msg("connection refused");
+        assert!(!err.outcome_is_unknown());
+        assert_eq!(
+            err.publish_outcome_line(),
+            "Publish failed: connection refused"
+        );
+    }
+
+    /// An empty body says "(empty)" rather than trailing off after a colon.
+    #[test]
+    fn an_empty_reply_says_it_was_empty() {
+        let err = read_publish_reply("   ", "demo", "1.0.0")
+            .expect_err("must not be a publish")
+            .to_string();
+        assert!(err.contains("(empty)"), "got: {err}");
+    }
+
+    /// An explicit rejection is the one case where the outcome is known, so it
+    /// drops the go-and-check advice.
+    #[test]
+    fn an_explicit_rejection_is_stated_as_one() {
+        let err = read_publish_reply(r#"{"ok":false}"#, "demo", "1.0.0")
+            .expect_err("an explicit false is a rejection");
+        assert!(!err.outcome_is_unknown(), "the outcome is known here");
+        let shown = err.publish_outcome_line();
+        assert!(shown.contains("rejected"), "got: {shown}");
+        assert!(!shown.contains("unknown"), "got: {shown}");
+    }
+}
+
+/// The URL check above reads the hostname the registry wrote. These cover the
+/// other half: what that hostname resolves to.
+#[cfg(test)]
+mod resolver_tests {
+    use super::{RefuseLocalAddresses, proxy_hosts_in, screen_resolved};
+    use reqwest::dns::Resolve;
+    use std::collections::BTreeSet;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    /// The usual case: nothing exempt.
+    fn nothing() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
+    fn addrs(list: &[&str]) -> Vec<SocketAddr> {
+        list.iter()
+            .map(|a| SocketAddr::from_str(a).expect("test address parses"))
+            .collect()
+    }
+
+    /// The case the URL check cannot see: an ordinary-looking hostname whose
+    /// A record points at the cloud metadata endpoint. `upload_target_is_
+    /// acceptable` passes it, because nothing about the *URL* is local.
+    #[test]
+    fn a_name_resolving_to_the_metadata_endpoint_is_refused() {
+        let err = screen_resolved(
+            "uploads.example.com",
+            addrs(&["169.254.169.254:443"]),
+            &nothing(),
+        )
+        .expect_err("a metadata-endpoint answer must be refused");
+        assert!(err.contains("169.254.169.254"), "got: {err}");
+        assert!(err.contains("uploads.example.com"), "got: {err}");
+    }
+
+    /// Every inside-the-network range, not just the famous one.
+    #[test]
+    fn names_resolving_inward_are_refused() {
+        for inside in [
+            "127.0.0.1:443",
+            "10.1.2.3:443",
+            "172.16.0.1:443",
+            "192.168.1.1:443",
+            "0.0.0.0:443",
+            "[::1]:443",
+            "[fd00::1]:443",
+            "[fe80::1]:443",
+            "[::ffff:10.0.0.1]:443",
+        ] {
+            assert!(
+                screen_resolved("uploads.example.com", addrs(&[inside]), &nothing()).is_err(),
+                "{inside} should be refused"
+            );
+        }
+    }
+
+    /// One bad address in the answer set condemns the name. Connecting to the
+    /// good one instead would let a registry keep probing for free.
+    #[test]
+    fn a_mixed_answer_is_refused_whole() {
+        assert!(
+            screen_resolved(
+                "uploads.example.com",
+                addrs(&["93.184.216.34:443", "10.0.0.1:443"]),
+                &nothing()
+            )
+            .is_err(),
+            "an answer containing an internal address must be refused entirely"
+        );
+    }
+
+    /// And the ordinary case still goes through, with the addresses intact.
+    #[test]
+    fn a_public_answer_passes_through_unchanged() {
+        let public = addrs(&["93.184.216.34:443", "[2606:4700::1111]:443"]);
+        let allowed = screen_resolved("files.convex.cloud", public.clone(), &nothing())
+            .expect("public answer is fine");
+        assert_eq!(allowed, public);
+    }
+
+    /// A corporate proxy resolving to an RFC1918 address is the normal shape
+    /// of a proxy, not an attack. Before the exemption, the screen fired on
+    /// the proxy — which is the host the connector actually dials — and
+    /// publishing failed on those networks with an error blaming the registry.
+    #[test]
+    fn a_configured_proxy_host_is_not_screened() {
+        let exempt = proxy_hosts_in(["http://proxy.corp.example:3128".to_string()]);
+        let through_proxy = addrs(&["10.20.30.40:3128"]);
+
+        assert!(
+            screen_resolved("uploads.example.com", through_proxy.clone(), &exempt).is_err(),
+            "an ordinary host resolving inward is still refused"
+        );
+        assert_eq!(
+            screen_resolved("proxy.corp.example", through_proxy.clone(), &exempt)
+                .expect("the configured proxy is exempt"),
+            through_proxy
+        );
+    }
+
+    /// The exemption is by exact hostname, so it cannot be widened by a
+    /// registry naming something that merely looks proxy-adjacent.
+    #[test]
+    fn the_exemption_does_not_extend_to_neighbouring_names() {
+        let exempt = proxy_hosts_in(["http://proxy.corp.example:3128".to_string()]);
+        for name in [
+            "evil.proxy.corp.example",
+            "proxy.corp.example.evil",
+            "corp.example",
+        ] {
+            assert!(
+                screen_resolved(name, addrs(&["10.20.30.40:443"]), &exempt).is_err(),
+                "{name} should not inherit the proxy exemption"
+            );
+        }
+    }
+
+    /// Proxy settings come in both shapes, and reqwest accepts both. Missing
+    /// the bare form would leave the exemption not working on the setups it
+    /// exists for.
+    #[test]
+    fn proxy_settings_parse_in_both_the_shapes_people_write_them() {
+        let hosts = proxy_hosts_in([
+            "http://Proxy.Corp.Example:3128".to_string(),
+            "squid.internal:8080".to_string(),
+            "  ".to_string(),
+            "socks5://socks.corp.example:1080".to_string(),
+        ]);
+        assert!(hosts.contains("proxy.corp.example"), "{hosts:?}");
+        assert!(hosts.contains("squid.internal"), "{hosts:?}");
+        assert!(hosts.contains("socks.corp.example"), "{hosts:?}");
+        assert_eq!(
+            hosts.len(),
+            3,
+            "the blank setting should contribute nothing"
+        );
+    }
+
+    /// End to end through the real resolver, using the one name that answers
+    /// without a network: `localhost`. Proves the trait impl is wired to the
+    /// same rule, not just that the rule exists.
+    #[tokio::test]
+    async fn the_resolver_refuses_a_name_that_answers_with_loopback() {
+        let name = reqwest::dns::Name::from_str("localhost").expect("localhost is a valid name");
+        let err = RefuseLocalAddresses {
+            exempt_hosts: nothing(),
+        }
+        .resolve(name)
+        .await
+        .err()
+        .expect("localhost must be refused");
+        assert!(
+            err.to_string().contains("inside this machine"),
+            "got: {err}"
+        );
     }
 }
 

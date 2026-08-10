@@ -64,6 +64,21 @@ pub enum SkillError {
         #[source]
         source: Box<SkillError>,
     },
+    /// A publish whose outcome nobody knows.
+    ///
+    /// Distinct from every other variant because it is *not* a failure. The
+    /// registry accepted the request and then answered with something that
+    /// could not be read, so the skill may well be stored. Callers must not
+    /// render this as "publish failed": that sends the user to publish again,
+    /// which is the one action that is wrong if it worked.
+    ///
+    /// A variant rather than a carefully-worded [`Self::Msg`] because the
+    /// wording alone did not survive. The message was written to avoid the
+    /// word "failed", with a unit test asserting so, and all three call sites
+    /// printed `Publish failed: {e}` in front of it — a test on the message
+    /// cannot see the caller. Use [`Self::outcome_is_unknown`] to branch.
+    #[error("{0}")]
+    PublishUnconfirmed(String),
     /// Bespoke error message.
     #[error("{0}")]
     Msg(String),
@@ -73,6 +88,33 @@ impl SkillError {
     /// Construct a bespoke message error.
     pub fn msg(message: impl Into<String>) -> Self {
         Self::Msg(message.into())
+    }
+
+    /// Whether this says "I do not know what happened" rather than "it failed".
+    ///
+    /// Looks through [`Self::Context`] so wrapping an unconfirmed publish does
+    /// not quietly turn it back into a failure.
+    pub fn outcome_is_unknown(&self) -> bool {
+        match self {
+            Self::PublishUnconfirmed(_) => true,
+            Self::Context { source, .. } => source.outcome_is_unknown(),
+            _ => false,
+        }
+    }
+
+    /// The line to show a user whose publish did not plainly succeed.
+    ///
+    /// One function for all three call sites — CLI, `/skill publish` and
+    /// `/clawhub publish` — because the previous version had the right words
+    /// in the error and the wrong word in every caller.
+    pub fn publish_outcome_line(&self) -> String {
+        if self.outcome_is_unknown() {
+            // No verdict word at all. The message already says what is known
+            // and what to check.
+            self.to_string()
+        } else {
+            format!("Publish failed: {self}")
+        }
     }
 
     /// Wrap an error with a context prefix, preserving it as `source()`.
