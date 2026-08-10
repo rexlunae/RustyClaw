@@ -678,6 +678,15 @@ fn contained_path(base: &Path, relative: &str) -> Result<PathBuf, String> {
             _ => out.push(part),
         }
     }
+    // `.`, `./`, `././` and friends contribute nothing and land back on the
+    // base. Harmless for an archive entry, but the slug goes through here too,
+    // and a slug of `.` makes the skills root itself the skill directory —
+    // the archive unpacks over every other installed skill and drops
+    // `.clawhub/install.json` at the root. An earlier draft had this check and
+    // I removed it as redundant, looking only at the entry case.
+    if out == base {
+        return Err(format!("`{relative}`, which names no directory at all"));
+    }
     Ok(out)
 }
 
@@ -710,6 +719,13 @@ fn extract_archive_into(skill_dir: &Path, zip_bytes: &[u8]) -> Result<(), SkillE
             return Err(SkillError::msg(format!(
                 "Refusing archive entry `{raw_name}`, which is a symlink"
             )));
+        }
+
+        // Some zip writers emit a `./` entry for the archive root. It names
+        // the directory that was just created, so it is a no-op rather than
+        // an escape — refusing it would fail installs over nothing.
+        if file.is_dir() && raw_name.split('/').all(|p| p.is_empty() || p == ".") {
+            continue;
         }
 
         let dest = contained_path(skill_dir, &raw_name)
@@ -2051,5 +2067,34 @@ mod extract_tests {
         assert!(contained_path(base, "../../etc").is_err());
         assert!(contained_path(base, "").is_err());
         assert!(contained_path(base, "ordinary-skill").is_ok());
+    }
+
+    /// A slug that resolves to the base makes the skills root the skill
+    /// directory: the archive unpacks over every other installed skill.
+    /// Climbing out is not the only way to end up somewhere shared.
+    #[test]
+    fn a_slug_that_names_no_directory_is_refused() {
+        let base = Path::new("/skills");
+        for name in [".", "./", "././", "//"] {
+            assert!(
+                contained_path(base, name).is_err(),
+                "{name:?} resolves to the skills root itself"
+            );
+        }
+    }
+
+    /// But a `./` directory entry inside an archive is a no-op some zip
+    /// writers emit, and failing the install over it would be refusing
+    /// nothing.
+    #[test]
+    fn an_archive_with_a_root_directory_entry_still_installs() {
+        let (_root, skill_dir) = scratch();
+        let zip = archive_of(&["./", "SKILL.md"], b"hello");
+
+        extract_archive_into(&skill_dir, &zip).expect("a `./` entry is not an escape");
+        assert_eq!(
+            std::fs::read(skill_dir.join("SKILL.md")).expect("SKILL.md exists"),
+            b"hello"
+        );
     }
 }
