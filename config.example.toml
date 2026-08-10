@@ -1,5 +1,25 @@
 # RustyClaw Configuration Example
 # Copy this to ~/.rustyclaw/config.toml and customize
+#
+# Boot-critical settings (provider, workspace, gateway bind) may live in a
+# separate, rarely-changed ~/.rustyclaw/boot.toml — see "Boot config"
+# below. When boot.toml exists it wins for those fields; a broken extended
+# config below then degrades to defaults without taking the LLM connection
+# down, while a broken boot.toml is fatal (no LLM yet to self-heal).
+#
+# # ~/.rustyclaw/boot.toml
+# [provider]
+# name = "anthropic"                 # as in [model] provider below
+# model = "claude-sonnet-4-20250514" # optional; provider default if absent
+#
+# [workspace]
+# path = "~/.rustyclaw/workspace"    # optional; ~ is expanded
+#
+# [gateway]
+# ssh_bind = "0.0.0.0:2222"          # optional; for the SSH transport
+#
+# API keys are not in boot.toml: they resolve per-provider from the vault
+# or the provider's *_API_KEY environment variable, as before.
 
 # Directory for RustyClaw settings and data
 settings_dir = "/home/user/.rustyclaw"

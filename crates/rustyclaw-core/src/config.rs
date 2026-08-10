@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::memory_flush::MemoryFlushConfig;
 use crate::services::ServiceDef;
@@ -606,6 +606,21 @@ impl Config {
 
     // ── Load / save ─────────────────────────────────────────────────
 
+    /// A default config whose `settings_dir` is anchored at `config_path`'s
+    /// parent directory (falling back to the home default when there is no
+    /// parent). Used when a config file is corrupt or missing: the user's
+    /// state — and boot.toml — lives next to the config file they asked
+    /// for, not necessarily in the home directory.
+    fn anchored_default(config_path: &Path) -> Self {
+        let mut fallback = Config::default();
+        if let Some(parent) = config_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fallback.settings_dir = parent.to_path_buf();
+            }
+        }
+        fallback
+    }
+
     /// Load configuration from file, with OpenClaw compatibility
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
         let config_path = if let Some(p) = path {
@@ -615,10 +630,10 @@ impl Config {
             home_dir.join(".rustyclaw").join("config.toml")
         };
 
-        if config_path.exists() {
+        let (mut config, skip_post) = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
-            let config: Config = match toml::from_str(&content) {
-                Ok(c) => c,
+            match toml::from_str(&content) {
+                Ok(c) => (c, false),
                 Err(e) => {
                     // A torn config used to be a hard startup failure — the
                     // one file that decides where everything lives, and one
@@ -637,23 +652,73 @@ impl Config {
                                  Restore settings from that file, then delete it.",
                                 kept.display()
                             );
-                            return Ok(Config::default());
+                            // Anchor the default at the corrupt file's own
+                            // directory, not the home default: that is where
+                            // the user's state — and boot.toml — actually
+                            // lives, especially when --config pointed at a
+                            // custom location. Skip the legacy-layout
+                            // migration and provider-catalogue reset (there
+                            // are no user settings to migrate — running them
+                            // on a defaults config could relocate legacy
+                            // files using paths the user never chose, and a
+                            // migration failure would turn this recoverable
+                            // path back into a hard startup failure).
+                            (Self::anchored_default(&config_path), true)
                         }
                         // Could not even rename it: better to stop than to
                         // silently shadow a file the next save would clobber.
                         None => return Err(e.into()),
                     }
                 }
-            };
-            let mut config = config;
+            }
+        } else {
+            // Same anchoring for a *missing* config file: when --config
+            // pointed at a path that does not exist (first run, wrong dir),
+            // boot.toml must still be looked up next to it, not in the
+            // home directory. As with the corrupt-config branch, there are
+            // no user settings to migrate and no custom providers to
+            // publish, so skip the post-load steps: running them on a
+            // defaults config could relocate files in a directory the user
+            // never designated as a settings dir, and a migration failure
+            // would turn a missing file into a hard startup failure.
+            (Self::anchored_default(&config_path), true)
+        };
+        if !skip_post {
             // Migrate legacy flat layout if detected.
             config.migrate_legacy_layout()?;
             // Make user-defined providers visible to the provider catalogue.
             crate::providers::set_custom_providers(&config.custom_providers);
-            Ok(config)
-        } else {
-            Ok(Config::default())
         }
+
+        // Boot config (RustyClaw#175, migration rung 1): the stable,
+        // boot-critical slice lives in `<settings_dir>/boot.toml` so a
+        // broken extended config cannot take the LLM connection down with
+        // it. A missing file is legacy single-file behavior (rung 2 — boot
+        // params already come from config.toml). If boot.toml itself is
+        // unreadable, still allow the old single-file config as a backup.
+        let boot_path = config.settings_dir.join("boot.toml");
+        match crate::boot_config::BootConfig::load(&boot_path) {
+            Ok(boot) => boot.apply(&mut config),
+            Err(e) => {
+                if config.model.is_some() {
+                    // The gateway installs its tracing subscriber only
+                    // after Config::load returns (main.rs), so a tracing
+                    // event here would be dropped and the user would never
+                    // learn that their boot settings were ignored. Use
+                    // stderr, like the corrupt-config path above — the
+                    // descriptive error (including any quarantine location)
+                    // must be visible on startup.
+                    eprintln!(
+                        "WARNING: Boot config {} failed to load — {e}; falling back to the \
+                         legacy single-file config",
+                        boot_path.display()
+                    );
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(config)
     }
 
     /// Save configuration to file
@@ -814,5 +879,139 @@ mod tests {
         config.save(Some(path.clone())).expect("save must succeed");
         let loaded = Config::load(Some(path)).expect("load what was saved");
         assert_eq!(loaded.relevance_filter, RelevanceFilter::Mentions);
+    }
+
+    // ── Boot config integration (RustyClaw#175) ──────────────────────
+
+    /// A config.toml rooted at `dir` (settings_dir is required by serde,
+    /// which also points the boot.toml lookup at the same temp dir).
+    fn write_full_config(dir: &std::path::Path, extra: &str) -> std::path::PathBuf {
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "settings_dir = \"{}\"\nuse_secrets = true\n{extra}",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn no_boot_file_keeps_legacy_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+        let config = Config::load(Some(path)).unwrap();
+        let m = config.model.unwrap();
+        assert_eq!(m.provider, "openai");
+        assert_eq!(m.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn boot_config_overrides_extended_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+        std::fs::write(
+            dir.path().join("boot.toml"),
+            "[provider]\nname = \"anthropic\"\nmodel = \"claude-sonnet-4-20250514\"\n",
+        )
+        .unwrap();
+        let config = Config::load(Some(path)).unwrap();
+        let m = config.model.unwrap();
+        assert_eq!(m.provider, "anthropic", "boot provider wins");
+        assert_eq!(m.model.as_deref(), Some("claude-sonnet-4-20250514"));
+    }
+
+    /// The resilience win of the split: a corrupt extended config degrades
+    /// to defaults, but the boot slice still lands, so the gateway can
+    /// still reach an LLM and self-heal config.toml.
+    #[test]
+    fn corrupt_extended_config_with_valid_boot_still_gets_boot_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "not valid toml at all").unwrap();
+        std::fs::write(
+            dir.path().join("boot.toml"),
+            "[provider]\nname = \"ollama\"\n\n[workspace]\npath = \"/tmp/ws\"\n",
+        )
+        .unwrap();
+        let config = Config::load(Some(dir.path().join("config.toml"))).unwrap();
+        assert_eq!(config.model.unwrap().provider, "ollama");
+        assert_eq!(
+            config.workspace_dir,
+            Some(std::path::PathBuf::from("/tmp/ws"))
+        );
+        assert!(
+            !dir.path().join("config.toml").exists(),
+            "corrupt extended config is quarantined"
+        );
+    }
+
+    /// If boot.toml is unreadable but config.toml still has the old
+    /// single-file model settings, keep booting from that backup.
+    #[test]
+    fn unreadable_boot_file_falls_back_to_legacy_single_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+        std::fs::write(dir.path().join("boot.toml"), "[invalid\nkey = @value").unwrap();
+        let config = Config::load(Some(path)).unwrap();
+        let model = config.model.unwrap();
+        assert_eq!(model.provider, "openai");
+        assert_eq!(model.model.as_deref(), Some("gpt-4o"));
+    }
+
+    /// A broken boot file is still fatal when no legacy single-file boot
+    /// fields exist to recover from.
+    #[test]
+    fn unreadable_boot_file_is_fatal_without_legacy_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(dir.path(), "");
+        std::fs::write(dir.path().join("boot.toml"), "[invalid\nkey = @value").unwrap();
+        let err = Config::load(Some(path)).unwrap_err();
+        assert!(err.to_string().contains("unreadable"), "{err}");
+    }
+
+    /// A boot file that cannot be read at all (binary/truncated content,
+    /// a directory named boot.toml, unreadable permissions) must be treated
+    /// like an unparseable file: fatal through Config::load when there is
+    /// no legacy backup, but quarantined so the next boot does not loop.
+    #[test]
+    fn unreadable_binary_boot_file_is_fatal_but_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(dir.path(), "");
+        std::fs::write(dir.path().join("boot.toml"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
+        let err = Config::load(Some(path)).unwrap_err();
+        assert!(err.to_string().contains("unreadable"), "{err}");
+        assert!(
+            !dir.path().join("boot.toml").exists(),
+            "unreadable boot file must be quarantined so the next boot does not loop"
+        );
+    }
+
+    /// Regression for Devin review #442 (BUG_0002): a missing config file at
+    /// a custom path must still find boot.toml next to it, instead of
+    /// falling back to the home directory.
+    #[test]
+    fn boot_next_to_missing_custom_config_is_honored() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("custom/config.toml");
+        std::fs::create_dir_all(dir.path().join("custom")).unwrap();
+        std::fs::write(
+            dir.path().join("custom/boot.toml"),
+            "[provider]\nname = \"ollama\"\n",
+        )
+        .unwrap();
+        let config = Config::load(Some(config_path)).unwrap();
+        assert_eq!(config.model.unwrap().provider, "ollama");
+        assert_eq!(config.settings_dir, dir.path().join("custom"));
     }
 }

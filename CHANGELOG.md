@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs a one-shot completion helper on `ModelContext` and will extend the
   same decision point.
 
+- **Boot config (`boot.toml`)** — first two rungs of the #175 migration
+  path. Boot-critical fields (model provider, workspace path, SSH transport
+  bind) can live in a small, stable `<settings_dir>/boot.toml`:
+  `[provider] name/model`, `[workspace] path` (with `~` expansion),
+  `[gateway] ssh_bind`. When present, boot.toml wins for those fields
+  (preserving a custom provider's `base_url`); when absent, the legacy
+  single-file behavior is unchanged. Deterministic recovery before giving
+  up: TOML parse failure falls back to JSON (wrong-extension file), an
+  invalid bind is dropped with a warning, and only a truly unreadable file
+  is fatal — it is moved aside with a clear message so the next boot does
+  not loop. The resilience win: a corrupt extended `config.toml` degrades
+  to defaults *anchored at the corrupt file's directory*, then the boot
+  slice still lands, so the gateway can still reach an LLM and self-heal.
+  API keys are not in boot.toml; they keep resolving per-provider from the
+  vault or `*_API_KEY` env vars.
+
 - **Messenger setup in the clients: credentials, profile, and thread routing.**
   Messengers were configurable only by hand-editing `[[messengers]]` in
   `config.toml`, which meant live bot tokens sitting in plaintext next to
