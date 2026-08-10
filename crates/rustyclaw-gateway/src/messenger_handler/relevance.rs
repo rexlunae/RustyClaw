@@ -161,9 +161,14 @@ pub fn contains_mention(content: &str, name: &str) -> bool {
     let haystack = content.to_lowercase();
     let needle = name.to_lowercase();
 
-    // "@name" — the most common way to address a bot.
-    if haystack.contains(&format!("@{needle}")) {
-        return true;
+    // "@name" — the most common way to address a bot. The character after the
+    // name must not be alphanumeric, so "@adaline" is not "@ada" and
+    // "bob@adaline.example" does not address "ada".
+    if let Some(pos) = haystack.find(&format!("@{needle}")) {
+        let after = &haystack[pos + 1 + needle.len()..];
+        if after.chars().next().is_none_or(|c| !c.is_alphanumeric()) {
+            return true;
+        }
     }
 
     // Whole-word match: "name:" after a call-out, "name," mid-sentence, or
@@ -265,6 +270,22 @@ mod tests {
         // inside another word does not.
         assert!(contains_mention("hey Ada lover", "Ada"));
         assert!(!contains_mention("hey adaline", "Ada"));
+    }
+
+    /// Regression for Devin review #441 (BUG_0001, latest round): the @-form
+    /// used to be a bare substring test, so "@adaline" or "bob@adaline.example"
+    /// counted as addressing "ada". The character after the @-name must be a
+    /// non-alphanumeric boundary, matching the whole-word path.
+    #[test]
+    fn at_mention_requires_a_boundary_after_the_name() {
+        assert!(contains_mention("ping @ada", "Ada"));
+        assert!(contains_mention("@ada, what do you think?", "Ada"));
+        assert!(!contains_mention("ping @adaline", "Ada"));
+        assert!(!contains_mention("mail bob@adaline.example", "Ada"));
+        assert!(contains_mention("@ada!", "Ada"));
+        // "_" is not alphanumeric, so it is a boundary here just as it is in
+        // the whole-word path ("ada_x" matches "ada" there too).
+        assert!(contains_mention("@ada_x", "Ada"));
     }
 
     #[test]
