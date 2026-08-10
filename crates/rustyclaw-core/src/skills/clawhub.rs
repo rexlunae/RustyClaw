@@ -478,11 +478,15 @@ fn screen_resolved(
 /// The error says the outcome is *unknown*, never that the publish failed.
 /// "Failed" sends the user to re-publish, which is the one action that is
 /// wrong if the skill was in fact stored.
-fn read_publish_reply(body: &str, name: &str, version: &str) -> Result<PublishAccepted, String> {
+fn read_publish_reply(
+    body: &str,
+    name: &str,
+    version: &str,
+) -> Result<PublishAccepted, SkillError> {
     let done: PublishAccepted = serde_json::from_str(body).map_err(|_| {
         let excerpt: String = body.chars().take(200).collect();
         let excerpt = excerpt.trim();
-        format!(
+        SkillError::PublishUnconfirmed(format!(
             "ClawHub accepted the publish request but its reply was not the \
              documented JSON, so whether {name} v{version} was stored is \
              unknown — check the registry before publishing again. The reply \
@@ -492,12 +496,14 @@ fn read_publish_reply(body: &str, name: &str, version: &str) -> Result<PublishAc
             } else {
                 excerpt
             }
-        )
+        ))
     })?;
     // An explicit `false` is the one case where the outcome *is* known, so it
     // says so plainly rather than repeating the go-and-look advice above.
     if done.ok == Some(false) {
-        return Err(format!("ClawHub rejected the publish of {name} v{version}"));
+        return Err(SkillError::msg(format!(
+            "ClawHub rejected the publish of {name} v{version}"
+        )));
     }
     Ok(done)
 }
@@ -972,7 +978,7 @@ impl SkillManager {
         let body = resp
             .text()
             .map_err(|e| SkillError::context("Failed to read the publish reply", e))?;
-        let done = read_publish_reply(&body, &manifest.name, version).map_err(SkillError::msg)?;
+        let done = read_publish_reply(&body, &manifest.name, version)?;
 
         // The id is only mentioned when the registry sent one. Appending it
         // unconditionally renders "(skill )" on a reply that omitted it —
@@ -1544,7 +1550,7 @@ mod upload_target_tests {
 /// publish that stored nothing, so these cover what counts as a confirmation.
 #[cfg(test)]
 mod publish_reply_tests {
-    use super::read_publish_reply;
+    use super::{SkillError, read_publish_reply};
 
     /// The documented shape.
     #[test]
@@ -1573,7 +1579,8 @@ mod publish_reply_tests {
             "demo",
             "1.0.0",
         )
-        .expect_err("HTML is not a publish confirmation");
+        .expect_err("HTML is not a publish confirmation")
+        .to_string();
         assert!(err.contains("not the documented JSON"), "got: {err}");
         assert!(
             err.contains("<!DOCTYPE html>"),
@@ -1584,25 +1591,61 @@ mod publish_reply_tests {
     /// And it must not claim the publish failed, because nobody knows. Telling
     /// the user it failed sends them to re-publish, which is the one action
     /// that is wrong if the skill was in fact stored.
+    ///
+    /// Asserted on the line a user actually reads, not on the error's own
+    /// `Display`. The previous version checked the message and passed, while
+    /// all three call sites printed "Publish failed: " in front of it — a test
+    /// on the message cannot see the caller.
     #[test]
     fn an_unreadable_reply_reports_the_outcome_as_unknown() {
         let err =
             read_publish_reply("not json", "demo", "1.0.0").expect_err("must not be a publish");
-        assert!(err.contains("unknown"), "got: {err}");
         assert!(
-            err.contains("demo v1.0.0"),
-            "the user needs to know what to check for: {err}"
+            err.outcome_is_unknown(),
+            "an unreadable reply is not a verdict"
+        );
+
+        let shown = err.publish_outcome_line();
+        assert!(shown.contains("unknown"), "got: {shown}");
+        assert!(
+            shown.contains("demo v1.0.0"),
+            "the user needs to know what to check for: {shown}"
         );
         assert!(
-            !err.to_lowercase().contains("failed"),
-            "must not claim failure: {err}"
+            !shown.to_lowercase().contains("failed"),
+            "must not claim failure: {shown}"
+        );
+    }
+
+    /// Wrapping must not launder an unknown outcome back into a failure.
+    #[test]
+    fn context_does_not_turn_an_unknown_outcome_into_a_failure() {
+        let err =
+            read_publish_reply("not json", "demo", "1.0.0").expect_err("must not be a publish");
+        let wrapped = SkillError::context("While publishing", err);
+        assert!(wrapped.outcome_is_unknown(), "wrapping hid the distinction");
+        let shown = wrapped.publish_outcome_line();
+        assert!(!shown.to_lowercase().contains("failed"), "got: {shown}");
+    }
+
+    /// A real failure still says so. A rule that softened every error would
+    /// satisfy the tests above and tell users nothing.
+    #[test]
+    fn an_ordinary_error_is_still_shown_as_a_failure() {
+        let err = SkillError::msg("connection refused");
+        assert!(!err.outcome_is_unknown());
+        assert_eq!(
+            err.publish_outcome_line(),
+            "Publish failed: connection refused"
         );
     }
 
     /// An empty body says "(empty)" rather than trailing off after a colon.
     #[test]
     fn an_empty_reply_says_it_was_empty() {
-        let err = read_publish_reply("   ", "demo", "1.0.0").expect_err("must not be a publish");
+        let err = read_publish_reply("   ", "demo", "1.0.0")
+            .expect_err("must not be a publish")
+            .to_string();
         assert!(err.contains("(empty)"), "got: {err}");
     }
 
@@ -1612,8 +1655,10 @@ mod publish_reply_tests {
     fn an_explicit_rejection_is_stated_as_one() {
         let err = read_publish_reply(r#"{"ok":false}"#, "demo", "1.0.0")
             .expect_err("an explicit false is a rejection");
-        assert!(err.contains("rejected"), "got: {err}");
-        assert!(!err.contains("unknown"), "the outcome is known here: {err}");
+        assert!(!err.outcome_is_unknown(), "the outcome is known here");
+        let shown = err.publish_outcome_line();
+        assert!(shown.contains("rejected"), "got: {shown}");
+        assert!(!shown.contains("unknown"), "got: {shown}");
     }
 }
 
