@@ -341,6 +341,13 @@ pub struct UsageTotalsDto {
     pub total_output_tokens: u64,
     pub total_latency_ms: u64,
     pub period: String,
+    /// Lifetime token budget (`model.token_budget`) for the configured
+    /// model, when set. `None` means no budget is configured.
+    #[serde(default)]
+    pub budget: Option<u64>,
+    /// All-time tokens used against the budget (input + output).
+    #[serde(default)]
+    pub budget_used: u64,
 }
 
 /// Per-model usage breakdown.

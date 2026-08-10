@@ -579,3 +579,105 @@ fn a_second_pin_set_is_refused() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ── Model options (#401) ────────────────────────────────────────────────────
+
+/// The `model.reasoning_effort` config string must map onto genai's
+/// `ReasoningEffort`, case-insensitively, including the `budget:N` form.
+#[test]
+fn reasoning_effort_parses_keywords_and_budget() {
+    use genai::chat::ReasoningEffort;
+
+    let parsed = super::genai_backend::parse_reasoning_effort;
+    assert!(matches!(parsed("high"), Some(ReasoningEffort::High)));
+    assert!(matches!(parsed("MEDIUM"), Some(ReasoningEffort::Medium)));
+    assert!(matches!(parsed("minimal"), Some(ReasoningEffort::Minimal)));
+    assert!(matches!(
+        parsed("budget:20000"),
+        Some(ReasoningEffort::Budget(20000))
+    ));
+    // Whitespace-tolerant, and unknown values are ignored (a hint must not
+    // fail the request).
+    assert!(matches!(
+        parsed("  budget: 500  "),
+        Some(ReasoningEffort::Budget(500))
+    ));
+    assert!(parsed("bogus").is_none());
+    assert!(
+        parsed("budget:lots").is_none(),
+        "a non-numeric budget is invalid, not silently zero"
+    );
+}
+
+/// The `[model]` config section must round-trip the new option fields, so
+/// `model.reasoning_effort`, `max_tokens`, `temperature` and `token_budget`
+/// survive a write + reload.
+#[test]
+fn model_provider_options_round_trip_through_config() {
+    use crate::config::ModelProvider;
+
+    let mp = ModelProvider {
+        provider: "openai".to_string(),
+        model: Some("gpt-5.2".to_string()),
+        base_url: None,
+        tls_ca_cert: None,
+        reasoning_effort: Some("high".to_string()),
+        max_tokens: Some(8192),
+        temperature: Some(0.7),
+        token_budget: Some(5_000_000),
+    };
+
+    let toml_str = toml::to_string(&mp).expect("serialize");
+    let back: ModelProvider = toml::from_str(&toml_str).expect("deserialize");
+
+    assert_eq!(back.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(back.max_tokens, Some(8192));
+    assert_eq!(back.temperature, Some(0.7));
+    assert_eq!(back.token_budget, Some(5_000_000));
+
+    // Absent keys default to None — old configs keep working.
+    let minimal: ModelProvider =
+        toml::from_str("provider = \"ollama\"\nmodel = \"llama3.2\"\n").expect("minimal config");
+    assert_eq!(minimal.reasoning_effort, None);
+    assert_eq!(minimal.max_tokens, None);
+    assert_eq!(minimal.temperature, None);
+    assert_eq!(minimal.token_budget, None);
+}
+
+/// `ModelContext::resolve` must carry the config's model options into the
+/// context the gateway builds requests from.
+#[test]
+fn model_context_resolve_carries_options() {
+    use crate::config::{Config, ModelProvider};
+    use crate::gateway::ModelContext;
+    use crate::secrets::SecretsManager;
+
+    let tmp = std::env::temp_dir().join(format!(
+        "rustyclaw-model-options-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp dir");
+    let mut secrets = SecretsManager::new(&tmp);
+
+    let cfg = Config {
+        model: Some(ModelProvider {
+            provider: "ollama".to_string(),
+            model: Some("llama3.2".to_string()),
+            base_url: Some("http://localhost:11434/v1".to_string()),
+            tls_ca_cert: None,
+            reasoning_effort: Some("low".to_string()),
+            max_tokens: Some(4096),
+            temperature: Some(0.2),
+            token_budget: None,
+        }),
+        ..Config::default()
+    };
+
+    let ctx = ModelContext::resolve(&cfg, &mut secrets).expect("resolve");
+    assert_eq!(ctx.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(ctx.max_tokens, Some(4096));
+    assert_eq!(ctx.temperature, Some(0.2));
+    assert!(ctx.has_model_options());
+
+    std::fs::remove_dir_all(&tmp).ok();
+}

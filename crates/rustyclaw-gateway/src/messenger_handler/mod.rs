@@ -869,6 +869,9 @@ async fn process_incoming_message(
         api_key: effective_key,
         messages: messages.clone(),
         allowed_tools: None,
+        reasoning_effort: model_ctx.reasoning_effort.clone(),
+        max_tokens: model_ctx.max_tokens,
+        temperature: model_ctx.temperature,
     };
 
     // Run the agentic tool loop

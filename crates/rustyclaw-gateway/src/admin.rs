@@ -120,6 +120,7 @@ pub(crate) async fn handle_model_switch(
     model: String,
 ) -> Result<()> {
     debug!("Model switch request: {} / {}", provider, model);
+    let cfg_model = shared_config.read().await.model.clone();
     let base_url = crate_providers::base_url_for_provider(&provider)
         .unwrap_or("")
         .to_string();
@@ -141,6 +142,9 @@ pub(crate) async fn handle_model_switch(
         model: model.clone(),
         base_url,
         api_key: api_key.clone(),
+        reasoning_effort: cfg_model.as_ref().and_then(|m| m.reasoning_effort.clone()),
+        max_tokens: cfg_model.as_ref().and_then(|m| m.max_tokens),
+        temperature: cfg_model.as_ref().and_then(|m| m.temperature),
     });
 
     // Reinitialize Copilot session if needed
@@ -163,6 +167,10 @@ pub(crate) async fn handle_model_switch(
             model: Some(model.clone()),
             base_url: base,
             tls_ca_cert: None,
+            reasoning_effort: None,
+            max_tokens: None,
+            temperature: None,
+            token_budget: None,
         });
         crate::helpers::persist_config(&cfg);
     }

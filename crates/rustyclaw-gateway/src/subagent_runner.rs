@@ -247,6 +247,9 @@ async fn drive_tool_loop(
         base_url: parent.base_url.clone(),
         api_key: parent.api_key.clone(),
         allowed_tools: Some(profile.tools.clone()),
+        reasoning_effort: parent.reasoning_effort.clone(),
+        max_tokens: parent.max_tokens,
+        temperature: parent.temperature,
     };
 
     let max_rounds = profile.effective_max_rounds();

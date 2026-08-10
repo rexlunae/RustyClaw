@@ -139,12 +139,25 @@ async fn genai_chat(
     let chat_req = to_genai_chat_request(req);
 
     let copilot = providers::needs_copilot_session(&req.provider);
-    let mut options = ChatOptions::default().with_max_tokens(MAX_TOKENS);
+    let mut options = ChatOptions::default().with_max_tokens(req.max_tokens.unwrap_or(MAX_TOKENS));
     // Copilot/proxy endpoints reject the `stream_options.include_usage` field
     // that genai adds when usage capture is on, so skip usage there.
     options = options.with_capture_usage(!copilot);
     if let Some(headers) = copilot_extra_headers(req) {
         options = options.with_extra_headers(headers);
+    }
+    // Model options from the `[model]` config section (issue #401). genai
+    // serialises each field into the provider-specific option only when the
+    // provider supports it, so unknown/unsupported settings are harmless.
+    if let Some(effort) = req
+        .reasoning_effort
+        .as_deref()
+        .and_then(parse_reasoning_effort)
+    {
+        options = options.with_reasoning_effort(effort);
+    }
+    if let Some(temp) = req.temperature {
+        options = options.with_temperature(temp);
     }
 
     match writer {
@@ -599,6 +612,26 @@ fn normalize_tool_arguments(value: serde_json::Value) -> serde_json::Value {
 /// Synthesize a finish reason. genai 0.5.3 does not surface the provider's
 /// raw finish reason on the response, so the dispatch loop distinguishes a
 /// tool-call turn from a completed turn by whether tool calls are present.
+/// Parse the `model.reasoning_effort` config string into genai's
+/// [`genai::chat::ReasoningEffort`].
+///
+/// Accepted forms (case-insensitive): `none`, `low`, `medium`, `high`,
+/// `xhigh`, `max`, legacy `minimal`, and `budget:N` for a token budget.
+/// Anything else returns `None` — the setting is a hint and an unknown
+/// value must not fail the request (providers ignore what they don't
+/// support).
+pub(crate) fn parse_reasoning_effort(raw: &str) -> Option<genai::chat::ReasoningEffort> {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    if let Some(budget) = trimmed.strip_prefix("budget:") {
+        return budget
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .map(genai::chat::ReasoningEffort::Budget);
+    }
+    genai::chat::ReasoningEffort::from_keyword(&trimmed)
+}
+
 fn finish_reason_for(resp: &ModelResponse) -> &'static str {
     if resp.tool_calls.is_empty() {
         "stop"
@@ -789,6 +822,9 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: Some("sk-test".to_string()),
             allowed_tools: None,
+            reasoning_effort: None,
+            max_tokens: None,
+            temperature: None,
         };
         // Avoid pulling the full tool registry into the assertion.
         unsafe { std::env::set_var("RUSTYCLAW_SKIP_TOOLS", "1") };

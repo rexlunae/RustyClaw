@@ -167,6 +167,9 @@ async fn run_inner(
             ChatMessage::text("user", &user_message),
         ],
         allowed_tools: None,
+        reasoning_effort: model_ctx.reasoning_effort.clone(),
+        max_tokens: model_ctx.max_tokens,
+        temperature: model_ctx.temperature,
     };
 
     let session_key = format!("trigger:{}", fire.trigger_id);

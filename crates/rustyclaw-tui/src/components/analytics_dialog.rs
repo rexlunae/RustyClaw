@@ -34,6 +34,19 @@ pub fn AnalyticsDialog(props: &AnalyticsDialogProps) -> impl Into<AnyElement<'st
             "Avg Latency".into(),
             format!("{}ms", data.totals.avg_latency_ms()),
         ));
+
+        // Budget row: lifetime cap vs. usage, when configured.
+        if let Some(budget) = data.totals.budget {
+            rows.push((
+                "Budget".into(),
+                format!(
+                    "{} / {} tokens ({:.1}%)",
+                    UsageTotalsData::tokens_display(data.totals.budget_used),
+                    UsageTotalsData::tokens_display(budget),
+                    (data.totals.budget_used as f64 / budget.max(1) as f64) * 100.0,
+                ),
+            ));
+        }
         rows.push(("".into(), "".into()));
 
         // Per-model breakdown

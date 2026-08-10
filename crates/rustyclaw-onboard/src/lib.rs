@@ -756,6 +756,10 @@ pub fn run_onboard_wizard(
             Some(base_url)
         },
         tls_ca_cert: None,
+        reasoning_effort: None,
+        max_tokens: None,
+        temperature: None,
+        token_budget: None,
     });
     config.messengers = configured_messengers;
 

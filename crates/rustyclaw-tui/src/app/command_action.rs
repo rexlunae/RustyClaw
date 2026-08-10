@@ -184,6 +184,10 @@ pub(super) async fn handle_command_action(
                 model: Some(model_name.clone()),
                 base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                 tls_ca_cert: None,
+                reasoning_effort: None,
+                max_tokens: None,
+                temperature: None,
+                token_budget: None,
             });
 
             // Save config and tell the gateway to reload so the
@@ -219,6 +223,10 @@ pub(super) async fn handle_command_action(
                 model: existing_model,
                 base_url,
                 tls_ca_cert: None,
+                reasoning_effort: None,
+                max_tokens: None,
+                temperature: None,
+                token_budget: None,
             });
 
             // Save config and tell the gateway to reload
