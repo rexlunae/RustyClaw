@@ -182,7 +182,7 @@ pub(crate) fn handle_skill_subcommand(
                     action: CommandAction::None,
                 },
                 Err(e) => CommandResponse {
-                    messages: vec![format!("Publish failed: {}", e)],
+                    messages: vec![e.publish_outcome_line()],
                     action: CommandAction::None,
                 },
             }
@@ -866,7 +866,7 @@ pub(crate) fn handle_clawhub_subcommand(
                     action: CommandAction::None,
                 },
                 Err(e) => CommandResponse {
-                    messages: vec![format!("Publish failed: {}", e)],
+                    messages: vec![e.publish_outcome_line()],
                     action: CommandAction::None,
                 },
             }

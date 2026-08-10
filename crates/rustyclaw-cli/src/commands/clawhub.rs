@@ -481,7 +481,16 @@ pub(crate) fn run(args: ClawHubCommands, config: &mut Config) -> Result<()> {
             match sm.publish_to_registry(&name, &version, changelog, accept_license_terms) {
                 Ok(msg) => println!("{}", t::icon_ok(&msg)),
                 Err(e) => {
-                    println!("{}", t::icon_fail(&format!("Publish failed: {}", e)));
+                    // An unconfirmed publish is not a failure, so it does not
+                    // get the failure icon or the word. It still exits
+                    // non-zero: a script must not read "we could not tell"
+                    // as "published".
+                    let line = e.publish_outcome_line();
+                    if e.outcome_is_unknown() {
+                        println!("{}", t::icon_warn(&line));
+                    } else {
+                        println!("{}", t::icon_fail(&line));
+                    }
                     std::process::exit(1);
                 }
             }
