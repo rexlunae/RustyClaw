@@ -206,6 +206,39 @@ impl ModelContext {
     pub fn has_model_options(&self) -> bool {
         self.reasoning_effort.is_some() || self.max_tokens.is_some() || self.temperature.is_some()
     }
+
+    /// One-shot text completion for internal classification and utility
+    /// calls (e.g. the `"smart"` message relevance classifier of #165).
+    ///
+    /// Uses `model_override` (same provider) when given, otherwise the
+    /// context's own model. The request is deliberately not a conversation:
+    /// no tools, a hard 64-token cap, deterministic temperature, and no
+    /// reasoning effort (the caller wants a short verdict, not
+    /// chain-of-thought).
+    pub async fn complete(
+        &self,
+        http: &reqwest::Client,
+        model_override: Option<&str>,
+        system: &str,
+        user: &str,
+    ) -> Result<String> {
+        let req = ProviderRequest {
+            messages: vec![
+                ChatMessage::text("system", system),
+                ChatMessage::text("user", user),
+            ],
+            model: model_override.unwrap_or(&self.model).to_string(),
+            provider: self.provider.clone(),
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            allowed_tools: Some(Vec::new()),
+            reasoning_effort: None,
+            max_tokens: Some(64),
+            temperature: Some(0.0),
+        };
+        let resp = providers::call_with_tools(http, &req, None).await?;
+        Ok(resp.text)
+    }
 }
 
 // ── Copilot session token cache ──────────────────────────────────────────────
