@@ -156,12 +156,16 @@ pub struct Category {
 /// ClawHub user profile.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClawHubProfile {
+    /// The account's handle, or empty for an account that has not chosen one.
     #[serde(default)]
     pub username: String,
+    /// Falls back to the handle when whoami sends no display name.
     #[serde(default)]
     pub display_name: String,
+    /// Empty — whoami does not return an address, and nothing else fills it.
     #[serde(default)]
     pub email: String,
+    /// Empty — whoami does not return a bio, and nothing else fills it.
     #[serde(default)]
     pub bio: String,
     /// `None` when the registry did not report it.
@@ -172,8 +176,12 @@ pub struct ClawHubProfile {
     /// inventing data when the caller prints it unconditionally.
     #[serde(default)]
     pub published_count: Option<u64>,
+    /// `None` when the registry did not report it, for the same reason as
+    /// [`ClawHubProfile::published_count`].
     #[serde(default)]
     pub starred_count: Option<u64>,
+    /// Empty when the registry did not report it — whoami carries no join
+    /// date, and the callers omit the line rather than printing a blank one.
     #[serde(default)]
     pub joined: String,
 }
