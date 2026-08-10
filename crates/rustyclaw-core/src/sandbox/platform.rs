@@ -128,21 +128,30 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
 
     // Writable /tmp.
     //
-    // Emitted *before* the workspace bind, not after. bubblewrap applies
-    // mounts in argument order, so a tmpfs laid over /tmp hides every bind
-    // that came earlier underneath it — a workspace at /tmp/work would vanish
-    // and the `--chdir` below would then fail fatally, taking the whole server
-    // down. Ordering it first means later binds land on top, which is what a
-    // caller naming a path under /tmp asks for.
-    args.push("--tmpfs".to_string());
-    args.push("/tmp".to_string());
-
-    // A directory inside the sandbox for `HOME` to point at. The tmpfs above
-    // is empty, so without this the path a confined server is handed does not
-    // exist and anything writing `$HOME/<file>` directly — rather than
-    // creating its cache recursively — fails on ENOENT.
-    args.push("--dir".to_string());
-    args.push(SANDBOX_HOME.to_string());
+    // Ordered against the workspace bind, because bubblewrap applies mounts in
+    // argument order and either one can hide the other.
+    //
+    // A workspace *under* /tmp needs the tmpfs first, or the tmpfs hides it and
+    // the `--chdir` below dies on a path absent from the namespace. A workspace
+    // that *is* /tmp — or an ancestor of it — needs the tmpfs last, or binding
+    // the host's real /tmp back over the private one hands the confined process
+    // the host's temp directory read-write and wipes the sandbox home along
+    // with it. Fixing the first case is what created the second.
+    let tmp = Path::new("/tmp");
+    let tmpfs_first = policy.workspace.starts_with(tmp) && policy.workspace != tmp;
+    let private_tmp = |args: &mut Vec<String>| {
+        args.push("--tmpfs".to_string());
+        args.push("/tmp".to_string());
+        // A directory inside the sandbox for `HOME` to point at. The tmpfs is
+        // empty, so without this the path a confined server is handed does not
+        // exist and anything writing `$HOME/<file>` directly — rather than
+        // creating its cache recursively — fails on ENOENT.
+        args.push("--dir".to_string());
+        args.push(SANDBOX_HOME.to_string());
+    };
+    if tmpfs_first {
+        private_tmp(&mut args);
+    }
 
     // Workspace.
     //
@@ -185,9 +194,24 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
         masked.sort();
         masked.dedup();
         for deny in masked {
-            args.push("--tmpfs".to_string());
+            // A tmpfs needs a directory to mount over: bubblewrap fails to
+            // create one where a regular file already sits and exits fatally,
+            // so a `deny_paths` entry naming a single file — a private key,
+            // say, which is exactly what someone would list — broke every
+            // sandboxed command. Bind /dev/null over a file instead, which
+            // reads as empty and hides the contents just as well.
+            if deny.is_file() {
+                args.push("--ro-bind".to_string());
+                args.push("/dev/null".to_string());
+            } else {
+                args.push("--tmpfs".to_string());
+            }
             args.push(deny.display().to_string());
         }
+    }
+
+    if !tmpfs_first {
+        private_tmp(&mut args);
     }
 
     // Set up /proc for basic functionality
@@ -1113,6 +1137,73 @@ mod confinement_tests {
             chdir,
             vec![SANDBOX_HOME.to_string()],
             "chdir must target something that exists: {args:?}"
+        );
+    }
+
+    /// Fixing the "workspace under /tmp is hidden by the tmpfs" case created
+    /// its mirror: a workspace that *is* /tmp binds the host's real temp
+    /// directory back over the private one, read-write, and takes the sandbox
+    /// home with it.
+    #[test]
+    fn a_workspace_at_tmp_does_not_bind_the_hosts_tmp_over_the_private_one() {
+        let policy = policy_with_credentials_under("/tmp", "/home/user/.rustyclaw/credentials");
+        let args = bwrap_confinement_args(&policy);
+
+        let bind = args
+            .iter()
+            .position(|a| a == "/tmp")
+            .expect("the workspace bind");
+        let tmpfs = args
+            .windows(2)
+            .position(|w| w[0] == "--tmpfs" && w[1] == "/tmp")
+            .expect("the private tmpfs");
+        assert!(
+            tmpfs > bind,
+            "the host's /tmp was bound over the private one: {args:?}"
+        );
+        let home = args
+            .iter()
+            .position(|a| a == SANDBOX_HOME)
+            .expect("the sandbox home");
+        assert!(home > tmpfs, "the home dir was wiped: {args:?}");
+    }
+
+    /// And the case that ordering was introduced for still holds.
+    #[test]
+    fn a_workspace_under_tmp_still_survives_the_tmpfs() {
+        let policy = policy_with_credentials_under("/tmp/ws", "/home/user/.rustyclaw/credentials");
+        let args = bwrap_confinement_args(&policy);
+        let bind = args.iter().position(|a| a == "/tmp/ws").expect("bind");
+        let tmpfs = args
+            .windows(2)
+            .position(|w| w[0] == "--tmpfs" && w[1] == "/tmp")
+            .expect("tmpfs");
+        assert!(bind > tmpfs, "the tmpfs hid the workspace: {args:?}");
+    }
+
+    /// bubblewrap cannot lay a tmpfs over a regular file and exits fatally
+    /// trying, so a `deny_paths` entry naming a private key — exactly the sort
+    /// of thing someone would list — broke every sandboxed command.
+    #[test]
+    fn a_denied_file_is_masked_without_killing_the_launcher() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let secret = dir.path().join("id_rsa");
+        std::fs::write(&secret, "key").expect("write");
+
+        let policy = SandboxPolicy::protect_credentials(secret.clone(), dir.path());
+        let args = bwrap_confinement_args(&policy);
+
+        assert!(
+            !args
+                .windows(2)
+                .any(|w| w[0] == "--tmpfs" && w[1] == secret.display().to_string()),
+            "a tmpfs over a file is fatal: {args:?}"
+        );
+        assert!(
+            args.windows(3).any(|w| w[0] == "--ro-bind"
+                && w[1] == "/dev/null"
+                && w[2] == secret.display().to_string()),
+            "the file was left readable: {args:?}"
         );
     }
 
