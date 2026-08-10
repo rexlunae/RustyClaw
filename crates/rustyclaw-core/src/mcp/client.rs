@@ -57,14 +57,18 @@ impl McpClient {
         // Decide how to launch before touching a Command, so the decision is
         // a value that can be logged and tested rather than a sequence of
         // mutations (issue #230).
-        let plan =
-            super::spawn::plan_spawn(&self.config, &crate::sandbox::SandboxCapabilities::detect())
-                .map_err(|reason| {
-                    anyhow::anyhow!(
-                        "MCP server '{}' is configured with sandbox = \"required\" but {reason}",
-                        self.name
-                    )
-                })?;
+        // `cached()` so the probes run once per process rather than once per
+        // server, and `spawn_blocking` because they are process spawns and
+        // this is a tokio worker thread.
+        let caps = tokio::task::spawn_blocking(crate::sandbox::SandboxCapabilities::cached)
+            .await
+            .map_err(|e| anyhow::anyhow!("Sandbox capability probe failed: {e}"))?;
+        let plan = super::spawn::plan_spawn(&self.config, caps).map_err(|reason| {
+            anyhow::anyhow!(
+                "MCP server '{}' is configured with sandbox = \"required\" but {reason}",
+                self.name
+            )
+        })?;
 
         match &plan.unconfined_reason {
             Some(reason) => warn!(

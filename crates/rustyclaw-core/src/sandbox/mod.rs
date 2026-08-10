@@ -26,6 +26,18 @@ pub struct SandboxCapabilities {
 }
 
 impl SandboxCapabilities {
+    /// Detect available sandbox capabilities, once per process.
+    ///
+    /// [`Self::detect`] shells out three times, including `docker info`, which
+    /// takes seconds against an unreachable daemon. Callers on an async
+    /// runtime were paying that on every MCP server connection, blocking a
+    /// worker thread each time, for an answer that cannot change while the
+    /// process runs.
+    pub fn cached() -> &'static Self {
+        static CAPABILITIES: std::sync::OnceLock<SandboxCapabilities> = std::sync::OnceLock::new();
+        CAPABILITIES.get_or_init(Self::detect)
+    }
+
     /// Detect available sandbox capabilities.
     pub fn detect() -> Self {
         Self {
@@ -58,9 +70,25 @@ impl SandboxCapabilities {
         false
     }
 
+    /// Whether bubblewrap can actually build a sandbox here.
+    ///
+    /// `bwrap --version` only says the binary exists. It succeeds on hosts
+    /// where every real invocation then fails — user namespaces disabled,
+    /// seccomp policy, a container without the right capabilities. Confinement
+    /// is a security control, so "installed" is not the question worth
+    /// answering; "does it work" is. This runs a trivial sandbox and looks at
+    /// the exit status.
     fn check_bubblewrap() -> bool {
         std::process::Command::new("bwrap")
-            .arg("--version")
+            .args([
+                "--unshare-user",
+                "--unshare-pid",
+                "--ro-bind",
+                "/",
+                "/",
+                "--",
+                "true",
+            ])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -85,9 +113,10 @@ impl SandboxCapabilities {
 
     #[cfg(target_os = "linux")]
     fn check_userns() -> bool {
-        std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
-            .map(|s| s.trim() == "1")
-            .unwrap_or(false)
+        userns_allowed(
+            std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone").ok(),
+            std::fs::read_to_string("/proc/sys/user/max_user_namespaces").ok(),
+        )
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -136,6 +165,29 @@ impl SandboxCapabilities {
 
         format!("Available: {}", opts.join(", "))
     }
+}
+
+/// Whether unprivileged user namespaces are permitted, from the two kernel
+/// knobs that can say otherwise.
+///
+/// The previous version read only `/proc/sys/kernel/unprivileged_userns_clone`
+/// and treated a failed read as "denied". That sysctl is a Debian/Ubuntu
+/// downstream patch — on Fedora, Arch, RHEL and mainline the file does not
+/// exist, so every one of those hosts reported user namespaces as unavailable.
+/// Nothing consumed the field until MCP confinement did, at which point the
+/// inaccuracy became a silent fail-open on most of Linux.
+///
+/// Absent now means permitted, which is what mainline means by it. Only an
+/// explicit `0` from either knob is a denial.
+#[cfg(target_os = "linux")]
+pub(crate) fn userns_allowed(clone_sysctl: Option<String>, max_namespaces: Option<String>) -> bool {
+    if clone_sysctl.is_some_and(|v| v.trim() == "0") {
+        return false;
+    }
+    if max_namespaces.is_some_and(|v| v.trim().parse::<u64>() == Ok(0)) {
+        return false;
+    }
+    true
 }
 
 // ── Sandbox Policy ──────────────────────────────────────────────────────────
