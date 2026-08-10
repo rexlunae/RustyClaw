@@ -675,8 +675,13 @@ impl Config {
             // Same anchoring for a *missing* config file: when --config
             // pointed at a path that does not exist (first run, wrong dir),
             // boot.toml must still be looked up next to it, not in the
-            // home directory.
-            (Self::anchored_default(&config_path), false)
+            // home directory. As with the corrupt-config branch, there are
+            // no user settings to migrate and no custom providers to
+            // publish, so skip the post-load steps: running them on a
+            // defaults config could relocate files in a directory the user
+            // never designated as a settings dir, and a migration failure
+            // would turn a missing file into a hard startup failure.
+            (Self::anchored_default(&config_path), true)
         };
         if !skip_post {
             // Migrate legacy flat layout if detected.
@@ -696,10 +701,17 @@ impl Config {
             Ok(boot) => boot.apply(&mut config),
             Err(e) => {
                 if config.model.is_some() {
-                    tracing::warn!(
-                        file = %boot_path.display(),
-                        error = %e,
-                        "Boot config failed to load; falling back to legacy single-file config"
+                    // The gateway installs its tracing subscriber only
+                    // after Config::load returns (main.rs), so a tracing
+                    // event here would be dropped and the user would never
+                    // learn that their boot settings were ignored. Use
+                    // stderr, like the corrupt-config path above — the
+                    // descriptive error (including any quarantine location)
+                    // must be visible on startup.
+                    eprintln!(
+                        "WARNING: Boot config {} failed to load — {e}; falling back to the \
+                         legacy single-file config",
+                        boot_path.display()
                     );
                 } else {
                     return Err(e);

@@ -95,18 +95,21 @@ impl BootConfig {
             Ok(file) => Some(file),
             Err(toml_err) => match serde_json::from_str::<BootFile>(&content) {
                 Ok(file) => {
-                    tracing::warn!(
-                        file = %path.display(),
-                        "Boot config is JSON, not TOML — continuing (it will be expected as \
-                         TOML next time; consider renaming the file)"
+                    // stderr, not tracing: the gateway installs its
+                    // subscriber only after Config::load returns, so a
+                    // tracing event here would be dropped — the user would
+                    // never learn their boot file is being read as JSON.
+                    eprintln!(
+                        "WARNING: Boot config {} is JSON, not TOML — continuing (it will be \
+                         expected as TOML next time; consider renaming the file)",
+                        path.display()
                     );
                     Some(file)
                 }
                 Err(_) => {
-                    tracing::error!(
-                        file = %path.display(),
-                        %toml_err,
-                        "Boot config failed to parse as TOML or JSON"
+                    eprintln!(
+                        "ERROR: Boot config {} failed to parse as TOML or JSON: {toml_err}",
+                        path.display()
                     );
                     None
                 }
@@ -144,10 +147,11 @@ impl BootConfig {
         // instead: the extended config or CLI can still supply a valid one.
         if let Some(bind) = &boot.ssh_bind {
             if bind.parse::<std::net::SocketAddr>().is_err() {
-                tracing::warn!(
-                    file = %path.display(),
-                    %bind,
-                    "Boot config has an invalid gateway.ssh_bind — ignoring it"
+                // stderr, not tracing: see the note in `load` above.
+                eprintln!(
+                    "WARNING: Boot config {} has an invalid gateway.ssh_bind ({bind}) — \
+                     ignoring it",
+                    path.display()
                 );
                 boot.ssh_bind = None;
             }
