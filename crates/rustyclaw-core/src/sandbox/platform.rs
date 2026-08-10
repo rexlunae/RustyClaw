@@ -185,10 +185,15 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
         // a server could create the credentials directory inside the bind and
         // read whatever the gateway later wrote into it. bwrap creates the
         // mount point, so a tmpfs over a not-yet-existing path is fine.
+        // All three lists, the same set the `allow_paths` filter consults.
+        // Walking only two of them here while the sibling check one screen up
+        // walked three left a `deny_exec`-only path bound into the workspace
+        // and fully readable.
         let mut masked: Vec<&PathBuf> = policy
             .deny_read
             .iter()
             .chain(policy.deny_write.iter())
+            .chain(policy.deny_exec.iter())
             .filter(|d| d.starts_with(&policy.workspace) && *d != &policy.workspace)
             .collect();
         masked.sort();
@@ -228,12 +233,24 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
     // from the namespace is fatal to bwrap, so a workspace inside a denied
     // path — skipped above, because there is nothing to bind — took the
     // process down with an error that named none of this. The sandbox home
-    // always exists, so it is the safe fallback; `plan_spawn` reports the
-    // condition separately rather than relocating a server in silence.
+    // always exists, so it is the safe fallback.
+    //
+    // The MCP planner refuses this case before reaching here. Every other
+    // caller — `sandbox_wrap_interpreter`, `run_sandboxed_command` —
+    // substitutes a per-command `cwd` with no such check, and for those a
+    // silent relocation turns a fatal bwrap error into a command that lists,
+    // searches or writes in the wrong empty directory and reports success.
+    // The fallback keeps the process alive; the warning keeps it from lying.
     args.push("--chdir".to_string());
     if workspace_bound {
         args.push(policy.workspace.display().to_string());
     } else {
+        tracing::warn!(
+            workspace = %policy.workspace.display(),
+            fallback = SANDBOX_HOME,
+            "sandbox: the working directory is inside a denied path and cannot be made \
+             available; starting in the sandbox scratch directory instead"
+        );
         args.push(SANDBOX_HOME.to_string());
     }
 
@@ -1204,6 +1221,24 @@ mod confinement_tests {
                 && w[1] == "/dev/null"
                 && w[2] == secret.display().to_string()),
             "the file was left readable: {args:?}"
+        );
+    }
+
+    /// The masking loop walked deny_read and deny_write while the sibling
+    /// `allow_paths` filter one screen up walked all three, so a path denied
+    /// only for execution was bound into the workspace and fully readable.
+    /// Fourth time on this branch that half a symmetric pair got fixed.
+    #[test]
+    fn a_path_denied_only_for_exec_is_masked_too() {
+        let policy = SandboxPolicy {
+            workspace: PathBuf::from("/srv/app"),
+            deny_exec: vec![PathBuf::from("/srv/app/bin")],
+            ..SandboxPolicy::default()
+        };
+        let args = bwrap_confinement_args(&policy);
+        assert!(
+            pairs(&args, "--tmpfs").contains(&"/srv/app/bin".to_string()),
+            "a deny_exec path was left readable: {args:?}"
         );
     }
 
