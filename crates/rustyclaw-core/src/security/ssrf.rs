@@ -78,33 +78,58 @@ impl SsrfValidator {
         let blocked_ranges = if allow_private_ips {
             vec![
                 // Only block cloud metadata endpoints if private IPs are allowed
-                IpNetwork::from_str("169.254.169.254/32").unwrap(), // AWS/GCP/Azure metadata
+                IpNetwork::from_str("169.254.169.254/32")
+                    .expect("169.254.169.254/32 is valid CIDR"), // AWS/GCP/Azure metadata
             ]
         } else {
             vec![
                 // Private IP ranges (RFC 1918)
-                IpNetwork::from_str("10.0.0.0/8").unwrap(),
-                IpNetwork::from_str("172.16.0.0/12").unwrap(),
-                IpNetwork::from_str("192.168.0.0/16").unwrap(),
+                IpNetwork::from_str("10.0.0.0/8").expect("10.0.0.0/8 is valid CIDR"),
+                IpNetwork::from_str("172.16.0.0/12").expect("172.16.0.0/12 is valid CIDR"),
+                IpNetwork::from_str("192.168.0.0/16").expect("192.168.0.0/16 is valid CIDR"),
                 // Localhost
-                IpNetwork::from_str("127.0.0.0/8").unwrap(),
-                IpNetwork::from_str("::1/128").unwrap(),
+                IpNetwork::from_str("127.0.0.0/8").expect("127.0.0.0/8 is valid CIDR"),
+                IpNetwork::from_str("::1/128").expect("::1/128 is valid CIDR"),
                 // Link-local
-                IpNetwork::from_str("169.254.0.0/16").unwrap(),
-                IpNetwork::from_str("fe80::/10").unwrap(),
-                // Loopback
-                IpNetwork::from_str("::ffff:127.0.0.0/104").unwrap(), // IPv4-mapped IPv6 loopback
+                IpNetwork::from_str("169.254.0.0/16").expect("169.254.0.0/16 is valid CIDR"),
+                IpNetwork::from_str("fe80::/10").expect("fe80::/10 is valid CIDR"),
+                // Unique-local, fc00::/7. This is the IPv6 equivalent of
+                // 10.0.0.0/8 and is what IPv6 private networking actually
+                // uses, and it was absent: `https://[fd00::1]/` passed every
+                // check and connected (issue #432).
+                IpNetwork::from_str("fc00::/7").expect("fc00::/7 is valid CIDR"),
+                // Unspecified. `::` reaches loopback on Linux the same way
+                // `0.0.0.0` does.
+                IpNetwork::from_str("::/128").expect("::/128 is valid CIDR"),
+                // Discard-only, RFC 6666.
+                IpNetwork::from_str("100::/64").expect("100::/64 is valid CIDR"),
+                // Documentation, and multicast — the IPv6 halves of the
+                // 198.51.100.0/24 and 224.0.0.0/4 entries below, which had
+                // no counterpart.
+                IpNetwork::from_str("2001:db8::/32").expect("2001:db8::/32 is valid CIDR"),
+                IpNetwork::from_str("ff00::/8").expect("ff00::/8 is valid CIDR"),
+                // NAT64 (RFC 6052) and 6to4 (RFC 3056) both carry an IPv4
+                // address inside an IPv6 one, and `to_ipv4` does not unwrap
+                // either — it only knows `::/96` and `::ffff:0:0/96`. On a
+                // network with NAT64, `https://[64:ff9b::169.254.169.254]/`
+                // reaches the metadata endpoint. The embedded address is
+                // extracted below as well; these entries make the prefixes
+                // themselves refused even where the embedding is unusual.
+                IpNetwork::from_str("64:ff9b::/96").expect("64:ff9b::/96 is valid CIDR"),
+                IpNetwork::from_str("64:ff9b:1::/48").expect("64:ff9b:1::/48 is valid CIDR"),
+                IpNetwork::from_str("2002::/16").expect("2002::/16 is valid CIDR"),
                 // Other reserved ranges
-                IpNetwork::from_str("0.0.0.0/8").unwrap(),
-                IpNetwork::from_str("100.64.0.0/10").unwrap(), // Carrier-grade NAT
-                IpNetwork::from_str("192.0.0.0/24").unwrap(),  // IETF protocol assignments
-                IpNetwork::from_str("192.0.2.0/24").unwrap(),  // TEST-NET-1
-                IpNetwork::from_str("198.18.0.0/15").unwrap(), // Benchmarking
-                IpNetwork::from_str("198.51.100.0/24").unwrap(), // TEST-NET-2
-                IpNetwork::from_str("203.0.113.0/24").unwrap(), // TEST-NET-3
-                IpNetwork::from_str("224.0.0.0/4").unwrap(),   // Multicast
-                IpNetwork::from_str("240.0.0.0/4").unwrap(),   // Reserved
-                IpNetwork::from_str("255.255.255.255/32").unwrap(), // Broadcast
+                IpNetwork::from_str("0.0.0.0/8").expect("0.0.0.0/8 is valid CIDR"),
+                IpNetwork::from_str("100.64.0.0/10").expect("100.64.0.0/10 is valid CIDR"), // Carrier-grade NAT
+                IpNetwork::from_str("192.0.0.0/24").expect("192.0.0.0/24 is valid CIDR"), // IETF protocol assignments
+                IpNetwork::from_str("192.0.2.0/24").expect("192.0.2.0/24 is valid CIDR"), // TEST-NET-1
+                IpNetwork::from_str("198.18.0.0/15").expect("198.18.0.0/15 is valid CIDR"), // Benchmarking
+                IpNetwork::from_str("198.51.100.0/24").expect("198.51.100.0/24 is valid CIDR"), // TEST-NET-2
+                IpNetwork::from_str("203.0.113.0/24").expect("203.0.113.0/24 is valid CIDR"), // TEST-NET-3
+                IpNetwork::from_str("224.0.0.0/4").expect("224.0.0.0/4 is valid CIDR"), // Multicast
+                IpNetwork::from_str("240.0.0.0/4").expect("240.0.0.0/4 is valid CIDR"), // Reserved
+                IpNetwork::from_str("255.255.255.255/32")
+                    .expect("255.255.255.255/32 is valid CIDR"), // Broadcast
             ]
         };
 
@@ -199,8 +224,67 @@ impl SsrfValidator {
         Ok(())
     }
 
-    /// Validate a single IP address against blocked ranges
-    fn validate_ip(&self, ip: &IpAddr) -> Result<(), SsrfError> {
+    /// Validate a single IP address against blocked ranges.
+    ///
+    /// Public so that other guards in this crate check the same list rather
+    /// than keeping a second copy — the ClawHub upload guard grew one, and the
+    /// two had already drifted in both directions by the time anyone compared
+    /// them (issue #432).
+    pub fn validate_ip(&self, ip: &IpAddr) -> Result<(), SsrfError> {
+        // An IPv4 address wearing an IPv6 hat is still that address, and
+        // `::ffff:10.0.0.1` is not inside any of the v6 ranges above. The
+        // list used to carry `::ffff:127.0.0.0/104` — the mapped loopback
+        // prefix and nothing else — so mapped RFC1918 and mapped link-local
+        // walked through. Unwrapping covers every v4 rule at once, including
+        // any added later, rather than adding three more prefixes that then
+        // have to be kept in step.
+        //
+        // `to_ipv4` also unwraps the deprecated IPv4-compatible form
+        // (`::a.b.c.d`). That is deliberate: those are not real destinations,
+        // and the ones it would newly block all land in `0.0.0.0/8`.
+        if let IpAddr::V6(v6) = ip {
+            for embedded in Self::embedded_ipv4(*v6) {
+                self.check_against_ranges(&IpAddr::V4(embedded))?;
+            }
+        }
+        self.check_against_ranges(ip)
+    }
+
+    /// Every IPv4 address an IPv6 address carries inside it.
+    ///
+    /// `Ipv6Addr::to_ipv4` covers the mapped (`::ffff:a.b.c.d`) and deprecated
+    /// compatible (`::a.b.c.d`) forms and nothing else. Two other encodings put a
+    /// routable-looking v4 address inside a v6 one:
+    ///
+    /// * **NAT64**, RFC 6052 — `64:ff9b::a.b.c.d` in the last 32 bits. On a
+    ///   network with a NAT64 gateway this reaches the v4 address, so
+    ///   `[64:ff9b::169.254.169.254]` reaches cloud metadata.
+    /// * **6to4**, RFC 3056 — `2002:aabb:ccdd::/48`, where the v4 address is the
+    ///   second and third groups.
+    fn embedded_ipv4(v6: std::net::Ipv6Addr) -> Vec<std::net::Ipv4Addr> {
+        let mut found = Vec::new();
+        if let Some(v4) = v6.to_ipv4() {
+            found.push(v4);
+        }
+
+        let groups = v6.segments();
+        // 64:ff9b::/96 — the well-known prefix, address in the last 32 bits.
+        if groups[0] == 0x0064 && groups[1] == 0xff9b && groups[2..6] == [0, 0, 0, 0] {
+            found.push(std::net::Ipv4Addr::from(
+                ((groups[6] as u32) << 16) | groups[7] as u32,
+            ));
+        }
+        // 2002::/16 — 6to4, address in groups 1 and 2.
+        if groups[0] == 0x2002 {
+            found.push(std::net::Ipv4Addr::from(
+                ((groups[1] as u32) << 16) | groups[2] as u32,
+            ));
+        }
+        found
+    }
+
+    /// The literal range comparison, without the IPv4-mapped unwrapping.
+    fn check_against_ranges(&self, ip: &IpAddr) -> Result<(), SsrfError> {
         for blocked_range in &self.blocked_ranges {
             if blocked_range.contains(*ip) {
                 return Err(SsrfError::Blocked {
@@ -296,5 +380,132 @@ mod tests {
 
         // 8.8.8.8 should now be blocked
         assert!(validator.is_blocked("http://8.8.8.8/"));
+    }
+}
+
+/// The address list, checked directly rather than through a URL.
+///
+/// `validate_url` resolves, so a test written against it needs DNS and is at
+/// the mercy of whatever the resolver returns. These call `validate_ip` with
+/// the address the resolver would have produced, which is the part the ranges
+/// actually govern.
+#[cfg(test)]
+mod address_tests {
+    use super::*;
+    use std::net::IpAddr;
+    use std::str::FromStr;
+
+    fn blocked(addr: &str) -> bool {
+        SsrfValidator::new(false)
+            .validate_ip(&IpAddr::from_str(addr).expect("test address parses"))
+            .is_err()
+    }
+
+    /// The gap in issue #432: `fd00::/8` is what IPv6 private networking
+    /// actually uses, and the list carried only `::1` and `fe80::/10`, so
+    /// `web_fetch(url="https://[fd00::1]/")` connected.
+    #[test]
+    fn ipv6_unique_local_is_blocked() {
+        assert!(blocked("fd00::1"));
+        assert!(blocked("fdff:1234:5678::5"));
+        assert!(blocked("fc00::1"));
+    }
+
+    /// The mapped-address list was one prefix long — loopback — so an RFC1918
+    /// or link-local address in IPv6 clothing was not in any blocked range.
+    #[test]
+    fn ipv4_addresses_in_ipv6_clothing_are_blocked() {
+        for mapped in [
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "::ffff:172.16.0.1",
+            "::ffff:192.168.1.1",
+            "::ffff:169.254.169.254",
+            "::ffff:100.64.0.1",
+        ] {
+            assert!(blocked(mapped), "{mapped} should be blocked");
+        }
+    }
+
+    /// NAT64 and 6to4 carry a v4 address inside a v6 one, and `to_ipv4`
+    /// unwraps neither. On a network with a NAT64 gateway,
+    /// `https://[64:ff9b::169.254.169.254]/` reaches cloud metadata.
+    #[test]
+    fn ipv4_addresses_embedded_by_nat64_and_6to4_are_blocked() {
+        // 64:ff9b::169.254.169.254 and 64:ff9b::10.0.0.1
+        assert!(blocked("64:ff9b::a9fe:a9fe"));
+        assert!(blocked("64:ff9b::a00:1"));
+        // 6to4 wrapping 10.0.0.1 and 169.254.169.254
+        assert!(blocked("2002:a00:1::1"));
+        assert!(blocked("2002:a9fe:a9fe::1"));
+    }
+
+    /// 6to4 wrapping a public address is still 6to4, and the prefix itself is
+    /// blocked — a deprecated transition mechanism is not a destination this
+    /// tool needs.
+    #[test]
+    fn the_transition_prefixes_are_blocked_whatever_they_wrap() {
+        assert!(blocked("2002:5db8:d822::1"), "6to4 around a public address");
+        assert!(
+            blocked("64:ff9b::5db8:d822"),
+            "NAT64 around a public address"
+        );
+    }
+
+    /// The ranges that had an IPv4 entry and no IPv6 counterpart.
+    #[test]
+    fn the_ipv6_halves_of_the_existing_ipv4_rules_are_blocked() {
+        assert!(blocked("::"), "unspecified");
+        assert!(blocked("ff02::1"), "multicast");
+        assert!(blocked("2001:db8::1"), "documentation");
+        assert!(blocked("100::1"), "discard-only");
+    }
+
+    /// What was already covered, so a regression in the v4 half shows up here
+    /// rather than only in the URL-level tests.
+    #[test]
+    fn the_ranges_that_already_worked_still_do() {
+        for addr in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "192.168.0.5",
+            "169.254.169.254",
+            "::1",
+            "fe80::1",
+        ] {
+            assert!(blocked(addr), "{addr} should be blocked");
+        }
+    }
+
+    /// And routable addresses still go through — a rule that blocked
+    /// everything would satisfy every test above.
+    #[test]
+    fn public_addresses_are_not_blocked() {
+        for addr in ["93.184.216.34", "1.1.1.1", "2606:4700::1111", "2600::1"] {
+            assert!(!blocked(addr), "{addr} should be allowed");
+        }
+    }
+
+    /// `allow_private_ips` is an explicit opt-in for local development, and
+    /// the metadata endpoint stays blocked even then. Checked because the
+    /// mapped-address unwrapping runs in that mode too, and unwrapping
+    /// against a one-entry list must not start blocking ordinary addresses.
+    #[test]
+    fn the_permissive_mode_still_blocks_the_metadata_endpoint() {
+        let permissive = SsrfValidator::new(true);
+        let metadata = IpAddr::from_str("169.254.169.254").unwrap();
+        assert!(permissive.validate_ip(&metadata).is_err());
+        assert!(
+            permissive
+                .validate_ip(&IpAddr::from_str("::ffff:169.254.169.254").unwrap())
+                .is_err(),
+            "the mapped form of the metadata endpoint is the same endpoint"
+        );
+        assert!(
+            permissive
+                .validate_ip(&IpAddr::from_str("10.0.0.1").unwrap())
+                .is_ok(),
+            "private addresses are the point of this mode"
+        );
     }
 }
