@@ -689,10 +689,23 @@ impl Config {
         // boot-critical slice lives in `<settings_dir>/boot.toml` so a
         // broken extended config cannot take the LLM connection down with
         // it. A missing file is legacy single-file behavior (rung 2 — boot
-        // params already come from config.toml); a present-but-unfixable
-        // file is fatal, with deterministic recovery attempted first.
-        let boot = crate::boot_config::BootConfig::load(&config.settings_dir.join("boot.toml"))?;
-        boot.apply(&mut config);
+        // params already come from config.toml). If boot.toml itself is
+        // unreadable, still allow the old single-file config as a backup.
+        let boot_path = config.settings_dir.join("boot.toml");
+        match crate::boot_config::BootConfig::load(&boot_path) {
+            Ok(boot) => boot.apply(&mut config),
+            Err(e) => {
+                if config.model.is_some() {
+                    tracing::warn!(
+                        file = %boot_path.display(),
+                        error = %e,
+                        "Boot config failed to load; falling back to legacy single-file config"
+                    );
+                } else {
+                    return Err(e);
+                }
+            }
+        }
         Ok(config)
     }
 
@@ -928,15 +941,35 @@ mod tests {
         );
     }
 
-    /// A fatal boot file must not silently boot with defaults: the caller
-    /// gets a clear error instead.
+    /// If boot.toml is unreadable but config.toml still has the old
+    /// single-file model settings, keep booting from that backup.
     #[test]
-    fn unreadable_boot_file_is_fatal_through_config_load() {
+    fn unreadable_boot_file_falls_back_to_legacy_single_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+        std::fs::write(
+            dir.path().join("boot.toml"),
+            "[invalid\nkey = @value",
+        )
+        .unwrap();
+        let config = Config::load(Some(path)).unwrap();
+        let model = config.model.unwrap();
+        assert_eq!(model.provider, "openai");
+        assert_eq!(model.model.as_deref(), Some("gpt-4o"));
+    }
+
+    /// A broken boot file is still fatal when no legacy single-file boot
+    /// fields exist to recover from.
+    #[test]
+    fn unreadable_boot_file_is_fatal_without_legacy_backup() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_full_config(dir.path(), "");
         std::fs::write(
             dir.path().join("boot.toml"),
-            "garbage that parses as nothing",
+            "[invalid\nkey = @value",
         )
         .unwrap();
         let err = Config::load(Some(path)).unwrap_err();
