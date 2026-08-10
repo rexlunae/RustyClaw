@@ -351,11 +351,32 @@ fn is_local_addr(ip: std::net::IpAddr) -> bool {
 /// Only installed when the registry itself is not local, matching the relative
 /// rule in [`upload_target_is_acceptable`]: a developer running a registry on
 /// localhost is meant to be able to upload to localhost.
-struct RefuseLocalAddresses;
+///
+/// # What a proxy does to this
+///
+/// A `Resolve` implementation resolves whatever host the connector is about to
+/// dial. With no proxy that is the upload host, which is the point. With a
+/// proxy it is the *proxy*, and the upload host is resolved at the far end,
+/// out of reach.
+///
+/// So under a proxy this check neither helps nor should fire: `exempt_hosts`
+/// carries the proxy names the environment configures, and those skip the
+/// screen. Without it, publishing simply failed on any network whose proxy
+/// resolves to an RFC1918 address — with an error blaming the registry for
+/// the user's own proxy.
+///
+/// The honest consequence: when a proxy carries the upload, the DNS half of
+/// the guard does not apply and [`upload_target_is_acceptable`] is what is
+/// left. That is a limit of where the client sits, not something the client
+/// can check from here.
+struct RefuseLocalAddresses {
+    exempt_hosts: std::collections::BTreeSet<String>,
+}
 
 impl reqwest::dns::Resolve for RefuseLocalAddresses {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_string();
+        let exempt = self.exempt_hosts.clone();
         Box::pin(async move {
             // Port 0: reqwest substitutes the port from the URL, or the
             // scheme's default, over whatever comes back here.
@@ -363,7 +384,7 @@ impl reqwest::dns::Resolve for RefuseLocalAddresses {
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-            let addrs = screen_resolved(&host, resolved.collect())?;
+            let addrs = screen_resolved(&host, resolved.collect(), &exempt)?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -374,7 +395,18 @@ impl reqwest::dns::Resolve for RefuseLocalAddresses {
 fn screen_resolved(
     host: &str,
     addrs: Vec<std::net::SocketAddr>,
+    exempt: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<std::net::SocketAddr>, String> {
+    if addrs.is_empty() {
+        // An empty answer would otherwise sail past the check below and reach
+        // the connector as "no addresses", which is a confusing way to fail.
+        return Err(format!("refused: the host {host} resolved to nothing"));
+    }
+    // A configured proxy is the user's own machine-level choice, and being
+    // inside the network is the normal shape of one.
+    if exempt.contains(&host.to_ascii_lowercase()) {
+        return Ok(addrs);
+    }
     // Refusing the whole name rather than filtering the offending address
     // out: a name that answers with even one internal address is not one a
     // remote registry should be sending an upload to, and quietly connecting
@@ -386,14 +418,54 @@ fn screen_resolved(
             bad.ip()
         ));
     }
-    if addrs.is_empty() {
-        // An empty answer would otherwise sail past the check above and reach
-        // the connector as "no addresses", which is a confusing way to fail.
-        return Err(format!(
-            "refused: the upload host {host} resolved to nothing"
-        ));
-    }
     Ok(addrs)
+}
+
+/// Hostnames the environment names as an HTTP proxy.
+///
+/// reqwest's blocking client reads these by default, so they are the hosts it
+/// may dial in place of the upload host.
+fn configured_proxy_hosts() -> std::collections::BTreeSet<String> {
+    const VARS: &[&str] = &[
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+    proxy_hosts_in(VARS.iter().filter_map(|var| std::env::var(var).ok()))
+}
+
+/// The hostname inside each proxy setting, lowercased.
+///
+/// A free function over the values rather than over the environment, so the
+/// parsing can be tested without a test that sets process-wide env vars and
+/// races every other test in the binary.
+fn proxy_hosts_in(values: impl IntoIterator<Item = String>) -> std::collections::BTreeSet<String> {
+    values
+        .into_iter()
+        .filter_map(|value| {
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                return None;
+            }
+            // curl and friends accept a bare `host:port` as well as a full
+            // URL, and reqwest follows suit, so both have to parse here or
+            // the exemption misses exactly the setups it exists for.
+            //
+            // The fallback is chosen on *having a host*, not on the first
+            // parse failing: `Url::parse("squid.internal:8080")` succeeds,
+            // reading `squid.internal` as the scheme and `8080` as the path,
+            // so an `or_else` on the error never runs and the bare form —
+            // the one this branch exists for — silently contributed nothing.
+            url::Url::parse(&value)
+                .ok()
+                .filter(|u| u.host_str().is_some())
+                .or_else(|| url::Url::parse(&format!("http://{value}")).ok())
+                .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        })
+        .collect()
 }
 
 /// Build a profile from what whoami actually returns.
@@ -748,7 +820,10 @@ impl SkillManager {
         // Skipped for a local registry, for the same reason the URL check is
         // relative: both halves on one machine is a developer, not an attack.
         if !registry_is_local {
-            upload_builder = upload_builder.dns_resolver(std::sync::Arc::new(RefuseLocalAddresses));
+            upload_builder =
+                upload_builder.dns_resolver(std::sync::Arc::new(RefuseLocalAddresses {
+                    exempt_hosts: configured_proxy_hosts(),
+                }));
         }
         let upload_client = upload_builder
             .build()
@@ -1371,10 +1446,16 @@ mod upload_target_tests {
 /// other half: what that hostname resolves to.
 #[cfg(test)]
 mod resolver_tests {
-    use super::{RefuseLocalAddresses, screen_resolved};
+    use super::{RefuseLocalAddresses, proxy_hosts_in, screen_resolved};
     use reqwest::dns::Resolve;
+    use std::collections::BTreeSet;
     use std::net::SocketAddr;
     use std::str::FromStr;
+
+    /// The usual case: nothing exempt.
+    fn nothing() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
 
     fn addrs(list: &[&str]) -> Vec<SocketAddr> {
         list.iter()
@@ -1387,8 +1468,12 @@ mod resolver_tests {
     /// acceptable` passes it, because nothing about the *URL* is local.
     #[test]
     fn a_name_resolving_to_the_metadata_endpoint_is_refused() {
-        let err = screen_resolved("uploads.example.com", addrs(&["169.254.169.254:443"]))
-            .expect_err("a metadata-endpoint answer must be refused");
+        let err = screen_resolved(
+            "uploads.example.com",
+            addrs(&["169.254.169.254:443"]),
+            &nothing(),
+        )
+        .expect_err("a metadata-endpoint answer must be refused");
         assert!(err.contains("169.254.169.254"), "got: {err}");
         assert!(err.contains("uploads.example.com"), "got: {err}");
     }
@@ -1408,7 +1493,7 @@ mod resolver_tests {
             "[::ffff:10.0.0.1]:443",
         ] {
             assert!(
-                screen_resolved("uploads.example.com", addrs(&[inside])).is_err(),
+                screen_resolved("uploads.example.com", addrs(&[inside]), &nothing()).is_err(),
                 "{inside} should be refused"
             );
         }
@@ -1421,7 +1506,8 @@ mod resolver_tests {
         assert!(
             screen_resolved(
                 "uploads.example.com",
-                addrs(&["93.184.216.34:443", "10.0.0.1:443"])
+                addrs(&["93.184.216.34:443", "10.0.0.1:443"]),
+                &nothing()
             )
             .is_err(),
             "an answer containing an internal address must be refused entirely"
@@ -1432,9 +1518,67 @@ mod resolver_tests {
     #[test]
     fn a_public_answer_passes_through_unchanged() {
         let public = addrs(&["93.184.216.34:443", "[2606:4700::1111]:443"]);
-        let allowed =
-            screen_resolved("files.convex.cloud", public.clone()).expect("public answer is fine");
+        let allowed = screen_resolved("files.convex.cloud", public.clone(), &nothing())
+            .expect("public answer is fine");
         assert_eq!(allowed, public);
+    }
+
+    /// A corporate proxy resolving to an RFC1918 address is the normal shape
+    /// of a proxy, not an attack. Before the exemption, the screen fired on
+    /// the proxy — which is the host the connector actually dials — and
+    /// publishing failed on those networks with an error blaming the registry.
+    #[test]
+    fn a_configured_proxy_host_is_not_screened() {
+        let exempt = proxy_hosts_in(["http://proxy.corp.example:3128".to_string()]);
+        let through_proxy = addrs(&["10.20.30.40:3128"]);
+
+        assert!(
+            screen_resolved("uploads.example.com", through_proxy.clone(), &exempt).is_err(),
+            "an ordinary host resolving inward is still refused"
+        );
+        assert_eq!(
+            screen_resolved("proxy.corp.example", through_proxy.clone(), &exempt)
+                .expect("the configured proxy is exempt"),
+            through_proxy
+        );
+    }
+
+    /// The exemption is by exact hostname, so it cannot be widened by a
+    /// registry naming something that merely looks proxy-adjacent.
+    #[test]
+    fn the_exemption_does_not_extend_to_neighbouring_names() {
+        let exempt = proxy_hosts_in(["http://proxy.corp.example:3128".to_string()]);
+        for name in [
+            "evil.proxy.corp.example",
+            "proxy.corp.example.evil",
+            "corp.example",
+        ] {
+            assert!(
+                screen_resolved(name, addrs(&["10.20.30.40:443"]), &exempt).is_err(),
+                "{name} should not inherit the proxy exemption"
+            );
+        }
+    }
+
+    /// Proxy settings come in both shapes, and reqwest accepts both. Missing
+    /// the bare form would leave the exemption not working on the setups it
+    /// exists for.
+    #[test]
+    fn proxy_settings_parse_in_both_the_shapes_people_write_them() {
+        let hosts = proxy_hosts_in([
+            "http://Proxy.Corp.Example:3128".to_string(),
+            "squid.internal:8080".to_string(),
+            "  ".to_string(),
+            "socks5://socks.corp.example:1080".to_string(),
+        ]);
+        assert!(hosts.contains("proxy.corp.example"), "{hosts:?}");
+        assert!(hosts.contains("squid.internal"), "{hosts:?}");
+        assert!(hosts.contains("socks.corp.example"), "{hosts:?}");
+        assert_eq!(
+            hosts.len(),
+            3,
+            "the blank setting should contribute nothing"
+        );
     }
 
     /// End to end through the real resolver, using the one name that answers
@@ -1443,11 +1587,13 @@ mod resolver_tests {
     #[tokio::test]
     async fn the_resolver_refuses_a_name_that_answers_with_loopback() {
         let name = reqwest::dns::Name::from_str("localhost").expect("localhost is a valid name");
-        let err = RefuseLocalAddresses
-            .resolve(name)
-            .await
-            .err()
-            .expect("localhost must be refused");
+        let err = RefuseLocalAddresses {
+            exempt_hosts: nothing(),
+        }
+        .resolve(name)
+        .await
+        .err()
+        .expect("localhost must be refused");
         assert!(
             err.to_string().contains("inside this machine"),
             "got: {err}"
