@@ -369,7 +369,7 @@ pub fn validate_path(path: &Path, policy: &SandboxPolicy) -> Result<(), SandboxE
     Ok(())
 }
 
-mod platform;
+pub(crate) mod platform;
 pub use platform::*;
 
 #[cfg(test)]

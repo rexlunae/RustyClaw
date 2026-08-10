@@ -5,9 +5,65 @@ use super::*;
 
 // ── Bubblewrap (Linux) ──────────────────────────────────────────────────────
 
-/// Wrap a command in bubblewrap with the given policy.
+/// Wrap a shell command string in bubblewrap with the given policy.
 #[cfg(target_os = "linux")]
 pub fn wrap_with_bwrap(command: &str, policy: &SandboxPolicy) -> (String, Vec<String>) {
+    let mut args = bwrap_confinement_args(policy);
+    args.push("--".to_string());
+    args.push("sh".to_string());
+    args.push("-c".to_string());
+    args.push(command.to_string());
+    ("bwrap".to_string(), args)
+}
+
+/// Wrap an already-split argv in bubblewrap, with no shell in between.
+///
+/// [`wrap_with_bwrap`] ends in `sh -c <string>`, which is right for a command
+/// the user typed and wrong for a program plus arguments the caller already
+/// holds separately: rendering those back into one string means quoting them,
+/// and quoting is where injection lives. MCP servers are configured as a
+/// command and an argument list, so they take this path (issue #230).
+///
+/// `extra_binds` are read-only mounts beyond the workspace — a server that is
+/// meant to see a directory has to be told which one.
+#[cfg(target_os = "linux")]
+pub fn wrap_argv_with_bwrap(
+    program: &str,
+    argv: &[String],
+    policy: &SandboxPolicy,
+    extra_binds: &[PathBuf],
+) -> (String, Vec<String>) {
+    let mut args = bwrap_confinement_args(policy);
+    for path in extra_binds {
+        if path.exists() {
+            args.push("--bind".to_string());
+            args.push(path.display().to_string());
+            args.push(path.display().to_string());
+        }
+    }
+    args.push("--".to_string());
+    args.push(program.to_string());
+    args.extend(argv.iter().cloned());
+    ("bwrap".to_string(), args)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn wrap_argv_with_bwrap(
+    _program: &str,
+    _argv: &[String],
+    _policy: &SandboxPolicy,
+    _extra_binds: &[PathBuf],
+) -> (String, Vec<String>) {
+    panic!("Bubblewrap is only available on Linux");
+}
+
+/// The mounts and namespace flags a policy implies, without the command.
+///
+/// Shared by [`wrap_with_bwrap`] and [`wrap_argv_with_bwrap`] so the two entry
+/// points cannot end up confining differently — a second copy of this list is
+/// a second thing to forget a `--ro-bind` in.
+#[cfg(target_os = "linux")]
+fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
     let mut args = Vec::new();
 
     // Helper to check if a path should be denied for read access
@@ -86,13 +142,7 @@ pub fn wrap_with_bwrap(command: &str, policy: &SandboxPolicy) -> (String, Vec<St
     // Die with parent
     args.push("--die-with-parent".to_string());
 
-    // The actual command
-    args.push("--".to_string());
-    args.push("sh".to_string());
-    args.push("-c".to_string());
-    args.push(command.to_string());
-
-    ("bwrap".to_string(), args)
+    args
 }
 
 #[cfg(not(target_os = "linux"))]

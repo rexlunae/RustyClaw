@@ -43,12 +43,15 @@ mod client;
 mod config;
 #[cfg(feature = "mcp")]
 mod manager;
+
+/// How MCP server processes are confined before they are spawned.
+mod spawn;
 #[cfg(feature = "mcp")]
 mod tools;
 
 #[cfg(feature = "mcp")]
 pub use client::McpClient;
-pub use config::{McpConfig, McpServerConfig};
+pub use config::{McpConfig, McpSandbox, McpServerConfig};
 #[cfg(feature = "mcp")]
 pub use manager::{McpManager, McpServerStatus, McpStatus};
 #[cfg(feature = "mcp")]
