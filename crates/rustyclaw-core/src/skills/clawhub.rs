@@ -301,7 +301,13 @@ fn is_local_host(u: &url::Url) -> bool {
     match u.host() {
         Some(url::Host::Domain(name)) => {
             let name = name.to_ascii_lowercase();
-            name == "localhost" || name.ends_with(".localhost") || name.ends_with(".internal")
+            name == "localhost"
+                || name.ends_with(".localhost")
+                || name.ends_with(".internal")
+                // mDNS. `printer.local` is resolved by whatever is on the
+                // LAN, which is the definition of a name only this network
+                // can answer.
+                || name.ends_with(".local")
         }
         Some(url::Host::Ipv4(ip)) => is_local_addr(std::net::IpAddr::V4(ip)),
         Some(url::Host::Ipv6(ip)) => is_local_addr(std::net::IpAddr::V6(ip)),
@@ -311,6 +317,12 @@ fn is_local_host(u: &url::Url) -> bool {
 
 /// The address half of [`is_local_host`], split out so the same rule can be
 /// applied to an address DNS returned as to one written in the URL.
+///
+/// The ranges track the list in [`crate::security::SsrfValidator`], which is
+/// what the web tools use. They are two lists in one codebase and they have
+/// already drifted once — see issue #432 for merging them; the near-duplicate
+/// is called out here so the next person does not assume this one is the only
+/// copy.
 fn is_local_addr(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(ip) => {
@@ -318,11 +330,27 @@ fn is_local_addr(ip: std::net::IpAddr) -> bool {
             // metadata endpoint at 169.254.169.254 lives. `0.0.0.0/8` is
             // matched whole rather than via `is_unspecified`, which is only
             // the single address — on Linux `0.0.0.0` reaches loopback.
+            let [a, b, ..] = ip.octets();
+            // Carrier-grade NAT, 100.64.0.0/10. Routable on the far side of
+            // a provider's NAT but not from here, which makes it a fine
+            // place to hide something only the caller can reach.
+            let cgnat = a == 100 && (64..128).contains(&b);
+            // IETF protocol assignments (192.0.0.0/24) and the benchmarking
+            // range (198.18.0.0/15) — neither is a destination on the public
+            // internet, so a registry naming one is not naming storage.
+            let protocol_assignments = a == 192 && b == 0 && ip.octets()[2] == 0;
+            let benchmarking = a == 198 && (b == 18 || b == 19);
             ip.is_loopback()
                 || ip.is_private()
                 || ip.is_link_local()
                 || ip.is_broadcast()
-                || ip.octets()[0] == 0
+                || ip.is_multicast()
+                // 240.0.0.0/4, reserved.
+                || a >= 240
+                || a == 0
+                || cgnat
+                || protocol_assignments
+                || benchmarking
         }
         std::net::IpAddr::V6(ip) => {
             // `is_unique_local` and `is_unicast_link_local` are still
@@ -427,6 +455,51 @@ fn screen_resolved(
         ));
     }
     Ok(addrs)
+}
+
+/// Decide what a 2xx reply from `/api/cli/publish` actually says.
+///
+/// Two different things were being conflated here, and the previous version
+/// got it backwards.
+///
+/// **The reply is JSON of the right shape but omits `ok`.** Not a rejection:
+/// the status already said yes, and defaulting the missing flag to `false`
+/// would report a stored skill as unpublished and send the user into a
+/// re-publish that collides as a duplicate version.
+///
+/// **The reply is not JSON at all.** Different, and `resp.json()
+/// .unwrap_or_default()` turned it into the first case. A 200 carrying HTML —
+/// an SPA fallback, a captive portal, a proxy interstitial — became the
+/// default value and was announced as a successful publish. That is precisely
+/// the failure issue #411 exists to fix, reintroduced one layer down. The
+/// route names in this file have not been confirmed against the live service,
+/// so it is not hypothetical.
+///
+/// The error says the outcome is *unknown*, never that the publish failed.
+/// "Failed" sends the user to re-publish, which is the one action that is
+/// wrong if the skill was in fact stored.
+fn read_publish_reply(body: &str, name: &str, version: &str) -> Result<PublishAccepted, String> {
+    let done: PublishAccepted = serde_json::from_str(body).map_err(|_| {
+        let excerpt: String = body.chars().take(200).collect();
+        let excerpt = excerpt.trim();
+        format!(
+            "ClawHub accepted the publish request but its reply was not the \
+             documented JSON, so whether {name} v{version} was stored is \
+             unknown — check the registry before publishing again. The reply \
+             began: {}",
+            if excerpt.is_empty() {
+                "(empty)"
+            } else {
+                excerpt
+            }
+        )
+    })?;
+    // An explicit `false` is the one case where the outcome *is* known, so it
+    // says so plainly rather than repeating the go-and-look advice above.
+    if done.ok == Some(false) {
+        return Err(format!("ClawHub rejected the publish of {name} v{version}"));
+    }
+    Ok(done)
 }
 
 /// Hostnames the environment names as an HTTP proxy.
@@ -896,20 +969,10 @@ impl SkillManager {
             ));
         }
 
-        // The status already said yes. Treating an unexpected body as a
-        // failure reports a stored skill as unpublished and sends the user
-        // into a re-publish that collides as a duplicate — the same reasoning
-        // that made `ok` an `Option`, applied there and then not here.
-        //
-        // The old HTML-200 bug is not what this guards against either: that
-        // came from posting to a path the API did not serve. A real route, a
-        // checked status and an explicit rejection flag are what rule it out.
-        let done: PublishAccepted = resp.json().unwrap_or_default();
-        if done.ok == Some(false) {
-            return Err(SkillError::msg(
-                "ClawHub did not accept the publish".to_string(),
-            ));
-        }
+        let body = resp
+            .text()
+            .map_err(|e| SkillError::context("Failed to read the publish reply", e))?;
+        let done = read_publish_reply(&body, &manifest.name, version).map_err(SkillError::msg)?;
 
         // The id is only mentioned when the registry sent one. Appending it
         // unconditionally renders "(skill )" on a reply that omitted it —
@@ -1263,24 +1326,45 @@ mod route_tests {
         }
     }
 
-    /// Each route reaches its endpoint under the path the server matches on.
+    /// Every route, checked as a shape rather than against a copy of itself.
+    ///
+    /// The previous version of this test paired each constant with a literal
+    /// spelling of the same constant, which can only fail when someone edits
+    /// one and forgets the other — the change-detector `CONTRIBUTING.md` asks
+    /// contributors not to write, in the file whose review found the rule.
+    ///
+    /// These are properties `endpoint` depends on. A route written without
+    /// its leading slash concatenates into `https://clawhub.aiapi/v1/x`, a
+    /// trailing slash produces a double slash against a prefixed base, and
+    /// both are the kind of thing that gets typed once and never noticed.
     #[test]
-    fn every_route_builds_the_path_the_registry_serves() {
-        let base = "https://clawhub.ai";
-        for (route, expected) in [
-            (routes::WHOAMI, "https://clawhub.ai/api/v1/whoami"),
-            (routes::STARS, "https://clawhub.ai/api/v1/stars"),
-            (routes::TRENDING, "https://clawhub.ai/api/v1/trending"),
-            (routes::SKILLS, "https://clawhub.ai/api/v1/skills"),
-            (routes::DOWNLOAD, "https://clawhub.ai/api/v1/download"),
-            (
-                routes::CLI_UPLOAD_URL,
-                "https://clawhub.ai/api/cli/upload-url",
-            ),
-            (routes::CLI_PUBLISH, "https://clawhub.ai/api/cli/publish"),
-            (routes::LEGACY_SEARCH, "https://clawhub.ai/api/search"),
-        ] {
-            assert_eq!(endpoint(base, route), expected);
+    fn every_route_is_a_shape_endpoint_can_join() {
+        const ALL: &[(&str, &str)] = &[
+            ("WHOAMI", routes::WHOAMI),
+            ("SEARCH", routes::SEARCH),
+            ("LEGACY_SEARCH", routes::LEGACY_SEARCH),
+            ("DOWNLOAD", routes::DOWNLOAD),
+            ("TRENDING", routes::TRENDING),
+            ("SKILLS", routes::SKILLS),
+            ("STARS", routes::STARS),
+            ("CLI_UPLOAD_URL", routes::CLI_UPLOAD_URL),
+            ("CLI_PUBLISH", routes::CLI_PUBLISH),
+            ("CLI_DEVICE_CODE", routes::CLI_DEVICE_CODE),
+            ("CLI_DEVICE_TOKEN", routes::CLI_DEVICE_TOKEN),
+        ];
+        for (name, route) in ALL {
+            assert!(route.starts_with('/'), "{name} has no leading slash");
+            assert!(!route.ends_with('/'), "{name} has a trailing slash");
+            assert!(!route.contains("//"), "{name} contains an empty segment");
+            let built = endpoint("https://example.test/clawhub/", route);
+            assert!(
+                built.starts_with("https://example.test/clawhub/"),
+                "{name} escaped the configured base: {built}"
+            );
+            assert!(
+                !built[8..].contains("//"),
+                "{name} doubled a slash against a prefixed base: {built}"
+            );
         }
     }
 
@@ -1408,6 +1492,12 @@ mod upload_target_tests {
             "https://192.168.0.5/upload",
             "https://169.254.169.254/latest/meta-data",
             "https://build.internal/upload",
+            // Added after review pointed out the list was narrower than the
+            // one the web tools use in the same codebase.
+            "https://100.64.0.1/upload",
+            "https://192.0.0.1/upload",
+            "https://198.18.0.1/upload",
+            "https://printer.local/upload",
         ] {
             let err =
                 check("https://clawhub.ai", inside).expect_err("a local target must be refused");
@@ -1447,6 +1537,83 @@ mod upload_target_tests {
     fn a_local_registry_may_name_a_local_target() {
         assert!(check("http://localhost:3000", "http://localhost:3000/upload").is_ok());
         assert!(check("http://127.0.0.1:3000", "http://127.0.0.1:9000/x").is_ok());
+    }
+}
+
+/// A 2xx with the wrong body is how #411's original bug reported success on a
+/// publish that stored nothing, so these cover what counts as a confirmation.
+#[cfg(test)]
+mod publish_reply_tests {
+    use super::read_publish_reply;
+
+    /// The documented shape.
+    #[test]
+    fn the_documented_reply_is_accepted_with_its_id() {
+        let done = read_publish_reply(r#"{"ok":true,"skillId":"sk_1"}"#, "demo", "1.0.0")
+            .expect("a documented reply is a publish");
+        assert_eq!(done.skill_id.as_deref(), Some("sk_1"));
+    }
+
+    /// JSON of the right shape with the flag missing is not a rejection: the
+    /// status already said yes, and calling it a failure sends the user into a
+    /// re-publish that collides as a duplicate version.
+    #[test]
+    fn a_reply_that_omits_the_flag_is_still_a_publish() {
+        assert!(read_publish_reply(r#"{"skillId":"sk_1"}"#, "demo", "1.0.0").is_ok());
+        assert!(read_publish_reply("{}", "demo", "1.0.0").is_ok());
+    }
+
+    /// The regression this test exists for: `resp.json().unwrap_or_default()`
+    /// turned an HTML 200 into the default value and announced a successful
+    /// publish — the exact failure #411 is about, one layer down.
+    #[test]
+    fn an_html_reply_is_not_a_publish() {
+        let err = read_publish_reply(
+            "<!DOCTYPE html><html><body>ClawHub</body></html>",
+            "demo",
+            "1.0.0",
+        )
+        .expect_err("HTML is not a publish confirmation");
+        assert!(err.contains("not the documented JSON"), "got: {err}");
+        assert!(
+            err.contains("<!DOCTYPE html>"),
+            "the reply should be quoted: {err}"
+        );
+    }
+
+    /// And it must not claim the publish failed, because nobody knows. Telling
+    /// the user it failed sends them to re-publish, which is the one action
+    /// that is wrong if the skill was in fact stored.
+    #[test]
+    fn an_unreadable_reply_reports_the_outcome_as_unknown() {
+        let err =
+            read_publish_reply("not json", "demo", "1.0.0").expect_err("must not be a publish");
+        assert!(err.contains("unknown"), "got: {err}");
+        assert!(
+            err.contains("demo v1.0.0"),
+            "the user needs to know what to check for: {err}"
+        );
+        assert!(
+            !err.to_lowercase().contains("failed"),
+            "must not claim failure: {err}"
+        );
+    }
+
+    /// An empty body says "(empty)" rather than trailing off after a colon.
+    #[test]
+    fn an_empty_reply_says_it_was_empty() {
+        let err = read_publish_reply("   ", "demo", "1.0.0").expect_err("must not be a publish");
+        assert!(err.contains("(empty)"), "got: {err}");
+    }
+
+    /// An explicit rejection is the one case where the outcome is known, so it
+    /// drops the go-and-check advice.
+    #[test]
+    fn an_explicit_rejection_is_stated_as_one() {
+        let err = read_publish_reply(r#"{"ok":false}"#, "demo", "1.0.0")
+            .expect_err("an explicit false is a rejection");
+        assert!(err.contains("rejected"), "got: {err}");
+        assert!(!err.contains("unknown"), "the outcome is known here: {err}");
     }
 }
 
