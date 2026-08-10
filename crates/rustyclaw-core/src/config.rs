@@ -133,10 +133,11 @@ impl SshGatewayConfig {
 /// How the gateway decides whether an incoming messenger message is worth a
 /// full processing cycle.
 ///
-/// This is the *rule* tier of the message relevance filter. The LLM
-/// classifier tier (the `"smart"` mode from the original proposal) needs a
-/// one-shot completion helper on `ModelContext` and is tracked as a follow-up
-/// in RustyClaw#165; it will extend this enum.
+/// The rule tier (`Mentions`) is pure pattern matching and costs nothing.
+/// The classifier tier (`Smart`) runs the same rules first and, only when
+/// they do not already prove the message relevant, asks a small model call
+/// whether the message is directed at the agent (see
+/// `messenger_handler::relevance::classify_relevance`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RelevanceFilter {
@@ -146,6 +147,9 @@ pub enum RelevanceFilter {
     /// In group chats, process only messages that mention the agent by name
     /// or reply to a message the agent sent. Direct messages always count.
     Mentions,
+    /// Rules first (as `Mentions`); messages the rules cannot prove relevant
+    /// are judged by a classifier model call. Direct messages always count.
+    Smart,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,9 +201,17 @@ pub struct Config {
     ///
     /// `"always"` (the default) processes everything; `"mentions"` skips
     /// group-chat messages that neither mention the agent by name nor reply
-    /// to a message the agent sent. Direct messages always pass.
+    /// to a message the agent sent; `"smart"` adds a classifier model call
+    /// for messages the rules cannot prove relevant. Direct messages
+    /// always pass.
     #[serde(default)]
     pub relevance_filter: RelevanceFilter,
+    /// Model used by the `"smart"` relevance classifier. Defaults to the
+    /// `[model]` section's model when unset; must be a model the configured
+    /// provider serves. A cheap/fast model keeps the per-message cost of the
+    /// classifier near zero.
+    #[serde(default)]
+    pub relevance_model: Option<String>,
     /// Number of blank lines inserted between messages in the TUI.
     /// Set to 0 for compact output, 1 (default) for comfortable spacing.
     #[serde(default = "Config::default_message_spacing")]
@@ -478,6 +490,7 @@ impl Default for Config {
             agent_access: false,
             agent_name: Self::default_agent_name(),
             relevance_filter: RelevanceFilter::Always,
+            relevance_model: None,
             message_spacing: Self::default_message_spacing(),
             tab_width: Self::default_tab_width(),
             sandbox: SandboxConfig::default(),
@@ -935,6 +948,10 @@ mod tests {
             serde_json::from_str::<RelevanceFilter>("\"mentions\"").unwrap(),
             RelevanceFilter::Mentions
         );
+        assert_eq!(
+            serde_json::from_str::<RelevanceFilter>("\"smart\"").unwrap(),
+            RelevanceFilter::Smart
+        );
 
         // A saved config round-trips the choice.
         let dir = tempfile::tempdir().unwrap();
@@ -946,6 +963,26 @@ mod tests {
         config.save(Some(path.clone())).expect("save must succeed");
         let loaded = Config::load(Some(path)).expect("load what was saved");
         assert_eq!(loaded.relevance_filter, RelevanceFilter::Mentions);
+    }
+
+    /// The smart tier stores a classifier model override and round-trips it;
+    /// the default stays unset (use the `[model]` section's model).
+    #[test]
+    fn relevance_model_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            relevance_filter: RelevanceFilter::Smart,
+            relevance_model: Some("gpt-4o-mini".to_string()),
+            ..Config::default()
+        };
+        config.save(Some(path.clone())).expect("save must succeed");
+        let loaded = Config::load(Some(path)).expect("load what was saved");
+        assert_eq!(loaded.relevance_filter, RelevanceFilter::Smart);
+        assert_eq!(loaded.relevance_model.as_deref(), Some("gpt-4o-mini"));
+
+        assert_eq!(Config::default().relevance_model, None);
+        assert_eq!(Config::default().relevance_filter, RelevanceFilter::Always);
     }
 
     // ── Boot config integration (RustyClaw#175) ──────────────────────

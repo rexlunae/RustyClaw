@@ -1,4 +1,5 @@
-//! Message relevance pre-filter — the *rule* tier of RustyClaw#165.
+//! Message relevance pre-filter — the rule tier of RustyClaw#165, plus the
+//! LLM classifier tier (`RelevanceFilter::Smart`).
 //!
 //! Before a full processing cycle is spent on an incoming messenger
 //! message, the gateway can decide whether the message is relevant at all.
@@ -10,14 +11,16 @@
 //! * mentions the agent by name (`@Name` or the name as a whole word), or
 //! * replies to a message the agent sent in that channel.
 //!
-//! The LLM classifier tier ("smart") is a separate follow-up that needs a
-//! one-shot completion helper on `ModelContext`; it will live next to this
-//! module and reuse the same decision point.
+//! [`RelevanceFilter::Smart`] runs the same rules first, then asks a
+//! classifier model call for messages the rules cannot prove relevant (see
+//! [`classify_relevance`]). The classifier runs inside the processing task,
+//! never the poll loop, so a model call cannot stall message polling.
 
 use std::collections::{HashMap, VecDeque};
 
 use rustyclaw_core::config::{Config, MessengerConfig, RelevanceFilter};
 use rustyclaw_core::messengers::Message;
+use tracing::warn;
 
 /// Number of sent message IDs remembered per channel. Replies arrive shortly
 /// after the message they target; a few hundred entries per channel is far
@@ -218,7 +221,7 @@ pub fn is_message_relevant(
 ) -> bool {
     match config.relevance_filter {
         RelevanceFilter::Always => true,
-        RelevanceFilter::Mentions => {
+        RelevanceFilter::Smart | RelevanceFilter::Mentions => {
             // Direct messages always count — the user addressed the agent
             // personally. This mirrors resolve_routing's DM test so the two
             // never disagree about what a DM is.
@@ -234,7 +237,98 @@ pub fn is_message_relevant(
                     return true;
                 }
             }
+            // Rule-tier miss. Under `Mentions` the caller drops the message;
+            // under `Smart` the caller defers to the classifier (it must
+            // distinguish the two, so both report the miss as `false`).
             false
+        }
+    }
+}
+
+/// System prompt for the relevance classifier: one word out, nothing else.
+const CLASSIFIER_SYSTEM: &str = "You decide whether a group-chat message is \
+directed at the named agent or asks for the agent's help. Reply with exactly \
+one word: YES or NO.";
+
+/// Prompt the classifier sees for one incoming message. Pure so it is unit
+/// testable without a model call. `tokens` are the names/handles a human
+/// might use to address the agent; they let the classifier recognize an
+/// address the rule tier's substring test might have missed.
+fn build_classifier_prompt(
+    agent_name: &str,
+    tokens: &[String],
+    content: &str,
+    channel: Option<&str>,
+) -> String {
+    let channel_hint = match channel {
+        Some(c) => format!(" in the channel \"{c}\""),
+        None => String::new(),
+    };
+    let alt: Vec<&str> = tokens
+        .iter()
+        .map(String::as_str)
+        .filter(|t| *t != agent_name)
+        .collect();
+    let alt_hint = if alt.is_empty() {
+        String::new()
+    } else {
+        format!(" People may also address you as: {}.", alt.join(", "))
+    };
+    format!(
+        "You are {agent_name}, an AI agent in a group chat{channel_hint}.{alt_hint}\n\
+A participant wrote:\n\n{content}\n\n\
+Is this message addressed to you or asking for your help? Reply YES or NO."
+    )
+}
+
+/// Turn the classifier's reply into a relevance verdict.
+///
+/// Fail-open: only an explicit "no" drops the message. Anything else — a
+/// clear "yes", an empty reply, a refusal, a garbled token — processes it,
+/// because dropping a message that was actually for the agent is worse than
+/// spending a turn on noise.
+fn parse_classifier_verdict(response: &str) -> bool {
+    let first = response
+        .trim()
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .next()
+        .unwrap_or("");
+    !first.eq_ignore_ascii_case("no")
+}
+
+/// LLM tier of the relevance filter (`RelevanceFilter::Smart`).
+///
+/// Called only when the rule tier has already failed to prove the message
+/// relevant, and always from inside a processing task (never the poll loop,
+/// which must stay responsive). Runs a one-shot completion and asks whether
+/// the message is directed at the agent; any error in the model call fails
+/// open so a provider hiccup cannot silently drop messages.
+pub async fn classify_relevance(
+    http: &reqwest::Client,
+    model_ctx: &rustyclaw_core::gateway::ModelContext,
+    config: &Config,
+    msg: &Message,
+    tokens: &[String],
+    agent_name: &str,
+) -> bool {
+    let prompt = build_classifier_prompt(agent_name, tokens, &msg.content, msg.channel.as_deref());
+    match model_ctx
+        .complete(
+            http,
+            config.relevance_model.as_deref(),
+            CLASSIFIER_SYSTEM,
+            &prompt,
+        )
+        .await
+    {
+        Ok(reply) => parse_classifier_verdict(&reply),
+        Err(e) => {
+            warn!(
+                error = %e,
+                sender = %msg.sender,
+                "Relevance classifier failed; processing message anyway"
+            );
+            true
         }
     }
 }
@@ -513,5 +607,65 @@ mod tests {
             tokens.iter().any(|t| t == "Rusty Claw" || t == "RustyClaw"),
             "display name must be a token: {tokens:?}"
         );
+    }
+
+    // ── Classifier tier (#165) ────────────────────────────────────────────────
+
+    #[test]
+    fn classifier_prompt_names_the_agent_and_quotes_the_message() {
+        let tokens = vec!["Ada".to_string(), "adaline".to_string()];
+        let p = build_classifier_prompt("Ada", &tokens, "is anyone here?", Some("general"));
+        assert!(p.contains("You are Ada"), "prompt: {p}");
+        assert!(p.contains("\"general\""), "channel hint missing: {p}");
+        assert!(p.contains("is anyone here?"), "content missing: {p}");
+        assert!(p.contains("YES or NO"), "verdict instruction missing: {p}");
+        assert!(p.contains("adaline"), "alternate names must be listed: {p}");
+
+        let p = build_classifier_prompt("Ada", &[], "hi", None);
+        assert!(!p.contains("channel"), "no channel hint expected: {p}");
+        assert!(!p.contains("address you as"), "no alt names expected: {p}");
+    }
+
+    /// Only an explicit "no" drops; every other reply processes the message.
+    #[test]
+    fn classifier_verdict_is_fail_open() {
+        assert!(parse_classifier_verdict("YES"));
+        assert!(parse_classifier_verdict("yes"));
+        assert!(parse_classifier_verdict("Yes, it is."));
+        assert!(parse_classifier_verdict(""));
+        assert!(parse_classifier_verdict("I cannot answer that"));
+        assert!(parse_classifier_verdict("maybe"));
+
+        assert!(!parse_classifier_verdict("NO"));
+        assert!(!parse_classifier_verdict("no."));
+        assert!(!parse_classifier_verdict("No, it isn't."));
+        assert!(!parse_classifier_verdict("NO\n\nBecause reasons"));
+    }
+
+    /// Under Smart the rule tier reports a miss exactly like Mentions does
+    /// (so the caller can distinguish "drop" from "classify"), and a DM or
+    /// an @-mention still passes without a model call.
+    #[test]
+    fn smart_rule_tier_reports_misses_and_passes_direct_mentions() {
+        let config = Config {
+            relevance_filter: RelevanceFilter::Smart,
+            ..Config::default()
+        };
+        let sent = SentMessageTracker::default();
+        let tokens = vec!["Ada".to_string()];
+
+        // DM: always relevant.
+        let dm = msg(None, "hello there");
+        assert!(is_message_relevant(&config, "acc", &dm, &tokens, &sent));
+
+        // Group message with an @-mention: relevant, no model call needed.
+        let mentioned = msg(Some("general"), "hey @Ada check this");
+        assert!(is_message_relevant(
+            &config, "acc", &mentioned, &tokens, &sent
+        ));
+
+        // Group message with no mention: a miss (caller decides classify).
+        let noise = msg(Some("general"), "did anyone see the game last night");
+        assert!(!is_message_relevant(&config, "acc", &noise, &tokens, &sent));
     }
 }

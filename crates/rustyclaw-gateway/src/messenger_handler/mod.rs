@@ -5,7 +5,7 @@
 //! them through the model for processing with full tool loop support.
 
 use anyhow::Result;
-use rustyclaw_core::config::Config;
+use rustyclaw_core::config::{Config, RelevanceFilter};
 use rustyclaw_core::ignore::Ignore;
 use rustyclaw_core::messengers::{Message, Messenger, MessengerManager, SendOptions};
 use rustyclaw_core::tools;
@@ -32,7 +32,9 @@ mod relevance;
 use builders::create_messenger;
 use media::process_attachments;
 use prompt::build_messenger_system_prompt;
-use relevance::{SentMessageTracker, channel_key, is_message_relevant, mention_tokens};
+use relevance::{
+    SentMessageTracker, channel_key, classify_relevance, is_message_relevant, mention_tokens,
+};
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
@@ -555,23 +557,38 @@ pub async fn run_messenger_loop(
                     // `relevance_filter = "mentions"`, group-chat messages
                     // that neither mention the agent nor reply to one of its
                     // messages are dropped before any token spend, history
-                    // lookup, or typing indicator.
+                    // lookup, or typing indicator. Under `"smart"` the rule
+                    // tier alone never drops: a rule-tier miss defers to the
+                    // LLM classifier, which runs inside the processing task
+                    // (`classify_relevance`) so the poll loop is never
+                    // blocked on a model call.
                     //
                     // An account absent from `tokens_by_account` means we
                     // cannot determine its mention names: do not drop its
                     // group messages on an empty token list, pass them
                     // through instead (legacy behavior for unknown accounts).
+                    let mut classify = false;
                     let relevant = match tokens_by_account.get(&account_name) {
-                        Some(tokens) => is_message_relevant(
-                            &config,
-                            &account_name,
-                            &msg,
-                            tokens,
-                            // A poisoned lock (a panicked task) must not
-                            // take the whole messenger poll down with it:
-                            // recover the guard and continue.
-                            &sent_tracker.lock().unwrap_or_else(|e| e.into_inner()),
-                        ),
+                        Some(tokens) => {
+                            let r = is_message_relevant(
+                                &config,
+                                &account_name,
+                                &msg,
+                                tokens,
+                                // A poisoned lock (a panicked task) must not
+                                // take the whole messenger poll down with it:
+                                // recover the guard and continue.
+                                &sent_tracker.lock().unwrap_or_else(|e| e.into_inner()),
+                            );
+                            if !r && config.relevance_filter == RelevanceFilter::Smart {
+                                // Rule tier could not prove relevance: let
+                                // the classifier decide inside the task.
+                                classify = true;
+                                true
+                            } else {
+                                r
+                            }
+                        }
                         None => true,
                     };
                     if !relevant {
@@ -628,6 +645,7 @@ pub async fn run_messenger_loop(
                                 &account_name,
                                 &messenger_type,
                                 sent_tracker,
+                                classify,
                                 msg,
                             )
                             .await;
@@ -669,6 +687,7 @@ pub async fn run_messenger_loop(
                             &account_name,
                             &messenger_type,
                             Arc::clone(&sent_tracker),
+                            classify,
                             msg,
                         )
                         .await;
@@ -742,6 +761,7 @@ async fn process_incoming_message(
     account_name: &str,
     messenger_type: &str,
     sent_tracker: Arc<std::sync::Mutex<SentMessageTracker>>,
+    classify: bool,
     msg: Message,
 ) -> Result<()> {
     debug!(
@@ -799,6 +819,31 @@ async fn process_incoming_message(
         None => rustyclaw_core::messengers::setup::MessengerProfile::default()
             .resolve(&config.agent_name, None),
     };
+
+    // Smart filter, LLM tier (#165): the rule tier in the poll loop could
+    // not prove this message relevant, so the classifier gets one cheap
+    // model call before any token spend on a full processing cycle. Runs
+    // here — inside the processing task — rather than in the poll loop so
+    // a slow provider cannot stall message polling. Fail-open: a classifier
+    // error or an unrecognized account processes the message.
+    if classify {
+        let relevant = match account {
+            Some(acc) => {
+                let tokens = mention_tokens(config, acc);
+                classify_relevance(http, model_ctx, config, &msg, &tokens, &config.agent_name).await
+            }
+            None => true,
+        };
+        if !relevant {
+            debug!(
+                account_name,
+                sender = %msg.sender,
+                channel = ?msg.channel,
+                "Skipping group-chat message (smart filter: classifier judged it irrelevant)"
+            );
+            return Ok(());
+        }
+    }
     let identity = prompt::MessengerIdentity {
         profile: &profile,
         thread: routing.thread.as_ref().map(|(id, l)| (*id, l.as_str())),
