@@ -67,6 +67,28 @@ fn confinement_unavailable(caps: &SandboxCapabilities) -> Option<String> {
     None
 }
 
+/// Whether a confined server's working directory sits inside the vault.
+///
+/// Refused for every mode, `auto` included. The degrade-and-warn path is for
+/// platforms that cannot confine — a capability gap the operator cannot close.
+/// This is a misconfiguration, and running it unconfined would hand the least
+/// trustworthy configuration imaginable — a server rooted inside the vault —
+/// the gateway's whole filesystem and its inherited environment, API keys and
+/// all, behind a WARN. The safe direction for a misconfiguration is to stop.
+///
+/// A workspace that merely *contains* the vault is not a conflict: that one is
+/// masked, so the server keeps its directory and the vault stays unreadable.
+fn vault_conflict(workspace: &Path, credentials: &Path) -> Option<String> {
+    workspace.starts_with(credentials).then(|| {
+        format!(
+            "the working directory {} is inside the credentials directory. Point `cwd` \
+             somewhere else; a confined server cannot be given the vault, and running it \
+             unconfined would be worse.",
+            workspace.display()
+        )
+    })
+}
+
 /// A per-user scratch directory for servers that declare no `cwd`.
 ///
 /// Under the settings directory, deliberately **not** the system temp dir.
@@ -172,20 +194,11 @@ pub(crate) fn plan_spawn(
     // server would start somewhere other than where it was told to. The argv
     // builder falls back to the sandbox home rather than dying, but silently
     // relocating a server is not an improvement on saying so.
-    if policy
-        .deny_read
-        .iter()
-        .any(|deny| policy.workspace.starts_with(deny))
+    if let Some(reason) = settings_dir
+        .as_ref()
+        .and_then(|settings| vault_conflict(&policy.workspace, &settings.join("credentials")))
     {
-        let reason = format!(
-            "the working directory {} is inside the credentials directory, which a \
-             confined server cannot be given",
-            policy.workspace.display()
-        );
-        return match config.sandbox {
-            McpSandbox::Required => Err(reason),
-            _ => Ok(unconfined(Some(reason))),
-        };
+        return Err(reason);
     }
 
     let extra: Vec<PathBuf> = config.allow_paths.iter().map(PathBuf::from).collect();
@@ -413,6 +426,34 @@ mod tests {
             .map(|(_, v)| v.clone())
             .expect("HOME is set");
         assert_eq!(home, "/tmp/home", "HOME must be on the writable tmpfs");
+    }
+
+    /// A `cwd` inside the vault is refused for **every** mode, `auto` too.
+    ///
+    /// The degrade-and-warn path exists for platforms that cannot confine — a
+    /// gap the operator cannot close. Routing a misconfiguration down it meant
+    /// the least trustworthy configuration imaginable, a server rooted inside
+    /// the credentials directory, was the one that ran with the gateway's whole
+    /// filesystem and inherited environment, API keys included, behind a WARN.
+    #[test]
+    fn a_cwd_inside_the_vault_is_a_conflict_whatever_the_mode() {
+        let vault = Path::new("/home/user/.rustyclaw/credentials");
+
+        let conflict = vault_conflict(Path::new("/home/user/.rustyclaw/credentials/x"), vault)
+            .expect("a cwd inside the vault must conflict");
+        assert!(
+            conflict.contains("credentials directory"),
+            "got: {conflict}"
+        );
+        assert!(
+            vault_conflict(vault, vault).is_some(),
+            "the vault itself is inside the vault"
+        );
+
+        // And the ordinary cases stay usable — including a workspace that
+        // merely contains the vault, which is masked rather than refused.
+        assert!(vault_conflict(Path::new("/home/user"), vault).is_none());
+        assert!(vault_conflict(Path::new("/srv/app"), vault).is_none());
     }
 
     /// A server told about a directory gets that directory, and only it.

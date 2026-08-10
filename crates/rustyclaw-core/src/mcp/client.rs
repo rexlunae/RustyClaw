@@ -63,11 +63,13 @@ impl McpClient {
         let caps = tokio::task::spawn_blocking(crate::sandbox::SandboxCapabilities::cached)
             .await
             .map_err(|e| anyhow::anyhow!("Sandbox capability probe failed: {e}"))?;
+        // The reason says why on its own. Naming `sandbox = "required"` here
+        // was wrong for every refusal that is not about the platform's
+        // capabilities — a misconfigured `cwd` is refused whatever the mode,
+        // and telling the operator they had set `required` when they had not
+        // sends them to fix the wrong line.
         let plan = super::spawn::plan_spawn(&self.config, caps).map_err(|reason| {
-            anyhow::anyhow!(
-                "MCP server '{}' is configured with sandbox = \"required\" but {reason}",
-                self.name
-            )
+            anyhow::anyhow!("MCP server '{}' cannot start: {reason}", self.name)
         })?;
 
         match &plan.unconfined_reason {
