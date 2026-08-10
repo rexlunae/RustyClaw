@@ -192,6 +192,15 @@ pub(crate) fn userns_allowed(clone_sysctl: Option<String>, max_namespaces: Optio
 
 // ── Sandbox Policy ──────────────────────────────────────────────────────────
 
+/// Where `HOME` points inside the sandbox.
+///
+/// On the sandbox's own tmpfs rather than the real home directory, which is
+/// not mounted in the namespace: `npx` writes to `$HOME/.npm` and `uvx` to
+/// `$HOME/.cache/uv`, so both failed on a path that did not exist. The argv
+/// builder emits a `--dir` for it, so it is a real directory inside the
+/// sandbox and not just a string in the environment.
+pub const SANDBOX_HOME: &str = "/tmp/home";
+
 /// Paths that should be denied to the agent.
 #[derive(Debug, Clone)]
 pub struct SandboxPolicy {

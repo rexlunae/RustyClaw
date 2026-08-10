@@ -23,10 +23,6 @@ use std::path::{Path, PathBuf};
 /// hands it over without the server having to touch the disk at all.
 const ENV_PASSTHROUGH: &[&str] = &["PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR"];
 
-/// Where `HOME` points inside the sandbox: on the writable tmpfs, so tools
-/// that insist on a home-directory cache have somewhere to put one.
-const SANDBOX_HOME: &str = "/tmp/home";
-
 /// What to spawn, and how.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpawnPlan {
@@ -188,7 +184,7 @@ pub(crate) fn plan_spawn(
     // caches are disposable, and a confined server has no business reading
     // the real home anyway.
     env.retain(|(k, _)| k != "HOME");
-    env.push(("HOME".to_string(), SANDBOX_HOME.to_string()));
+    env.push(("HOME".to_string(), crate::sandbox::SANDBOX_HOME.to_string()));
     env.retain(|(k, _)| k != "TMPDIR");
     env.push(("TMPDIR".to_string(), "/tmp".to_string()));
     // The server's own configuration wins over the inherited value, so a

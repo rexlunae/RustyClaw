@@ -90,12 +90,6 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
     };
 
     // Helper to check if a path should be denied for write access
-    let is_write_denied = |path: &Path| -> bool {
-        policy
-            .deny_write
-            .iter()
-            .any(|deny| path.starts_with(deny) || deny.starts_with(path))
-    };
 
     // Helper to check if a path should be denied for execute access
     let is_exec_denied = |path: &Path| -> bool {
@@ -138,20 +132,27 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
     args.push("--tmpfs".to_string());
     args.push("/tmp".to_string());
 
-    // Workspace: read-only if in deny_write, writable otherwise.
+    // A directory inside the sandbox for `HOME` to point at. The tmpfs above
+    // is empty, so without this the path a confined server is handed does not
+    // exist and anything writing `$HOME/<file>` directly — rather than
+    // creating its cache recursively — fails on ENOENT.
+    args.push("--dir".to_string());
+    args.push(SANDBOX_HOME.to_string());
+
+    // Workspace.
     //
-    // "Denied" here means the workspace sits *inside* something denied — then
-    // there is nothing to bind. A denied path inside the workspace is the
-    // opposite case and is handled by masking below: refusing to bind the
-    // whole workspace because it contains the credentials directory left
-    // `--chdir` pointing at a path absent from the namespace, which bwrap
-    // treats as fatal, so a server with `cwd = "/home/user"` simply died.
-    let workspace_inside_denied = policy
-        .deny_read
-        .iter()
-        .any(|deny| policy.workspace.starts_with(deny));
-    if !workspace_inside_denied {
-        if is_write_denied(&policy.workspace) {
+    // Both tests below ask "is the workspace *inside* something denied", which
+    // is the only case where there is nothing to bind. A denied path *under*
+    // the workspace is the opposite situation and is handled by masking.
+    //
+    // The read test alone is not enough: `deny_write` matching is bidirectional
+    // too, so leaving it as-is mounted the whole workspace `--ro-bind` whenever
+    // it merely contained the credentials directory — a server with
+    // `cwd = "/home/user"` could no longer write anywhere in its own home. The
+    // read fix without the write fix is half a fix.
+    let inside = |denies: &[PathBuf]| denies.iter().any(|d| policy.workspace.starts_with(d));
+    if !inside(&policy.deny_read) {
+        if inside(&policy.deny_write) {
             args.push("--ro-bind".to_string());
         } else {
             args.push("--bind".to_string());
@@ -161,13 +162,25 @@ fn bwrap_confinement_args(policy: &SandboxPolicy) -> Vec<String> {
 
         // Mask anything denied that lives under the workspace we just bound.
         // An empty tmpfs over the credentials directory means the server gets
-        // its working directory and the vault stays out of reach, instead of
+        // its working directory *and* the vault stays out of reach, instead of
         // having to choose between the two.
-        for deny in &policy.deny_read {
-            if deny.starts_with(&policy.workspace) && deny != &policy.workspace && deny.exists() {
-                args.push("--tmpfs".to_string());
-                args.push(deny.display().to_string());
-            }
+        //
+        // Both lists, and regardless of whether the path exists yet: masking
+        // only what is already on disk left a fresh install unprotected, where
+        // a server could create the credentials directory inside the bind and
+        // read whatever the gateway later wrote into it. bwrap creates the
+        // mount point, so a tmpfs over a not-yet-existing path is fine.
+        let mut masked: Vec<&PathBuf> = policy
+            .deny_read
+            .iter()
+            .chain(policy.deny_write.iter())
+            .filter(|d| d.starts_with(&policy.workspace) && *d != &policy.workspace)
+            .collect();
+        masked.sort();
+        masked.dedup();
+        for deny in masked {
+            args.push("--tmpfs".to_string());
+            args.push(deny.display().to_string());
         }
     }
 
@@ -985,3 +998,105 @@ impl Sandbox {
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, target_os = "linux"))]
+mod confinement_tests {
+    use super::*;
+
+    fn policy_with_credentials_under(workspace: &str, credentials: &str) -> SandboxPolicy {
+        SandboxPolicy::protect_credentials(PathBuf::from(credentials), Path::new(workspace))
+    }
+
+    fn pairs(args: &[String], flag: &str) -> Vec<String> {
+        args.windows(2)
+            .filter(|w| w[0] == flag)
+            .map(|w| w[1].clone())
+            .collect()
+    }
+
+    /// The 🔴 from review on the first attempt at this: narrowing the *read*
+    /// test and leaving the *write* test bidirectional mounted the whole
+    /// workspace read-only whenever it merely contained the credentials
+    /// directory, so a server with `cwd = "/home/user"` could not write
+    /// anywhere in its own home. Half a fix reads exactly like a whole one.
+    #[test]
+    fn a_workspace_containing_a_denied_path_is_still_writable() {
+        let policy =
+            policy_with_credentials_under("/home/user", "/home/user/.rustyclaw/credentials");
+        let args = bwrap_confinement_args(&policy);
+
+        assert!(
+            pairs(&args, "--bind").contains(&"/home/user".to_string()),
+            "the workspace must be writable: {args:?}"
+        );
+        assert!(
+            !pairs(&args, "--ro-bind").contains(&"/home/user".to_string()),
+            "the workspace was mounted read-only: {args:?}"
+        );
+    }
+
+    /// And the vault inside it is masked, so "writable workspace" does not
+    /// mean "readable credentials".
+    #[test]
+    fn the_denied_path_inside_the_workspace_is_masked() {
+        let policy =
+            policy_with_credentials_under("/home/user", "/home/user/.rustyclaw/credentials");
+        let args = bwrap_confinement_args(&policy);
+        assert!(
+            pairs(&args, "--tmpfs").contains(&"/home/user/.rustyclaw/credentials".to_string()),
+            "the credentials directory was left visible: {args:?}"
+        );
+    }
+
+    /// Masking used to require the path to exist on the host. On a fresh
+    /// install the vault has not been written yet, so nothing was masked and
+    /// a confined server could create the directory inside the bind and read
+    /// whatever the gateway wrote there later.
+    #[test]
+    fn a_credentials_directory_that_does_not_exist_yet_is_still_masked() {
+        let policy = policy_with_credentials_under(
+            "/home/user",
+            "/home/user/.rustyclaw/credentials-not-created-yet",
+        );
+        let args = bwrap_confinement_args(&policy);
+        assert!(
+            pairs(&args, "--tmpfs")
+                .contains(&"/home/user/.rustyclaw/credentials-not-created-yet".to_string()),
+            "a not-yet-created vault was left unmasked: {args:?}"
+        );
+    }
+
+    /// A workspace genuinely inside a denied path has nothing to bind.
+    #[test]
+    fn a_workspace_inside_a_denied_path_is_not_bound() {
+        let policy = policy_with_credentials_under(
+            "/home/user/.rustyclaw/credentials/sub",
+            "/home/user/.rustyclaw/credentials",
+        );
+        let args = bwrap_confinement_args(&policy);
+        assert!(
+            !pairs(&args, "--bind").contains(&"/home/user/.rustyclaw/credentials/sub".to_string()),
+            "a workspace inside the vault was bound: {args:?}"
+        );
+    }
+
+    /// `HOME` points at a path on the tmpfs, which is empty — without a
+    /// `--dir` the directory does not exist and anything writing `$HOME/<file>`
+    /// directly fails on ENOENT.
+    #[test]
+    fn the_sandbox_home_is_created_not_just_named() {
+        let policy =
+            policy_with_credentials_under("/home/user", "/home/user/.rustyclaw/credentials");
+        let args = bwrap_confinement_args(&policy);
+        assert!(
+            pairs(&args, "--dir").contains(&SANDBOX_HOME.to_string()),
+            "no --dir for {SANDBOX_HOME}: {args:?}"
+        );
+        let dir = args.iter().position(|a| a == SANDBOX_HOME).expect("--dir");
+        let tmpfs = args
+            .windows(2)
+            .position(|w| w[0] == "--tmpfs" && w[1] == "/tmp")
+            .expect("tmpfs");
+        assert!(dir > tmpfs, "the tmpfs wipes the home dir: {args:?}");
+    }
+}
