@@ -96,6 +96,24 @@ impl SshGatewayConfig {
     }
 }
 
+/// How the gateway decides whether an incoming messenger message is worth a
+/// full processing cycle.
+///
+/// This is the *rule* tier of the message relevance filter. The LLM
+/// classifier tier (the `"smart"` mode from the original proposal) needs a
+/// one-shot completion helper on `ModelContext` and is tracked as a follow-up
+/// in RustyClaw#165; it will extend this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RelevanceFilter {
+    /// Process every incoming message (the historic default).
+    #[default]
+    Always,
+    /// In group chats, process only messages that mention the agent by name
+    /// or reply to a message the agent sent. Direct messages always count.
+    Mentions,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Root state directory (e.g. `~/.rustyclaw`).
@@ -141,6 +159,13 @@ pub struct Config {
     /// authenticator app labels, etc.).  Defaults to "RustyClaw".
     #[serde(default = "Config::default_agent_name")]
     pub agent_name: String,
+    /// How incoming messenger messages are filtered before processing.
+    ///
+    /// `"always"` (the default) processes everything; `"mentions"` skips
+    /// group-chat messages that neither mention the agent by name nor reply
+    /// to a message the agent sent. Direct messages always pass.
+    #[serde(default)]
+    pub relevance_filter: RelevanceFilter,
     /// Number of blank lines inserted between messages in the TUI.
     /// Set to 0 for compact output, 1 (default) for comfortable spacing.
     #[serde(default = "Config::default_message_spacing")]
@@ -418,6 +443,7 @@ impl Default for Config {
             totp_enabled: false,
             agent_access: false,
             agent_name: Self::default_agent_name(),
+            relevance_filter: RelevanceFilter::Always,
             message_spacing: Self::default_message_spacing(),
             tab_width: Self::default_tab_width(),
             sandbox: SandboxConfig::default(),
@@ -760,5 +786,33 @@ mod tests {
 
         let loaded = Config::load(Some(path)).expect("load what was saved");
         assert_eq!(loaded.agent_name, config.agent_name);
+    }
+
+    /// The relevance filter defaults to the historic "process everything"
+    /// behavior, and the rule tier opts in via `relevance_filter = "mentions"`.
+    #[test]
+    fn relevance_filter_serde_and_default() {
+        assert_eq!(Config::default().relevance_filter, RelevanceFilter::Always);
+
+        // The enum itself maps from the documented spellings.
+        assert_eq!(
+            serde_json::from_str::<RelevanceFilter>("\"always\"").unwrap(),
+            RelevanceFilter::Always
+        );
+        assert_eq!(
+            serde_json::from_str::<RelevanceFilter>("\"mentions\"").unwrap(),
+            RelevanceFilter::Mentions
+        );
+
+        // A saved config round-trips the choice.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            relevance_filter: RelevanceFilter::Mentions,
+            ..Config::default()
+        };
+        config.save(Some(path.clone())).expect("save must succeed");
+        let loaded = Config::load(Some(path)).expect("load what was saved");
+        assert_eq!(loaded.relevance_filter, RelevanceFilter::Mentions);
     }
 }

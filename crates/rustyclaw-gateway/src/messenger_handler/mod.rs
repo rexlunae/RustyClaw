@@ -27,10 +27,12 @@ use rustyclaw_core::gateway::{
 mod builders;
 mod media;
 mod prompt;
+mod relevance;
 
 use builders::create_messenger;
 use media::process_attachments;
 use prompt::build_messenger_system_prompt;
+use relevance::{channel_key, is_message_relevant, mention_tokens, SentMessageTracker};
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
@@ -481,6 +483,10 @@ pub async fn run_messenger_loop(
     // Per-chat conversation history
     let conversations: ConversationStore = Arc::new(Mutex::new(HashMap::new()));
 
+    // IDs of messages the agent sent, for reply-to-agent relevance.
+    let sent_tracker: Arc<std::sync::Mutex<SentMessageTracker>> =
+        Arc::new(std::sync::Mutex::new(SentMessageTracker::new()));
+
     let http = Arc::new(
         reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(30))
@@ -520,6 +526,15 @@ pub async fn run_messenger_loop(
                 }
                 config = fresh;
 
+                // Mention names per account for the relevance pre-filter.
+                // Computed once per tick; the profile resolution is cheap
+                // and accounts are few.
+                let tokens_by_account: HashMap<String, Vec<String>> = config
+                    .messengers
+                    .iter()
+                    .map(|mc| (mc.name.clone(), mention_tokens(&config, mc)))
+                    .collect();
+
                 // The loop runs on every gateway so the setup panel's first
                 // account is noticed — but with nothing configured, a tick
                 // is just the config check above.
@@ -536,6 +551,30 @@ pub async fn run_messenger_loop(
 
                 // Process each message
                 for (account_name, messenger_type, msg) in messages {
+                    // Relevance pre-filter (rule tier of #165): under
+                    // `relevance_filter = "mentions"`, group-chat messages
+                    // that neither mention the agent nor reply to one of its
+                    // messages are dropped before any token spend, history
+                    // lookup, or typing indicator.
+                    let tokens = tokens_by_account
+                        .get(&account_name)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    if !is_message_relevant(
+                        &config,
+                        &account_name,
+                        &msg,
+                        tokens,
+                        &sent_tracker.lock().unwrap(),
+                    ) {
+                        debug!(
+                            account_name,
+                            sender = %msg.sender,
+                            channel = ?msg.channel,
+                            "Skipping irrelevant group-chat message (relevance_filter = \"mentions\")"
+                        );
+                        continue;
+                    }
 
                     if concurrent_mode {
                         // Spawn message processing as a background task
@@ -552,6 +591,7 @@ pub async fn run_messenger_loop(
                         let semaphore = Arc::clone(&semaphore);
                         let messenger_type = messenger_type.clone();
                         let account_name = account_name.clone();
+                        let sent_tracker = Arc::clone(&sent_tracker);
 
                         tokio::spawn(async move {
                             // Acquire permit (blocks if at capacity)
@@ -579,6 +619,7 @@ pub async fn run_messenger_loop(
                                 &conversations,
                                 &account_name,
                                 &messenger_type,
+                                sent_tracker,
                                 msg,
                             )
                             .await;
@@ -619,6 +660,7 @@ pub async fn run_messenger_loop(
                             &conversations,
                             &account_name,
                             &messenger_type,
+                            Arc::clone(&sent_tracker),
                             msg,
                         )
                         .await;
@@ -691,6 +733,7 @@ async fn process_incoming_message(
     conversations: &ConversationStore,
     account_name: &str,
     messenger_type: &str,
+    sent_tracker: Arc<std::sync::Mutex<SentMessageTracker>>,
     msg: Message,
 ) -> Result<()> {
     debug!(
@@ -1056,6 +1099,12 @@ async fn process_incoming_message(
 
             match messenger.send_message_with_options(opts).await {
                 Ok(msg_id) => {
+                    // Remember the sent ID so a reply to it counts as
+                    // relevant under `relevance_filter = "mentions"`.
+                    sent_tracker
+                        .lock()
+                        .unwrap()
+                        .record(&channel_key(account_name, msg.channel.as_deref()), &msg_id);
                     debug!(
                         message_id = %msg_id,
                         response_preview = %rustyclaw_core::text::truncate_chars(&final_response, 50),
