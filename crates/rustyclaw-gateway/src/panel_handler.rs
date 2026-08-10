@@ -1053,7 +1053,7 @@ fn tool_category(name: &str) -> &'static str {
         n if n.starts_with("skill_") => "skills",
         n if n.starts_with("mcp_") => "mcp",
         n if n.starts_with("task_") => "tasks",
-        "thread_describe" | "set_thread_caption" => "threads",
+        "thread_describe" | "set_thread_caption" | "threads_list" => "threads",
         n if n.starts_with("model_") => "models",
         "host_info" | "load_status" => "system",
         n if n.starts_with("service_") => "services",

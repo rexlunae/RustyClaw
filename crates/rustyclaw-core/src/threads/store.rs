@@ -41,6 +41,25 @@ pub struct ThreadSummary {
     pub label: String,
     /// Effective working directory, when one was set.
     pub working_dir: Option<PathBuf>,
+    /// Thread kind, as the sidebar groups it ("Chat", "SubAgent", …).
+    pub kind: String,
+    /// Human-readable status.
+    pub status: String,
+    /// Whether this is the agent's foreground (user-focused) thread.
+    pub is_foreground: bool,
+}
+
+impl ThreadSummary {
+    fn from_meta(meta: &ThreadMeta) -> Self {
+        Self {
+            id: meta.id.0,
+            label: meta.label.clone(),
+            working_dir: meta.working_dir.clone(),
+            kind: format!("{:?}", meta.kind),
+            status: format!("{:?}", meta.status),
+            is_foreground: meta.is_foreground,
+        }
+    }
 }
 
 /// A thread's metadata, exactly as written to `<id>.meta.json` — everything
@@ -353,11 +372,7 @@ impl ThreadStore {
                 let Ok(meta) = serde_json::from_str::<ThreadMeta>(&text) else {
                     continue;
                 };
-                out.push(ThreadSummary {
-                    id: meta.id.0,
-                    label: meta.label,
-                    working_dir: meta.working_dir,
-                });
+                out.push(ThreadSummary::from_meta(&meta));
             }
             return Some(out);
         }
@@ -373,6 +388,9 @@ impl ThreadStore {
                         id: t.id.0,
                         label: t.label.clone(),
                         working_dir: t.working_dir.clone(),
+                        kind: format!("{:?}", t.kind),
+                        status: format!("{:?}", t.status),
+                        is_foreground: t.is_foreground,
                     })
                     .collect(),
             );

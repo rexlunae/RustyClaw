@@ -226,8 +226,10 @@ pub static CRON: ToolDef = ToolDef {
                   {\"kind\": \"every\", \"everyMs\": 3600000} | {\"kind\": \"cron\", \"expr\": \"0 9 * * 1-5\", \"tz\": \"America/Chicago\"}, \
                   \"sessionTarget\": \"main\", \"payload\": {\"kind\": \"agentTurn\", \"message\": \"<prompt to wake with>\", \"model\": \"<optional model override>\"}, \
                   \"threadId\": <optional thread number for context and the response>, \
-                  \"name\": \"<short name>\"}. Use this to wake yourself later, set reminders, or \
-                  run recurring check-ins.",
+                  \"name\": \"<short name>\"}. Omit threadId to pin the job to your current thread \
+                  (session_status reports it); an invalid threadId is rejected with the list of \
+                  valid ids. Use this to wake yourself later, set reminders, or run recurring \
+                  check-ins.",
     parameters: vec![],
     execute: exec_cron,
 };
@@ -738,6 +740,64 @@ fn exec_set_thread_caption(args: &Value, _workspace_dir: &Path) -> ToolResult {
     });
 
     Ok(format!("{}{}", THREAD_UPDATE_MARKER, update))
+}
+
+pub static THREADS_LIST: ToolDef = ToolDef {
+    name: "threads_list",
+    description: "List the current agent's threads with their ids, labels, kind, status, and \
+                  which is the foreground. Use the id as the `threadId` in cron add to target a \
+                  specific thread; omit `threadId` to target the current thread at creation.",
+    parameters: vec![],
+    execute: exec_threads_list,
+};
+
+/// List threads the agent can route a scheduled wake to.
+///
+/// Reads only each thread's small metadata file — never its message log —
+/// so listing is cheap even for a long conversation history.
+fn exec_threads_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
+    let Some(settings_dir) = crate::runtime_ctx::get_settings_dir() else {
+        return Err(
+            "Threads are unavailable: no gateway settings directory in this context".into(),
+        );
+    };
+
+    // Which agent's threads? The caller's when it can be told apart,
+    // otherwise the main agent. `get_active_agent` is best-effort under
+    // concurrent connections — fine for a listing, where the fallback is
+    // merely a different list, not a wrong action.
+    let agent_id = args
+        .get("agentId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(crate::runtime_ctx::get_active_agent)
+        .unwrap_or_else(|| crate::agents::MAIN_AGENT_ID.to_string());
+
+    let threads_json = crate::config::Config::agent_threads_path_from(&settings_dir, &agent_id);
+    let Some(summaries) = crate::threads::ThreadStore::peek(&threads_json) else {
+        return Ok(format!(
+            "No threads exist yet for agent '{}'. Threads are created when a conversation opens.",
+            agent_id
+        ));
+    };
+
+    if summaries.is_empty() {
+        return Ok(format!("No threads exist yet for agent '{}'.", agent_id));
+    }
+
+    let mut output = format!("Threads for agent '{}':\n\n", agent_id);
+    for t in &summaries {
+        let fg = if t.is_foreground { " [foreground]" } else { "" };
+        output.push_str(&format!(
+            "#{} — {}{} ({}, {})\n",
+            t.id, t.label, fg, t.kind, t.status
+        ));
+    }
+    output.push_str(
+        "\nUse a thread id as `threadId` in cron add to pin a job to that thread; \
+         omit `threadId` to target the current thread at creation.",
+    );
+    Ok(output)
 }
 
 // ── Model tools ─────────────────────────────────────────────────────────────

@@ -526,6 +526,28 @@ impl Config {
         self.agent_dir_for(agent_id).join("sessions")
     }
 
+    /// The threads store path for a specific agent — the legacy `threads.json`
+    /// path that [`ThreadStore`](crate::threads::ThreadStore) roots its
+    /// per-thread directory beside.
+    ///
+    /// Kept next to `sessions_dir_for` so every caller — the gateway's cron
+    /// runtime, the threads tool, anything routing a wake — derives the same
+    /// path from the same rule.
+    pub fn agent_threads_path(&self, agent_id: &str) -> PathBuf {
+        self.sessions_dir_for(agent_id).join("threads.json")
+    }
+
+    /// The threads store path from a bare settings dir, without a full
+    /// `Config`. Mirrors [`agent_threads_path`](Self::agent_threads_path) for
+    /// tool paths that only hold the settings dir.
+    pub fn agent_threads_path_from(settings_dir: &Path, agent_id: &str) -> PathBuf {
+        settings_dir
+            .join("agents")
+            .join(agent_id)
+            .join("sessions")
+            .join("threads.json")
+    }
+
     /// Workspace directory for a specific agent. The `main` agent keeps the
     /// installation-wide workspace (`workspace_dir()`); other agents get a
     /// private workspace inside their agent directory so each can carry its

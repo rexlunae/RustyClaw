@@ -162,6 +162,15 @@ pub fn set_thread_caption_params() -> Vec<ToolParam> {
     }]
 }
 
+pub fn threads_list_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "agentId".into(),
+        description: "Optional agent whose threads to list. Defaults to the current agent.".into(),
+        param_type: "string".into(),
+        required: false,
+    }]
+}
+
 // ── System tools ────────────────────────────────────────────────────────────
 
 pub fn disk_usage_params() -> Vec<ToolParam> {
