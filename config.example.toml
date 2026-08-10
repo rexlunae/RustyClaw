@@ -68,12 +68,6 @@ use_secrets = true
 # auto_start = false
 
 # Messenger configurations
-# How incoming messenger messages are filtered before processing.
-# "always" (default) processes everything; "mentions" skips group-chat
-# messages that neither mention the agent by name nor reply to a message
-# the agent sent. Direct messages always pass.
-# relevance_filter = "always"
-
 # [[messengers]]
 # name = "slack"
 # enabled = false
