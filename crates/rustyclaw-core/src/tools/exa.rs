@@ -60,7 +60,7 @@ struct ExaResult {
     #[serde(default)]
     title: Option<String>,
     url: String,
-    #[serde(default)]
+    #[serde(rename = "publishedDate", default)]
     published_date: Option<String>,
     #[serde(default)]
     author: Option<String>,
@@ -76,7 +76,7 @@ struct ExaResponse {
     /// Exa rewrites the query when `useAutoprompt` is on, and says what it
     /// used. Worth showing: it explains results that look unrelated to what
     /// was typed.
-    #[serde(default)]
+    #[serde(rename = "autopromptString", default)]
     autoprompt_string: Option<String>,
 }
 
@@ -197,8 +197,7 @@ pub(crate) struct RenderedResult {
 
 /// Decode a reply body into the shape [`render`] takes.
 pub(crate) fn decode(body: &str) -> Result<ExaRendered, String> {
-    // camelCase on the wire; the field names above are snake_case.
-    let raw: ExaResponse = serde_json::from_str(&normalise_keys(body))
+    let raw: ExaResponse = serde_json::from_str(body)
         .map_err(|e| format!("Exa returned a body this client could not read: {e}"))?;
     Ok(ExaRendered {
         results: raw
@@ -214,16 +213,6 @@ pub(crate) fn decode(body: &str) -> Result<ExaRendered, String> {
             .collect(),
         autoprompt: raw.autoprompt_string,
     })
-}
-
-/// Rewrite the two camelCase keys this client reads into snake_case.
-///
-/// A `#[serde(rename_all = "camelCase")]` on the struct would be tidier, but
-/// it renames every field including the ones that are already single words,
-/// and this way the two that actually differ are visible.
-fn normalise_keys(body: &str) -> String {
-    body.replace("\"publishedDate\"", "\"published_date\"")
-        .replace("\"autopromptString\"", "\"autoprompt_string\"")
 }
 
 /// Run a search against Exa.
@@ -357,6 +346,24 @@ mod tests {
         let out = render("q", &parsed);
         assert!(out.contains("(no title)"), "got: {out}");
         assert!(out.contains("https://example.test/a"), "got: {out}");
+    }
+
+    /// The keys were previously normalised with a whole-body string replace,
+    /// which also rewrote those literals *inside* result text. Exa returns
+    /// full page content, so searching for anything that discusses
+    /// `publishedDate` — API docs, JSON schema pages — came back with the
+    /// page silently altered. serde renames touch field names only.
+    #[test]
+    fn page_text_that_mentions_a_wire_key_is_not_rewritten() {
+        let body = r#"{"results":[{"title":"T","url":"https://e.test/","id":"x",
+            "text":"The API returns a publishedDate field on every record."}]}"#;
+        let parsed = decode(body).expect("decodes");
+        let out = render("exa api fields", &parsed);
+        assert!(
+            out.contains("publishedDate field"),
+            "the page text was rewritten: {out}"
+        );
+        assert!(!out.contains("published_date"), "got: {out}");
     }
 
     /// The two camelCase keys this client reads have to survive.
