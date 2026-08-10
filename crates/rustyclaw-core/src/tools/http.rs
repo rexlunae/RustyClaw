@@ -56,9 +56,46 @@ pub(crate) enum RequestBody {
 impl RequestBody {
     /// Read the three body parameters, refusing any combination of them.
     pub(crate) fn from_args(args: &Value) -> Result<Self, String> {
-        let raw = args.get("body").and_then(|v| v.as_str());
-        let json = args.get("json").filter(|v| !v.is_null());
-        let form = args.get("form").and_then(|v| v.as_object());
+        // Presence first, type second. Reading `body` with `as_str()` and
+        // `form` with `as_object()` meant a value of the wrong type produced
+        // `None` — so it was neither counted in the "give only one" check
+        // below nor sent, and the request went out with no body while looking
+        // like it worked. For a POST that was supposed to create something,
+        // that is the worst available outcome.
+        let raw = match args.get("body").filter(|v| !v.is_null()) {
+            Some(Value::String(s)) => Some(s.as_str()),
+            Some(other) => {
+                return Err(format!(
+                    "`body` must be a string, got {}. Use `json` for a structured \
+                     value, or stringify it yourself.",
+                    kind_of(other)
+                ));
+            }
+            None => None,
+        };
+        let json = match args.get("json").filter(|v| !v.is_null()) {
+            // A model that stringifies its own JSON would otherwise get the
+            // document re-encoded as a JSON *string literal* on the wire —
+            // `"{\"a\":1}"` rather than `{"a":1}` — which the server rejects
+            // for reasons that look nothing like the cause.
+            Some(Value::String(_)) => {
+                return Err("`json` must be an object or array, not a string. \
+                            Pass the value itself, or use `body` to send \
+                            pre-encoded JSON."
+                    .to_string());
+            }
+            other => other,
+        };
+        let form = match args.get("form").filter(|v| !v.is_null()) {
+            Some(Value::Object(map)) => Some(map),
+            Some(other) => {
+                return Err(format!(
+                    "`form` must be an object of field names to values, got {}.",
+                    kind_of(other)
+                ));
+            }
+            None => None,
+        };
 
         let given: Vec<&str> = [
             raw.map(|_| "body"),
@@ -234,6 +271,37 @@ pub(crate) fn interesting_headers(all: &[(String, String)]) -> Vec<(String, Stri
     picked
 }
 
+/// Headers that decide which server answers, rather than what it is asked.
+///
+/// The SSRF check validates the address the *URL* resolves to. `Host` picks a
+/// virtual host once the connection is open, so a public URL plus
+/// `Host: internal-admin` reaches an internal site behind a shared proxy with
+/// the address check already satisfied. The `X-Forwarded-*` family is the
+/// same trick against anything that trusts them for routing or access
+/// control.
+///
+/// Refused rather than dropped, so a caller who needs one is told instead of
+/// wondering why it had no effect.
+fn header_is_refused(name: &str) -> Option<String> {
+    const ROUTING_HEADERS: &[&str] = &[
+        "host",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-real-ip",
+        "forwarded",
+    ];
+    ROUTING_HEADERS
+        .iter()
+        .find(|h| name.eq_ignore_ascii_case(h))
+        .map(|h| {
+            format!(
+                "Refusing the `{h}` header: it changes which server answers, which \
+                 the URL-based safety check cannot see. Put the host in the URL."
+            )
+        })
+}
+
 /// Perform an HTTP request with the method, headers and body under the
 /// caller's control.
 #[instrument(skip(args, _workspace_dir), fields(url, method))]
@@ -286,6 +354,9 @@ pub async fn exec_http_request_async(args: &Value, _workspace_dir: &Path) -> Too
 
     if let Some(headers) = args.get("headers").and_then(|v| v.as_object()) {
         for (key, value) in headers {
+            if let Some(reason) = header_is_refused(key) {
+                return Err(reason.into());
+            }
             if let Some(val_str) = value.as_str() {
                 request = request.header(key.as_str(), val_str);
             }
@@ -364,7 +435,10 @@ async fn read_capped(mut response: reqwest::Response) -> ToolResult<(Vec<u8>, bo
     let mut out: Vec<u8> = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(ToolError::Http)? {
         let room = MAX_BODY_BYTES.saturating_sub(out.len());
-        if chunk.len() >= room {
+        // `>`, not `>=`: a body that exactly fills the cap arrived complete,
+        // and reporting it as cut off sends the caller to re-fetch data they
+        // already have.
+        if chunk.len() > room {
             out.extend_from_slice(&chunk[..room]);
             return Ok((out, true));
         }
@@ -515,6 +589,57 @@ mod tests {
             .expect_err("must be refused");
         assert!(err.contains("body"), "got: {err}");
         assert!(err.contains("json"), "got: {err}");
+    }
+
+    /// A body of the wrong type used to vanish: `as_str()` gave `None`, so it
+    /// was neither counted as "given" nor sent, and a POST that was supposed
+    /// to create something went out empty and looked like it worked.
+    #[test]
+    fn a_body_of_the_wrong_type_is_refused_rather_than_dropped() {
+        for bad in [json!({"body": {"a": 1}}), json!({"body": 123})] {
+            let err = RequestBody::from_args(&bad).expect_err("must be refused");
+            assert!(err.contains("`body` must be a string"), "got: {err}");
+        }
+        let err = RequestBody::from_args(&json!({"form": "a=1"})).expect_err("must be refused");
+        assert!(err.contains("`form` must be an object"), "got: {err}");
+    }
+
+    /// Pre-stringified JSON would be re-encoded as a JSON string literal —
+    /// `"{\"a\":1}"` on the wire instead of `{"a":1}` — and the server's
+    /// complaint would look nothing like the cause.
+    #[test]
+    fn json_given_as_a_string_is_refused_rather_than_double_encoded() {
+        let err =
+            RequestBody::from_args(&json!({"json": "{\"a\":1}"})).expect_err("must be refused");
+        assert!(err.contains("not a string"), "got: {err}");
+    }
+
+    /// And the mutual-exclusion check sees them now: a mistyped second body
+    /// parameter used to slip past it entirely.
+    #[test]
+    fn a_mistyped_second_body_parameter_is_still_noticed() {
+        assert!(RequestBody::from_args(&json!({"json": {"a": 1}, "body": 123})).is_err());
+    }
+
+    /// `Host` picks a virtual host after the SSRF address check has passed, so
+    /// a public URL plus `Host: internal-admin` reaches somewhere the check
+    /// never looked at.
+    #[test]
+    fn headers_that_choose_the_server_are_refused() {
+        for name in [
+            "Host",
+            "host",
+            "X-Forwarded-For",
+            "X-Forwarded-Host",
+            "Forwarded",
+        ] {
+            assert!(
+                header_is_refused(name).is_some(),
+                "{name} should be refused"
+            );
+        }
+        assert!(header_is_refused("X-Api-Key").is_none());
+        assert!(header_is_refused("Content-Type").is_none());
     }
 
     #[test]
