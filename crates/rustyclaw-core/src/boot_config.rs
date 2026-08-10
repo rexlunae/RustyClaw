@@ -173,10 +173,17 @@ impl BootConfig {
             // redirect model traffic to the previous provider's endpoint, so
             // it is preserved only when the provider is unchanged.
             let same_provider = existing.is_some_and(|m| m.provider.eq_ignore_ascii_case(provider));
-            let model = self
-                .model
-                .clone()
-                .or_else(|| existing.and_then(|m| m.model.clone()));
+            let model = self.model.clone().or_else(|| {
+                // The old model name belongs to the old provider; carrying it
+                // across a switch asks the new provider for a model it does
+                // not have (e.g. "gpt-4o" under provider "anthropic").
+                // Fall back to the new provider's default instead.
+                if same_provider {
+                    existing.and_then(|m| m.model.clone())
+                } else {
+                    None
+                }
+            });
             let base_url = if same_provider {
                 existing.and_then(|m| m.base_url.clone())
             } else {
@@ -201,13 +208,17 @@ impl BootConfig {
         if let Some(bind) = &self.ssh_bind {
             match config.ssh.as_mut() {
                 Some(ssh) => ssh.bind = bind.clone(),
-                // The gateway only listens on the bind when SSH is enabled
-                // and in standalone mode (main.rs), so creating a section
-                // with the default `enabled: false` would silently ignore
-                // the boot bind. Create an enabled standalone section.
+                // No `[ssh]` section: record the bind on a *disabled*
+                // standalone section rather than enabling the transport.
+                // A boot bind is an address, not an on-switch — silently
+                // opening a network listener the user never enabled would
+                // be a footgun (e.g. ssh_bind = "0.0.0.0:2222" exposing the
+                // gateway to the LAN). The bind takes effect once SSH is
+                // enabled, exactly as it does for an existing disabled
+                // section.
                 None => {
                     config.ssh = Some(SshGatewayConfig {
-                        enabled: true,
+                        enabled: false,
                         mode: crate::config::SshMode::Standalone,
                         bind: bind.clone(),
                         host_key: None,
@@ -372,10 +383,13 @@ ssh_bind = "0.0.0.0:2222"
         assert_eq!(config.workspace_dir, Some(PathBuf::from("/new")));
         let ssh = config.ssh.unwrap();
         assert_eq!(ssh.bind, "0.0.0.0:2222");
-        // No ssh section existed: the boot bind creates an *enabled*
-        // standalone section, not a disabled default that main.rs would
-        // silently ignore.
-        assert!(ssh.enabled, "boot ssh_bind must enable the SSH transport");
+        // No ssh section existed: the boot bind records the address on a
+        // *disabled* standalone section (SEC_0001). A bind is an address,
+        // not an on-switch — silently opening a network listener the user
+        // never enabled would expose the gateway (e.g. `0.0.0.0:2222` to
+        // the LAN). The bind takes effect once SSH is enabled, exactly as
+        // it does for an existing disabled section.
+        assert!(!ssh.enabled, "boot ssh_bind must not enable the SSH transport");
         assert_eq!(ssh.mode, crate::config::SshMode::Standalone);
     }
 
@@ -407,6 +421,63 @@ ssh_bind = "0.0.0.0:2222"
             m.base_url.is_none(),
             "provider switch must drop old base_url"
         );
+    }
+
+    /// Regression for Devin review #442 (BUG_0001): when the boot file names
+    /// a provider but no model, the old provider's model name must NOT be
+    /// carried over — the new provider would be asked for a model it does not
+    /// have (e.g. "gpt-4o" under "anthropic"), failing every request. The
+    /// contract is "model optional; provider default if absent".
+    #[test]
+    fn apply_provider_switch_drops_old_model_name() {
+        let mut config = Config {
+            model: Some(crate::config::ModelProvider {
+                provider: "openai".into(),
+                model: Some("gpt-4o".into()),
+                base_url: Some("https://api.openai.com/v1".into()),
+            }),
+            ..Config::default()
+        };
+        let boot = BootConfig {
+            provider: Some("anthropic".into()),
+            model: None,
+            ..BootConfig::default()
+        };
+        boot.apply(&mut config);
+
+        let m = config.model.unwrap();
+        assert_eq!(m.provider, "anthropic");
+        assert!(
+            m.model.is_none(),
+            "provider switch without a boot model must fall back to the \
+             new provider's default, not inherit gpt-4o"
+        );
+        assert!(m.base_url.is_none(), "provider switch must drop old base_url");
+    }
+
+    /// Regression for Devin review #442 (BUG_0001): with the SAME provider,
+    /// an absent boot model still inherits the existing model name.
+    #[test]
+    fn apply_same_provider_inherits_existing_model() {
+        let mut config = Config {
+            model: Some(crate::config::ModelProvider {
+                provider: "openai".into(),
+                model: Some("gpt-4o".into()),
+                base_url: Some("https://proxy.example".into()),
+            }),
+            ..Config::default()
+        };
+        let boot = BootConfig {
+            provider: Some("openai".into()),
+            model: None,
+            ..BootConfig::default()
+        };
+        boot.apply(&mut config);
+
+        let m = config.model.unwrap();
+        assert_eq!(m.provider, "openai");
+        assert_eq!(m.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(m.base_url.as_deref(), Some("https://proxy.example"));
     }
 
     #[test]

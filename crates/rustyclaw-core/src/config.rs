@@ -630,10 +630,10 @@ impl Config {
             home_dir.join(".rustyclaw").join("config.toml")
         };
 
-        let mut config = if config_path.exists() {
+        let (mut config, skip_post) = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
-            let mut config: Config = match toml::from_str(&content) {
-                Ok(c) => c,
+            match toml::from_str(&content) {
+                Ok(c) => (c, false),
                 Err(e) => {
                     // A torn config used to be a hard startup failure — the
                     // one file that decides where everything lives, and one
@@ -656,27 +656,34 @@ impl Config {
                             // directory, not the home default: that is where
                             // the user's state — and boot.toml — actually
                             // lives, especially when --config pointed at a
-                            // custom location.
-                            Self::anchored_default(&config_path)
+                            // custom location. Skip the legacy-layout
+                            // migration and provider-catalogue reset (there
+                            // are no user settings to migrate — running them
+                            // on a defaults config could relocate legacy
+                            // files using paths the user never chose, and a
+                            // migration failure would turn this recoverable
+                            // path back into a hard startup failure).
+                            (Self::anchored_default(&config_path), true)
                         }
                         // Could not even rename it: better to stop than to
                         // silently shadow a file the next save would clobber.
                         None => return Err(e.into()),
                     }
                 }
-            };
-            // Migrate legacy flat layout if detected.
-            config.migrate_legacy_layout()?;
-            // Make user-defined providers visible to the provider catalogue.
-            crate::providers::set_custom_providers(&config.custom_providers);
-            config
+            }
         } else {
             // Same anchoring for a *missing* config file: when --config
             // pointed at a path that does not exist (first run, wrong dir),
             // boot.toml must still be looked up next to it, not in the
             // home directory.
-            Self::anchored_default(&config_path)
+            (Self::anchored_default(&config_path), false)
         };
+        if !skip_post {
+            // Migrate legacy flat layout if detected.
+            config.migrate_legacy_layout()?;
+            // Make user-defined providers visible to the provider catalogue.
+            crate::providers::set_custom_providers(&config.custom_providers);
+        }
 
         // Boot config (RustyClaw#175, migration rung 1): the stable,
         // boot-critical slice lives in `<settings_dir>/boot.toml` so a
