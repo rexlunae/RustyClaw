@@ -5,7 +5,12 @@ use rmcp::{
     RoleClient, ServiceExt,
     model::{CallToolRequestParams, ListToolsResult},
     service::RunningService,
-    transport::TokioChildProcess,
+    transport::{
+        TokioChildProcess,
+        streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+        },
+    },
 };
 use serde_json::Map as JsonMap;
 use std::sync::Arc;
@@ -13,7 +18,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use super::config::McpServerConfig;
+use super::config::{McpServerConfig, McpTransport};
 use super::tools::{McpContent, McpTool, McpToolResult};
 
 /// A connected MCP server client.
@@ -44,35 +49,68 @@ impl McpClient {
 
     /// Connect to the MCP server.
     pub async fn connect(&self) -> Result<()> {
-        info!(server = %self.name, command = %self.config.command, "Connecting to MCP server");
+        let running = match self.config.transport {
+            McpTransport::Stdio => {
+                // Validate the command before spawning (reject null bytes,
+                // excessive length, credential exfiltration patterns).
+                let full_cmd = format!("{} {}", self.config.command, self.config.args.join(" "));
+                if let Err(e) = crate::tools::helpers::validate_command_safe(&full_cmd) {
+                    warn!(server = %self.name, error = %e, "MCP server command rejected by security validation");
+                    return Err(anyhow::anyhow!("MCP server command rejected: {}", e));
+                }
+                info!(server = %self.name, command = %self.config.command, "Connecting to MCP server (stdio)");
 
-        // Validate the command before spawning (reject null bytes, excessive length,
-        // credential exfiltration patterns).
-        let full_cmd = format!("{} {}", self.config.command, self.config.args.join(" "));
-        if let Err(e) = crate::tools::helpers::validate_command_safe(&full_cmd) {
-            warn!(server = %self.name, error = %e, "MCP server command rejected by security validation");
-            return Err(anyhow::anyhow!("MCP server command rejected: {}", e));
-        }
+                let mut cmd = Command::new(&self.config.command);
+                cmd.args(&self.config.args);
 
-        let mut cmd = Command::new(&self.config.command);
-        cmd.args(&self.config.args);
+                // Set environment variables
+                for (key, value) in &self.config.env {
+                    cmd.env(key, value);
+                }
 
-        // Set environment variables
-        for (key, value) in &self.config.env {
-            cmd.env(key, value);
-        }
+                // Set working directory if specified
+                if let Some(ref cwd) = self.config.cwd {
+                    cmd.current_dir(cwd);
+                }
 
-        // Set working directory if specified
-        if let Some(ref cwd) = self.config.cwd {
-            cmd.current_dir(cwd);
-        }
+                // stdio transport — pass owned Command (rmcp 1.x API)
+                let transport =
+                    TokioChildProcess::new(cmd).context("Failed to spawn MCP server process")?;
 
-        // Create stdio transport - pass owned Command (rmcp 0.16 API)
-        let transport =
-            TokioChildProcess::new(cmd).context("Failed to spawn MCP server process")?;
+                // Connect and initialize — returns RunningService which derefs to Peer
+                ().serve(transport)
+                    .await
+                    .context("Failed to initialize MCP connection")?
+            }
+            McpTransport::Http => {
+                let url = self.config.url.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "MCP server '{}' uses transport = \"http\" but has no url set",
+                        self.name
+                    )
+                })?;
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err(anyhow::anyhow!(
+                        "MCP server '{}': url must start with http:// or https://",
+                        self.name
+                    ));
+                }
+                info!(server = %self.name, url, "Connecting to MCP server (streamable HTTP)");
 
-        // Connect and initialize - returns RunningService which derefs to Peer
-        let running = ().serve(transport).await.context("Failed to initialize MCP connection")?;
+                let mut cfg = StreamableHttpClientTransportConfig::with_uri(url.to_string())
+                    // Transparent one-shot re-init when the server reports an
+                    // expired session (rmcp 1.3+).
+                    .reinit_on_expired_session(true);
+                if let Some(token) = self.config.auth_token.as_deref() {
+                    cfg = cfg.auth_header(token.to_string());
+                }
+                let transport = StreamableHttpClientTransport::from_config(cfg);
+
+                ().serve(transport)
+                    .await
+                    .context("Failed to initialize MCP connection")?
+            }
+        };
 
         // Store the running service
         *self.service.lock().await = Some(running);
@@ -168,12 +206,11 @@ impl McpClient {
             }
         };
 
-        let params = CallToolRequestParams {
-            name: tool_name.to_string().into(),
-            arguments: args_map,
-            meta: None,
-            task: None,
-        };
+        // Non-exhaustive in rmcp 1.4: build via the constructor + builder.
+        let mut params = CallToolRequestParams::new(tool_name.to_string());
+        if let Some(args) = args_map {
+            params = params.with_arguments(args);
+        }
 
         match service.call_tool(params).await {
             Ok(result) => {

@@ -2562,9 +2562,8 @@ dependencies = [
 
 [[package]]
 name = "dioxus-genai-chat"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acc507efe21d79a2712ba1295837b7e889b0088dba622d66cf95569eef10207c"
+version = "0.5.0"
+source = "git+https://github.com/rexlunae/dioxus-genai-chat?rev=fb6dd4b#fb6dd4bcd1a589237ebc0bbf81233226bd3b08e7"
 dependencies = [
  "dioxus",
  "dioxus-bulma",
@@ -7898,30 +7897,6 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc4c9c94680f75470ee8083a0667988b5d7b5beb70b9f998a8e51de7c682ce60"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "futures",
- "pastey 0.2.3",
- "pin-project-lite",
- "process-wrap",
- "rmcp-macros 0.16.0",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "rmcp"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
@@ -7930,29 +7905,21 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures",
+ "http",
  "pastey 0.2.3",
  "pin-project-lite",
- "rmcp-macros 1.8.0",
+ "process-wrap",
+ "reqwest 0.13.4",
+ "rmcp-macros",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sse-stream",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "rmcp-macros"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90c23c8f26cae4da838fbc3eadfaecf2d549d97c04b558e7bd90526a9c28b42a"
-dependencies = [
- "darling 0.23.0",
- "proc-macro2",
- "quote",
- "serde_json",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -8353,7 +8320,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.4",
  "river-core",
- "rmcp 0.16.0",
+ "rmcp",
  "rpassword",
  "russh",
  "schemars 1.2.2",
@@ -9309,6 +9276,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sse-stream"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c123f296ade4ec4b8b0f6162116e6629f5146922ca5ab40ca9d3c2e73ab4761e"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "ssh-cipher"
 version = "0.3.0-rc.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9390,7 +9370,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "fastembed",
- "rmcp 1.8.0",
+ "rmcp",
  "rusqlite",
  "schemars 1.2.2",
  "serde",

@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) client support.
 //!
 //! This module provides connectivity to MCP servers, allowing RustyClaw to:
-//! - Connect to external MCP tool servers (stdio, SSE, WebSocket)
+//! - Connect to external MCP tool servers (stdio, streamable HTTP)
 //! - Discover and call tools exposed by MCP servers
 //! - Manage multiple MCP server connections
 //!
@@ -18,6 +18,12 @@
 //! command = "npx"
 //! args = ["-y", "@modelcontextprotocol/server-github"]
 //! env = { GITHUB_TOKEN = "..." }
+//!
+//! # Remote server over streamable HTTP (rmcp 1.4+):
+//! [mcp.servers.remote]
+//! transport = "http"
+//! url = "https://mcp.example.com/mcp"
+//! auth_token = "..."   # optional bearer token
 //! ```
 //!
 //! # Usage
@@ -48,7 +54,7 @@ mod tools;
 
 #[cfg(feature = "mcp")]
 pub use client::McpClient;
-pub use config::{McpConfig, McpServerConfig};
+pub use config::{McpConfig, McpServerConfig, McpTransport};
 #[cfg(feature = "mcp")]
 pub use manager::{McpManager, McpServerStatus, McpStatus};
 #[cfg(feature = "mcp")]
