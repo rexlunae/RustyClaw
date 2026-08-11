@@ -2,14 +2,23 @@
 //!
 //! Tests that RustyClaw uses appropriate exit codes matching common conventions.
 
-use std::process::Command;
+mod common;
 
-/// Run rustyclaw and get exit code
+use std::path::Path;
+
+/// Run rustyclaw against a scratch install and get its exit code.
+///
+/// The scratch `HOME` is the point. `gateway stop` below used to run against
+/// the developer's real installation: it resolved `~/.rustyclaw`, read the
+/// live PID file and SIGTERM'd the gateway named there, so a
+/// `cargo test --workspace` killed a running gateway. `code >= 0` passed
+/// either way, so nothing ever failed to report it.
 fn exit_code(args: &[&str]) -> i32 {
     // Cargo builds the binary as a dependency of this test and hands over its
     // path, so there is no guessing at a profile directory and no fallback to
     // `cargo run` (which would recurse into a fresh build from inside one).
-    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
+    let home = common::scratch_home("exit-codes");
+    let output = common::scratch_command(Path::new(env!("CARGO_BIN_EXE_rustyclaw")), &home)
         .args(args)
         .output()
         .expect("Failed to execute rustyclaw");

@@ -3,9 +3,10 @@
 //! These tests compare current help output against stored golden files.
 //! To update golden files, run: `UPDATE_GOLDEN=1 cargo test`
 
+mod common;
+
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 /// Relative to the crate root, which is where Cargo runs an integration test.
 const GOLDEN_DIR: &str = "tests/golden";
@@ -18,10 +19,13 @@ fn get_help(args: &[&str]) -> String {
     // Cargo builds the binary as a dependency of this test and hands over its
     // path — no profile-directory guess, and no `cargo run` fallback that
     // would start a build from inside one.
-    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
-        .args(&all_args)
-        .output()
-        .expect("Failed to execute rustyclaw");
+    let output = common::scratch_command(
+        std::path::Path::new(env!("CARGO_BIN_EXE_rustyclaw")),
+        &common::scratch_home("golden"),
+    )
+    .args(&all_args)
+    .output()
+    .expect("Failed to execute rustyclaw");
 
     String::from_utf8_lossy(&output.stdout).to_string()
 }
@@ -182,10 +186,13 @@ fn test_golden_skills_list_help() {
 
 #[test]
 fn test_golden_version() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
-        .args(["--version"])
-        .output()
-        .expect("Failed to execute rustyclaw");
+    let output = common::scratch_command(
+        std::path::Path::new(env!("CARGO_BIN_EXE_rustyclaw")),
+        &common::scratch_home("golden"),
+    )
+    .args(["--version"])
+    .output()
+    .expect("Failed to execute rustyclaw");
 
     let version = String::from_utf8_lossy(&output.stdout).to_string();
 
