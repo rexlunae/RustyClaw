@@ -2,9 +2,16 @@
 //!
 //! These tests run complete user scenarios from start to finish.
 
+mod common;
+
+// The isolation this file already had, now shared. `exit_codes.rs` ran
+// `gateway stop` without it and killed the developer's running gateway on
+// every `cargo test --workspace`.
+use common::scratch_command;
+
 use anyhow::Result;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The binary under test.
@@ -42,33 +49,6 @@ const DOCTOR_CHECKS: &[&str] = &[
     "Skills dir",
 ];
 
-/// The binary, pointed at a scratch HOME and nothing else.
-///
-/// Setting `HOME` alone is not enough to isolate a run. `--config`,
-/// `--settings-dir`, `--profile`, `--soul`, `--skills` and `--gateway` are
-/// all env-backed globals, so a developer who exports any of them has the
-/// CLI read their real installation instead of the empty directory the test
-/// just built — the assertions then describe their machine, and a test that
-/// creates and deletes directories is suddenly pointed at real data.
-///
-/// Cleared here rather than at each call site so a test added later cannot
-/// forget. A test that wants one of these set adds it back after.
-fn scratch_command(binary: &PathBuf, home: &PathBuf) -> Command {
-    let mut cmd = Command::new(binary);
-    cmd.env("HOME", home);
-    for leaked in [
-        "RUSTYCLAW_CONFIG",
-        "RUSTYCLAW_SETTINGS_DIR",
-        "RUSTYCLAW_PROFILE",
-        "RUSTYCLAW_SOUL",
-        "RUSTYCLAW_SKILLS",
-        "RUSTYCLAW_GATEWAY",
-    ] {
-        cmd.env_remove(leaked);
-    }
-    cmd
-}
-
 /// Run `doctor` against a given HOME and return its combined output.
 ///
 /// `--non-interactive` rather than the `--check-only` these tests used to
@@ -76,7 +56,7 @@ fn scratch_command(binary: &PathBuf, home: &PathBuf) -> Command {
 /// usage error before `doctor` ran. Neither test asserted anything, so both
 /// passed on the usage error — advertised as end-to-end coverage of the
 /// health check while never reaching it.
-fn run_doctor(binary: &PathBuf, home: &PathBuf) -> String {
+fn run_doctor(binary: &Path, home: &Path) -> String {
     let output = scratch_command(binary, home)
         .arg("doctor")
         .arg("--non-interactive")

@@ -3,17 +3,20 @@
 //! These tests verify that RustyClaw's CLI matches expected behavior and that
 //! help text remains stable across versions.
 
-use std::process::Command;
+mod common;
 
 /// Helper to run rustyclaw with args and capture output
 fn run_rustyclaw(args: &[&str]) -> (String, String, i32) {
     // Cargo builds the binary as a dependency of this test and hands over its
     // path, so there is no guessing at a profile directory and no fallback to
     // `cargo run` (which would recurse into a fresh build from inside one).
-    let output = Command::new(env!("CARGO_BIN_EXE_rustyclaw"))
-        .args(args)
-        .output()
-        .expect("Failed to execute rustyclaw binary");
+    let output = common::scratch_command(
+        std::path::Path::new(env!("CARGO_BIN_EXE_rustyclaw")),
+        &common::scratch_home("conformance"),
+    )
+    .args(args)
+    .output()
+    .expect("Failed to execute rustyclaw binary");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
