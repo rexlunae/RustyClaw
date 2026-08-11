@@ -1849,66 +1849,95 @@ pub fn App() -> Element {
     }
 }
 
+/// Kind of inline-renderable media attachment (image or audio), inferred
+/// from the file extension. Everything else stays as text context embedded
+/// in the prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineMediaKind {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+    Bmp,
+    Svg,
+    Avif,
+    Ico,
+    Mp3,
+    Wav,
+    Ogg,
+    Flac,
+    M4a,
+    Aac,
+    Opus,
+    Webm,
+}
+
+impl InlineMediaKind {
+    /// Classify a path by extension (case-insensitive). `None` for anything
+    /// that should stay as prompt context.
+    fn from_path(path: &str) -> Option<Self> {
+        let ext = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_ascii_lowercase();
+        Some(match ext.as_str() {
+            "png" => Self::Png,
+            "jpg" | "jpeg" => Self::Jpeg,
+            "gif" => Self::Gif,
+            "webp" => Self::Webp,
+            "bmp" => Self::Bmp,
+            "svg" => Self::Svg,
+            "avif" => Self::Avif,
+            "ico" => Self::Ico,
+            "mp3" => Self::Mp3,
+            "wav" => Self::Wav,
+            "ogg" | "oga" => Self::Ogg,
+            "flac" => Self::Flac,
+            "m4a" => Self::M4a,
+            "aac" => Self::Aac,
+            "opus" => Self::Opus,
+            "webm" => Self::Webm,
+            _ => return None,
+        })
+    }
+
+    /// MIME type for the `data:` URI the transcript builds and for the
+    /// persisted media ref.
+    fn mime(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::Webp => "image/webp",
+            Self::Bmp => "image/bmp",
+            Self::Svg => "image/svg+xml",
+            Self::Avif => "image/avif",
+            Self::Ico => "image/x-icon",
+            Self::Mp3 => "audio/mpeg",
+            Self::Wav => "audio/wav",
+            Self::Ogg => "audio/ogg",
+            Self::Flac => "audio/flac",
+            Self::M4a => "audio/mp4",
+            Self::Aac => "audio/aac",
+            Self::Opus => "audio/opus",
+            Self::Webm => "audio/webm",
+        }
+    }
+}
+
 /// Whether a file attachment can render inline (image / audio). Everything
 /// else stays as text context embedded in the prompt.
 fn is_inline_media_path(path: &str) -> bool {
-    matches!(
-        std::path::Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some(
-            "png"
-                | "jpg"
-                | "jpeg"
-                | "gif"
-                | "webp"
-                | "bmp"
-                | "svg"
-                | "avif"
-                | "ico"
-                | "mp3"
-                | "wav"
-                | "ogg"
-                | "oga"
-                | "flac"
-                | "m4a"
-                | "aac"
-                | "opus"
-                | "webm"
-        )
-    )
+    InlineMediaKind::from_path(path).is_some()
 }
 
 /// MIME type for an inline-media file path; used for the `data:` URI the
-/// transcript builds and for the persisted ref.
+/// transcript builds and for the persisted ref. Unknown extensions fall
+/// back to the generic binary type so callers can still store a ref.
 fn mime_for_path(path: &str) -> String {
-    match std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("bmp") => "image/bmp",
-        Some("svg") => "image/svg+xml",
-        Some("avif") => "image/avif",
-        Some("ico") => "image/x-icon",
-        Some("mp3") => "audio/mpeg",
-        Some("wav") => "audio/wav",
-        Some("ogg") | Some("oga") => "audio/ogg",
-        Some("flac") => "audio/flac",
-        Some("m4a") => "audio/mp4",
-        Some("aac") => "audio/aac",
-        Some("opus") => "audio/opus",
-        Some("webm") => "audio/webm",
-        _ => "application/octet-stream",
-    }
-    .to_string()
+    InlineMediaKind::from_path(path)
+        .map(|kind| kind.mime().to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_string())
 }
 
 /// Build a [`MediaRef`] from an attachment the user picked in the file
