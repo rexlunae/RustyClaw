@@ -1,10 +1,5 @@
 //! Isolation for tests that run the real `rustyclaw` binary.
 //!
-//! Each integration test binary compiles this module separately, so a helper
-//! only some of them use reads as dead code in the rest.
-#![allow(dead_code)]
-//!
-//!
 //! Every CLI test spawns the shipped binary, and the binary reads a real
 //! installation unless told otherwise. `exit_codes.rs` ran `gateway stop`
 //! with the developer's own `HOME`, so the binary resolved `~/.rustyclaw`,
@@ -16,6 +11,10 @@
 //! The helper lives here rather than in each test file because the same
 //! function already existed in `e2e.rs` and the other three files did not
 //! have it. One copy cannot drift from another.
+
+// Each integration test binary compiles this module separately, so a helper
+// only some of them use reads as dead code in the rest.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
