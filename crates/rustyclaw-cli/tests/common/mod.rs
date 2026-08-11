@@ -49,6 +49,22 @@ pub fn scratch_command(binary: &Path, home: &Path) -> Command {
     // developer's real installation in reach and the stop test still kills
     // their gateway. The CI matrix builds Windows targets.
     cmd.env("USERPROFILE", home);
+    // …and on Windows even that is not enough: `dirs` 6.x resolves the home
+    // directory with `SHGetKnownFolderPath(FOLDERID_Profile)` and never reads
+    // `USERPROFILE`, so no environment variable can move it. Pin the settings
+    // directory outright instead of inferring it from a home that two
+    // platforms disagree about.
+    //
+    // `.rustyclaw` under the scratch home is exactly what `Config::default`
+    // would derive on Unix (`home_dir.join(".rustyclaw")`), so this pins the
+    // existing behaviour rather than changing it — while making Windows agree.
+    // This is the variable the loop below used to merely clear; clearing it
+    // fell back to the platform guess, which is the whole problem.
+    // Passed as the flag, not the variable: clap prints `[env: VAR=value]` in
+    // `--help`, so *setting* any of these rewrites the help text the golden
+    // files pin. `--settings-dir` is `global = true`, so it holds for every
+    // subcommand, and callers' own args are appended after it.
+    cmd.arg("--settings-dir").arg(home.join(".rustyclaw"));
     // Nothing on the `gateway stop` path uses these, but `config_dir`,
     // `data_dir` and `cache_dir` are reached elsewhere in the tree (SSH
     // known_hosts, model caches, messenger state). Redirected here so the
