@@ -7,6 +7,11 @@
 //! the desktop crate because the crate's types pull in `dioxus`, while
 //! `rustyclaw-view` stays framework-agnostic for the TUI.
 
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use dioxus_genai_chat::{
     ChatMessage as GcChatMessage, ChatMessagePayload, ChatRole, ChatTranscript, ContextItem,
     ContextKind, Document, DocumentKind, MediaAudio, MediaImage, MessageAction, Reasoning,
@@ -17,6 +22,57 @@ use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ChatMessage;
 use rustyclaw_view::serde_json;
 use rustyclaw_view::{ChatSurfaceData, PromptAttachment, PromptAttachmentKind};
+
+/// Paths the desktop itself attached in this session, as canonical paths.
+///
+/// `MediaRef.local_path` is not client-controlled data: it is echoed back
+/// from the gateway's thread history, so any party able to write a message
+/// into a thread could set it. Inlining an arbitrary `local_path` would let
+/// such a ref read any file on this machine into the webview. Only files the
+/// user actually picked in this desktop session are ever read.
+static TRUSTED_LOCAL_PATHS: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Record a file the desktop attached in this session so its media refs can
+/// be rendered inline (and so its `local_path` is trusted).
+pub fn trust_local_attachment(path: &str) {
+    let canonical = Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path));
+    if let Ok(mut set) = TRUSTED_LOCAL_PATHS.lock() {
+        set.insert(canonical);
+    }
+}
+
+fn is_trusted_local_path(path: &str) -> bool {
+    let canonical = Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path));
+    TRUSTED_LOCAL_PATHS
+        .lock()
+        .map(|set| set.contains(&canonical))
+        .unwrap_or(false)
+}
+
+/// Cache of encoded data URIs keyed by (canonical path, mtime, length).
+///
+/// The transcript is rebuilt on every render — including every chunk of a
+/// streaming reply — so reading and base64-encoding every attachment on each
+/// repaint would stall the window. Files are read once per (mtime, length)
+/// fingerprint; the cap keeps the cache from growing without bound.
+static DATA_URI_CACHE: LazyLock<Mutex<HashMap<(PathBuf, u64, u64), String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const INLINE_CAP_BYTES: u64 = 25 * 1024 * 1024;
+const DATA_URI_CACHE_MAX: usize = 64;
+
+fn mtime_nanos(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t: SystemTime| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
 
 /// Build the transcript shown by `ChatSurface` from the live message list and
 /// the current busy state. `awaiting_user` is set while an `ask_user` prompt
@@ -91,27 +147,51 @@ fn copy_only_actions() -> Vec<MessageAction> {
 }
 
 /// Resolve a media ref to a source the webview can load directly:
-/// - a `local_path` that exists on *this* machine becomes a `data:` URI
-///   (the desktop sent it from here, so it can read it back; the gateway's
-///   cache paths live on the gateway and won't exist here),
+/// - a `local_path` this desktop itself attached becomes a `data:` URI
+///   (read once and cached; only files the user picked are trusted — a
+///   `local_path` echoed from thread history is not client-controlled),
 /// - otherwise a `url` (remote media, e.g. messenger CDN) is used as-is,
 /// - otherwise `None` — the caller falls back to a name-only document tile.
 ///
 /// Files larger than the cap are not inlined: a multi-hundred-MB data URI
-/// would freeze the webview. They still render as a downloadable document.
+/// would freeze the webview. The cap is enforced against the file's actual
+/// length (via metadata), never the optional recorded `size`. They still
+/// render as a downloadable document.
 fn media_src(media: &MediaRef) -> Option<String> {
-    const INLINE_CAP_BYTES: usize = 25 * 1024 * 1024;
-
-    if let Some(path) = &media.local_path
-        && std::path::Path::new(path).is_file()
-        && !media.size.map(|s| s > INLINE_CAP_BYTES).unwrap_or(false)
-        && let Ok(bytes) = std::fs::read(path)
-    {
-        use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        return Some(format!("data:{};base64,{}", media.mime_type, encoded));
+    let path = media.local_path.as_deref()?;
+    if !is_trusted_local_path(path) {
+        return media.url.clone();
     }
-    media.url.clone()
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > INLINE_CAP_BYTES {
+        return media.url.clone();
+    }
+
+    let key = (
+        Path::new(path).to_path_buf(),
+        mtime_nanos(&meta),
+        meta.len(),
+    );
+    if let Some(uri) = DATA_URI_CACHE
+        .lock()
+        .ok()
+        .and_then(|c| c.get(&key).cloned())
+    {
+        return Some(uri);
+    }
+
+    let bytes = std::fs::read(path).ok()?;
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let uri = format!("data:{};base64,{}", media.mime_type, encoded);
+
+    if let Ok(mut cache) = DATA_URI_CACHE.lock() {
+        if cache.len() >= DATA_URI_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(key, uri.clone());
+    }
+    Some(uri)
 }
 
 /// Map one media ref onto a `ChatMessagePayload` for the transcript.
@@ -133,6 +213,15 @@ fn media_payload(media: &MediaRef, message_id: Option<&str>, index: usize) -> Ch
 
     // Everything else (or media whose bytes aren't reachable) renders as a
     // document tile: icon + name, expanding to a link when a URL exists.
+    // Untrusted local paths (echoed from thread history) are never used as
+    // the link target — only URLs and this session's own attachments.
+    let doc_url = media.url.clone().or_else(|| {
+        media
+            .local_path
+            .as_deref()
+            .filter(|p| is_trusted_local_path(p))
+            .map(ToString::to_string)
+    });
     let doc = Document {
         id: message_id
             .map(|id| format!("{id}-{index}"))
@@ -140,7 +229,7 @@ fn media_payload(media: &MediaRef, message_id: Option<&str>, index: usize) -> Ch
         name,
         kind: DocumentKind::Other,
         image: None,
-        url: media.url.clone().or_else(|| media.local_path.clone()),
+        url: doc_url,
         text: None,
         data: None,
     };
@@ -884,6 +973,8 @@ mod tests {
         media.filename = Some("chart.png".into());
         media.size = Some(12);
         media.local_path = Some(path.display().to_string());
+        // The desktop itself attached this file, so its local_path is trusted.
+        trust_local_attachment(&path.display().to_string());
 
         let mut transcript = ChatTranscript::default();
         push_message(&mut transcript, &user_message_with_media(vec![media]));
@@ -923,6 +1014,7 @@ mod tests {
         media.filename = Some("note.ogg".into());
         media.size = Some(9);
         media.local_path = Some(path.display().to_string());
+        trust_local_attachment(&path.display().to_string());
 
         let mut transcript = ChatTranscript::default();
         push_message(&mut transcript, &user_message_with_media(vec![media]));
@@ -971,5 +1063,88 @@ mod tests {
 
         let src = media_src(&media).expect("url fallback");
         assert_eq!(src, "https://cdn.example/photo.jpg");
+    }
+
+    /// A `local_path` echoed back from thread history is not client
+    /// controlled: the desktop must never read a file it did not itself
+    /// attach, even if the path exists on this machine (SEC).
+    #[test]
+    fn untrusted_local_path_is_never_inlined() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustyclaw-media-untrusted-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nsecret").unwrap();
+
+        // Deliberately NOT trust_local_attachment — this ref is forged.
+        let mut media = MediaRef::new("image/png".into());
+        media.filename = Some("secret.png".into());
+        media.size = Some(14);
+        media.local_path = Some(path.display().to_string());
+
+        let src = media_src(&media);
+        assert_eq!(src, None, "untrusted local path must not become a data URI");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The inline cap is enforced against the file's real length, so a ref
+    /// with no recorded `size` (metadata failure, foreign client) cannot
+    /// smuggle a multi-hundred-MB data URI into the webview.
+    #[test]
+    fn size_cap_uses_real_file_length_even_when_size_is_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustyclaw-media-cap-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.webp");
+        std::fs::write(&path, vec![0u8; (INLINE_CAP_BYTES + 1) as usize]).unwrap();
+        trust_local_attachment(&path.display().to_string());
+
+        // size is None: the old code would have inlined the whole file.
+        let mut media = MediaRef::new("image/webp".into());
+        media.filename = Some("big.webp".into());
+        media.local_path = Some(path.display().to_string());
+
+        let src = media_src(&media);
+        assert_eq!(
+            src, None,
+            "over-cap file must not be inlined even with size=None"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A trusted, under-cap file whose recorded `size` is wrong still
+    /// inlines — the real length is what matters.
+    #[test]
+    fn trusted_small_file_inlines_despite_wrong_recorded_size() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustyclaw-media-size-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("small.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nsmall").unwrap();
+        trust_local_attachment(&path.display().to_string());
+
+        let mut media = MediaRef::new("image/png".into());
+        media.filename = Some("small.png".into());
+        media.size = Some(9_999_999); // lies; real file is tiny
+        media.local_path = Some(path.display().to_string());
+
+        let src = media_src(&media).expect("small trusted file inlines");
+        assert!(src.starts_with("data:image/png;base64,"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
