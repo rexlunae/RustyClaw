@@ -890,41 +890,25 @@ async fn mcp_connect(
     url: Option<String>,
     env: Vec<(String, String)>,
 ) -> ServerFrame {
-    use rustyclaw_core::mcp::McpServerConfig;
+    use rustyclaw_core::mcp::{McpServerConfig, McpTransport};
 
     let result: Result<McpServerDto, String> = async {
-        if url.is_some() {
-            return Err(
-                "URL-based MCP transports are not yet supported — use a stdio command".into(),
-            );
-        }
         let mgr =
             rustyclaw_core::runtime_ctx::get_mcp_manager().ok_or("MCP manager not initialised")?;
 
         // An explicit command defines (and persists) the server; otherwise
-        // the name must refer to a configured server.
-        let server_cfg = match command {
+        // the name must refer to a configured server. A url switches the
+        // server to the HTTP transport (no command needed).
+        let mut server_cfg = match command {
             Some(cmdline) => {
                 let mut parts = cmdline.split_whitespace().map(String::from);
                 let command = parts.next().ok_or("Empty MCP server command")?;
-                let cfg = McpServerConfig {
+                McpServerConfig {
                     command,
                     args: parts.collect(),
                     env: env.into_iter().collect(),
                     ..Default::default()
-                };
-                config.mcp.servers.insert(name.clone(), cfg.clone());
-                // Persisted through the shared config, not this connection's
-                // snapshot — serialising the snapshot erases settings other
-                // connections saved since it was taken.
-                {
-                    let mut shared = shared_config.write().await;
-                    shared.mcp.servers.insert(name.clone(), cfg.clone());
-                    if let Err(e) = shared.save(None) {
-                        tracing::warn!(error = %e, "Failed to persist MCP server config");
-                    }
                 }
-                cfg
             }
             None => config
                 .mcp
@@ -933,6 +917,22 @@ async fn mcp_connect(
                 .cloned()
                 .ok_or_else(|| format!("Unknown MCP server: '{}'", name))?,
         };
+        if let Some(url) = url {
+            server_cfg.transport = McpTransport::Http;
+            server_cfg.url = Some(url);
+        }
+
+        config.mcp.servers.insert(name.clone(), server_cfg.clone());
+        // Persisted through the shared config, not this connection's
+        // snapshot — serialising the snapshot erases settings other
+        // connections saved since it was taken.
+        {
+            let mut shared = shared_config.write().await;
+            shared.mcp.servers.insert(name.clone(), server_cfg.clone());
+            if let Err(e) = shared.save(None) {
+                tracing::warn!(error = %e, "Failed to persist MCP server config");
+            }
+        }
 
         let mgr = mgr.lock().await;
         mgr.connect(&name, &server_cfg)
