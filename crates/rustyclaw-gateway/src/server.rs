@@ -39,6 +39,29 @@ use crate::{
 static PROCESS_START: std::sync::LazyLock<std::time::SystemTime> =
     std::sync::LazyLock::new(std::time::SystemTime::now);
 
+/// How many times a crashed turn is resumed before the thread is given up on.
+///
+/// Two, so a genuine one-off crash still gets its answer, while a turn that
+/// reliably takes the gateway down with it stops taking it down. The failure
+/// mode this bounds is not "one thread does not finish" but "the gateway
+/// cannot be started at all", because every start resumes the turn that ends
+/// it.
+const MAX_RESUME_ATTEMPTS: u32 = 2;
+
+/// Whether a crashed turn should be restarted rather than written off.
+///
+/// Both halves have to be asked here, in the predicate that splits resumable
+/// from abandoned. Screening capped threads out earlier — before the split —
+/// drops them from *both* buckets, and only the abandoned bucket writes the
+/// overdue stop indicator. The thread then keeps its unmatched `TurnStarted`
+/// forever: `open_turn` is re-derived from the log on every load, so it
+/// reports as streaming with the composer gated, and nothing is left that
+/// could ever close it. Refusing to resume a turn has to mean *finishing* it,
+/// not forgetting it.
+fn should_resume(t: &rustyclaw_core::threads::AgentThread) -> bool {
+    !t.messages.is_empty() && t.resume_attempts < MAX_RESUME_ATTEMPTS
+}
+
 /// Turns already resumed by this process, keyed by (agent, thread). Two
 /// clients connecting together would otherwise each load the same open
 /// marker from disk and both restart the same interrupted turn.
@@ -962,7 +985,7 @@ pub(crate) async fn handle_connection(
                 .collect();
             crashed
                 .into_iter()
-                .partition(|id| tm.get(*id).is_some_and(|t| !t.messages.is_empty()))
+                .partition(|id| tm.get(*id).is_some_and(should_resume))
         };
         // A crashed turn with no recorded conversation has nothing to
         // resume — but leaving its marker open would report the thread as
@@ -1005,9 +1028,19 @@ pub(crate) async fn handle_connection(
             .await?;
             {
                 let mut tm = agent_session.thread_mgr.lock().await;
+                // Counted before the turn runs, and written out by the same
+                // persist below. If this attempt is the one that kills the
+                // gateway, the increment has to have already reached disk —
+                // counting afterwards would leave it at zero every time and
+                // the cap would never bite.
+                if let Some(t) = tm.get_mut(thread) {
+                    t.resume_attempts += 1;
+                }
                 // The orphaned marker gets its overdue stop indicator, and
                 // the resumed turn opens its own — the log keeps the crash
-                // visible instead of papering over it.
+                // visible instead of papering over it. `end_turn(.., false)`
+                // does not clear the count; only a turn that actually
+                // finishes does.
                 tm.end_turn(thread, false);
                 tm.begin_turn(thread);
                 crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
@@ -2721,6 +2754,54 @@ async fn handle_provider_model_list(
 
 #[cfg(test)]
 mod tests {
+    /// Every crashed thread must land in one bucket or the other.
+    ///
+    /// The first version of the cap screened capped threads out *before* the
+    /// resumable/abandoned split, so they fell into neither — and only the
+    /// abandoned bucket writes the overdue stop indicator. The thread kept its
+    /// unmatched `TurnStarted` forever, reported as streaming with the
+    /// composer gated, and nothing left could close it. Refusing to resume has
+    /// to mean finishing the turn, not forgetting it.
+    #[test]
+    fn a_capped_thread_is_abandoned_rather_than_dropped() {
+        use rustyclaw_core::threads::ThreadManager;
+
+        let mut tm = ThreadManager::new();
+        let id = tm.create_thread("a thread");
+        tm.add_message(id, rustyclaw_core::threads::MessageRole::User, "hello");
+
+        let under = tm.get(id).expect("thread");
+        assert!(
+            super::should_resume(under),
+            "a thread with messages and no attempts should resume"
+        );
+
+        tm.get_mut(id).expect("thread").resume_attempts = super::MAX_RESUME_ATTEMPTS;
+        let capped = tm.get(id).expect("thread");
+        assert!(
+            !super::should_resume(capped),
+            "a capped thread must not be resumed"
+        );
+        // The partition sends everything `should_resume` rejects to the
+        // abandoned bucket, which is what closes the turn — so "not resumed"
+        // here means "closed", not "ignored".
+        assert!(
+            !capped.messages.is_empty(),
+            "the capped thread still has its conversation, so it is only the \
+             cap that excluded it — that is the case that used to vanish"
+        );
+    }
+
+    /// An empty crashed turn is still abandoned, as it was before the cap.
+    #[test]
+    fn an_empty_crashed_turn_is_still_abandoned() {
+        use rustyclaw_core::threads::ThreadManager;
+
+        let mut tm = ThreadManager::new();
+        let id = tm.create_thread("nothing said yet");
+        assert!(!super::should_resume(tm.get(id).expect("thread")));
+    }
+
     use super::*;
     use crate::listen::handle_transport_connection;
     use async_trait::async_trait;

@@ -88,6 +88,12 @@ struct ThreadMeta {
     share_context: bool,
     #[serde(default)]
     memory_flushed: bool,
+    /// See [`AgentThread::resume_attempts`]. Persisted here precisely because
+    /// `open_turn` is not: the marker is derived from the log, so a thread
+    /// that crashes mid-turn always looks resumable, and only a durable count
+    /// can tell a first attempt from a fifth.
+    #[serde(default)]
+    resume_attempts: u32,
 }
 
 impl From<&AgentThread> for ThreadMeta {
@@ -110,6 +116,7 @@ impl From<&AgentThread> for ThreadMeta {
             pinned: t.pinned,
             share_context: t.share_context,
             memory_flushed: t.memory_flushed,
+            resume_attempts: t.resume_attempts,
         }
     }
 }
@@ -135,6 +142,7 @@ impl From<ThreadMeta> for AgentThread {
             pinned: m.pinned,
             share_context: m.share_context,
             memory_flushed: m.memory_flushed,
+            resume_attempts: m.resume_attempts,
             open_turn: None,
             compacting: false,
             pending_log: Vec::new(),
@@ -485,6 +493,7 @@ fn fallback_meta(id: ThreadId) -> ThreadMeta {
         pinned: false,
         share_context: true,
         memory_flushed: false,
+        resume_attempts: 0,
     }
 }
 
@@ -533,6 +542,67 @@ use crate::persist::write_atomically;
 
 #[cfg(test)]
 mod tests {
+    /// The count has to survive a reload, because the thing it guards against
+    /// is the gateway dying. `open_turn` is `#[serde(skip)]` — derived from
+    /// the log — so a crashed thread always looks resumable on load; the
+    /// count is the only thing that can distinguish a first attempt from a
+    /// third. If it did not persist, every start would read zero and the
+    /// resume loop would have no exit.
+    #[test]
+    fn the_resume_count_survives_a_reload() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = ThreadStore::at_legacy_path(&dir.path().join("threads.json"));
+
+        let id = {
+            let mut tm = ThreadManager::new();
+            let id = tm.create_thread("a thread");
+            tm.get_mut(id).expect("the thread").resume_attempts = 2;
+            store.persist(&mut tm).expect("persists");
+            id
+        };
+
+        let reloaded = store.load().expect("loads");
+        assert_eq!(
+            reloaded.get(id).expect("the thread").resume_attempts,
+            2,
+            "the count did not survive the reload, so the cap can never bite"
+        );
+    }
+
+    /// A turn that finishes clears the history; one that fails does not.
+    ///
+    /// The reset lives in `end_turn(ok = true)` and deliberately not in
+    /// `begin_turn`, because the resume path opens a turn marker of its own —
+    /// resetting there would zero the count on the very attempt being counted.
+    #[test]
+    fn only_a_clean_finish_clears_the_resume_count() {
+        let mut tm = ThreadManager::new();
+        let id = tm.create_thread("a thread");
+
+        tm.get_mut(id).expect("thread").resume_attempts = 2;
+        tm.begin_turn(id);
+        assert_eq!(
+            tm.get(id).expect("thread").resume_attempts,
+            2,
+            "begin_turn must not reset the count — resume calls it"
+        );
+
+        tm.end_turn(id, false);
+        assert_eq!(
+            tm.get(id).expect("thread").resume_attempts,
+            2,
+            "a failed turn must not reset the count"
+        );
+
+        tm.begin_turn(id);
+        tm.end_turn(id, true);
+        assert_eq!(
+            tm.get(id).expect("thread").resume_attempts,
+            0,
+            "a turn that finished should clear the crash history"
+        );
+    }
+
     use super::*;
     use crate::threads::MessageRole;
 
