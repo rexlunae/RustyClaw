@@ -494,6 +494,7 @@ impl GatewayClient {
             thread_id: None,
             client_kind: None,
             message_id: None,
+            media: Vec::new(),
         })
         .await
     }
@@ -517,6 +518,28 @@ impl GatewayClient {
             thread_id,
             client_kind,
             message_id,
+            media: Vec::new(),
+        })
+        .await
+    }
+
+    /// Send a chat message with media attachments (images, audio clips,
+    /// files). `media` refs are persisted with the message and echoed back
+    /// in history so clients can re-render them.
+    pub async fn chat_in_thread_with_media(
+        &self,
+        message: String,
+        media: Vec<crate::gateway::protocol::types::MediaRef>,
+        thread_id: Option<u64>,
+        client_kind: Option<SessionOrigin>,
+        message_id: Option<String>,
+    ) -> Result<()> {
+        self.send(GatewayCommand::Chat {
+            message,
+            thread_id,
+            client_kind,
+            message_id,
+            media,
         })
         .await
     }
@@ -669,6 +692,7 @@ mod tests {
                 thread_id: None,
                 client_kind: None,
                 message_id: None,
+                media: Vec::new(),
             }) {
                 Ok(()) => tokio::task::yield_now().await,
                 Err(e) => {

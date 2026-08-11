@@ -977,6 +977,59 @@ mod serialization {
         }
     }
 
+    /// A user message with media refs survives the bincode wire trip, so the
+    /// desktop can attach images/audio and the gateway can echo them back in
+    /// history.
+    #[test]
+    fn a_chat_frame_with_media_survives_the_wire() {
+        use crate::gateway::protocol::types::MediaRef;
+
+        let mut img = MediaRef::new("image/png".into());
+        img.filename = Some("chart.png".into());
+        img.local_path = Some("/home/user/chart.png".into());
+        img.size = Some(1234);
+        let mut clip = MediaRef::new("audio/ogg".into());
+        clip.filename = Some("note.ogg".into());
+        clip.url = Some("https://cdn.example/note.ogg".into());
+
+        let mut user = crate::gateway::protocol::types::ChatMessage::user_with_media(
+            "see attached",
+            vec![img, clip],
+        );
+        user.id = Some("u-42".into());
+
+        let frame = ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![user],
+                thread_id: Some(3),
+                client_kind: None,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ClientFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ClientPayload::Chat { messages, .. } => {
+                assert_eq!(messages.len(), 1);
+                let m = &messages[0];
+                assert_eq!(m.id.as_deref(), Some("u-42"));
+                assert_eq!(m.content, "see attached");
+                let media = m.media.as_ref().expect("media survives the wire");
+                assert_eq!(media.len(), 2);
+                assert_eq!(media[0].mime_type, "image/png");
+                assert_eq!(media[0].filename.as_deref(), Some("chart.png"));
+                assert_eq!(media[0].local_path.as_deref(), Some("/home/user/chart.png"));
+                assert_eq!(media[1].mime_type, "audio/ogg");
+                assert_eq!(
+                    media[1].url.as_deref(),
+                    Some("https://cdn.example/note.ogg")
+                );
+            }
+            other => panic!("Expected Chat payload, got {other:?}"),
+        }
+    }
+
     /// The wire strings for `SessionOrigin` are part of the protocol: they
     /// must not change under refactors, or clients on the other end of an
     /// old frame stop matching.

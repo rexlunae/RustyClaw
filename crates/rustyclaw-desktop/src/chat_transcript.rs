@@ -9,9 +9,10 @@
 
 use dioxus_genai_chat::{
     ChatMessage as GcChatMessage, ChatMessagePayload, ChatRole, ChatTranscript, ContextItem,
-    ContextKind, MessageAction, Reasoning, ReasoningStep, SearchMatch, StepStatus, ToolCall,
-    ToolCallHint, ToolCallStatus, ToolResultHint,
+    ContextKind, Document, DocumentKind, MediaAudio, MediaImage, MessageAction, Reasoning,
+    ReasoningStep, SearchMatch, StepStatus, ToolCall, ToolCallHint, ToolCallStatus, ToolResultHint,
 };
+use rustyclaw_core::gateway::protocol::types::MediaRef;
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ChatMessage;
 use rustyclaw_view::serde_json;
@@ -87,6 +88,63 @@ fn push_auxiliary(transcript: &mut ChatTranscript, role: ChatRole, payload: Chat
 /// Action set for entries with no deletable record: copy, nothing else.
 fn copy_only_actions() -> Vec<MessageAction> {
     vec![MessageAction::copy()]
+}
+
+/// Resolve a media ref to a source the webview can load directly:
+/// - a `local_path` that exists on *this* machine becomes a `data:` URI
+///   (the desktop sent it from here, so it can read it back; the gateway's
+///   cache paths live on the gateway and won't exist here),
+/// - otherwise a `url` (remote media, e.g. messenger CDN) is used as-is,
+/// - otherwise `None` — the caller falls back to a name-only document tile.
+///
+/// Files larger than the cap are not inlined: a multi-hundred-MB data URI
+/// would freeze the webview. They still render as a downloadable document.
+fn media_src(media: &MediaRef) -> Option<String> {
+    const INLINE_CAP_BYTES: usize = 25 * 1024 * 1024;
+
+    if let Some(path) = &media.local_path
+        && std::path::Path::new(path).is_file()
+        && !media.size.map(|s| s > INLINE_CAP_BYTES).unwrap_or(false)
+        && let Ok(bytes) = std::fs::read(path)
+    {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        return Some(format!("data:{};base64,{}", media.mime_type, encoded));
+    }
+    media.url.clone()
+}
+
+/// Map one media ref onto a `ChatMessagePayload` for the transcript.
+fn media_payload(media: &MediaRef, message_id: Option<&str>, index: usize) -> ChatMessagePayload {
+    let name = media
+        .filename
+        .clone()
+        .unwrap_or_else(|| format!("attachment-{}", index + 1));
+
+    match media_src(media) {
+        Some(src) if media.mime_type.starts_with("image/") => {
+            return ChatMessagePayload::Image(MediaImage::new(src).with_alt(name));
+        }
+        Some(src) if media.mime_type.starts_with("audio/") => {
+            return ChatMessagePayload::Audio(MediaAudio::new(src).with_title(name));
+        }
+        _ => {}
+    }
+
+    // Everything else (or media whose bytes aren't reachable) renders as a
+    // document tile: icon + name, expanding to a link when a URL exists.
+    let doc = Document {
+        id: message_id
+            .map(|id| format!("{id}-{index}"))
+            .unwrap_or_else(|| format!("media-{index}")),
+        name,
+        kind: DocumentKind::Other,
+        image: None,
+        url: media.url.clone().or_else(|| media.local_path.clone()),
+        text: None,
+        data: None,
+    };
+    ChatMessagePayload::Documents(vec![doc])
 }
 
 /// Push one core message (text bubble + any tool calls/results) onto the transcript.
@@ -167,7 +225,27 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
     );
     if !is_empty_text {
         let mut gc = GcChatMessage {
-            role,
+            role: role.clone(),
+            payload,
+            id: None,
+            actions: Vec::new(),
+        };
+        if deletable {
+            gc = gc.with_id(msg.id.clone());
+        } else {
+            gc.actions = copy_only_actions();
+        }
+        transcript.messages.push(gc);
+    }
+
+    // Media attachments render as their own bubbles beside the text:
+    // images inline (click to enlarge), audio as a player, everything else
+    // as a document gallery. All share the message's id, so delete removes
+    // the whole record from wherever the bubble sits.
+    for (index, media) in msg.media.iter().enumerate() {
+        let payload = media_payload(media, Some(msg.id.as_str()), index);
+        let mut gc = GcChatMessage {
+            role: role.clone(),
             payload,
             id: None,
             actions: Vec::new(),
@@ -772,5 +850,126 @@ mod ask_user_tests {
             ToolCallHint::Shell { command, .. } => assert_eq!(command, "ls -la"),
             other => panic!("expected Shell hint, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustyclaw_core::gateway::protocol::types::MediaRef;
+
+    fn user_message_with_media(media: Vec<MediaRef>) -> ChatMessage {
+        let mut msg = ChatMessage::user("see attached");
+        msg.id = "msg-1".to_string();
+        msg.media = media;
+        msg
+    }
+
+    /// A local image the desktop itself attached becomes an inline `Image`
+    /// bubble with a data URI (the transcript can read the file back).
+    #[test]
+    fn a_local_image_becomes_an_inline_image_bubble() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustyclaw-media-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chart.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nfake").unwrap();
+
+        let mut media = MediaRef::new("image/png".into());
+        media.filename = Some("chart.png".into());
+        media.size = Some(12);
+        media.local_path = Some(path.display().to_string());
+
+        let mut transcript = ChatTranscript::default();
+        push_message(&mut transcript, &user_message_with_media(vec![media]));
+        std::fs::remove_dir_all(&dir).ok();
+
+        let bubbles: Vec<_> = transcript
+            .messages
+            .iter()
+            .filter(|m| matches!(m.payload, ChatMessagePayload::Image(_)))
+            .collect();
+        assert_eq!(bubbles.len(), 1, "one image bubble");
+        match &bubbles[0].payload {
+            ChatMessagePayload::Image(image) => {
+                assert!(image.url.starts_with("data:image/png;base64,"));
+                assert_eq!(image.alt, "chart.png");
+            }
+            other => panic!("expected Image payload, got {other:?}"),
+        }
+        assert_eq!(bubbles[0].id.as_deref(), Some("msg-1"));
+    }
+
+    /// A local audio clip becomes an inline `Audio` player bubble.
+    #[test]
+    fn a_local_audio_clip_becomes_an_audio_player_bubble() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustyclaw-media-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.ogg");
+        std::fs::write(&path, b"OggS fake").unwrap();
+
+        let mut media = MediaRef::new("audio/ogg".into());
+        media.filename = Some("note.ogg".into());
+        media.size = Some(9);
+        media.local_path = Some(path.display().to_string());
+
+        let mut transcript = ChatTranscript::default();
+        push_message(&mut transcript, &user_message_with_media(vec![media]));
+        std::fs::remove_dir_all(&dir).ok();
+
+        let bubbles: Vec<_> = transcript
+            .messages
+            .iter()
+            .filter(|m| matches!(m.payload, ChatMessagePayload::Audio(_)))
+            .collect();
+        assert_eq!(bubbles.len(), 1, "one audio bubble");
+        match &bubbles[0].payload {
+            ChatMessagePayload::Audio(audio) => {
+                assert!(audio.url.starts_with("data:audio/ogg;base64,"));
+                assert_eq!(audio.title, "note.ogg");
+            }
+            other => panic!("expected Audio payload, got {other:?}"),
+        }
+    }
+
+    /// Non-image/audio media (or media whose bytes aren't reachable) renders
+    /// as a document tile instead of being dropped.
+    #[test]
+    fn non_inline_media_renders_as_a_document_tile() {
+        let mut media = MediaRef::new("application/pdf".into());
+        media.filename = Some("report.pdf".into());
+        media.url = Some("https://cdn.example/report.pdf".into());
+
+        let mut transcript = ChatTranscript::default();
+        push_message(&mut transcript, &user_message_with_media(vec![media]));
+        transcript
+            .messages
+            .iter()
+            .find(|m| matches!(m.payload, ChatMessagePayload::Documents(_)))
+            .expect("a document gallery bubble");
+    }
+
+    /// A gateway-side cache path the desktop cannot read falls back to the
+    /// URL when one exists — messenger media keeps rendering.
+    #[test]
+    fn unreachable_local_path_falls_back_to_the_url() {
+        let mut media = MediaRef::new("image/jpeg".into());
+        media.filename = Some("photo.jpg".into());
+        media.local_path = Some("/nonexistent/gateway-cache/photo.jpg".into());
+        media.url = Some("https://cdn.example/photo.jpg".into());
+
+        let src = media_src(&media).expect("url fallback");
+        assert_eq!(src, "https://cdn.example/photo.jpg");
     }
 }

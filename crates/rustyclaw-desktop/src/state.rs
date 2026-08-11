@@ -411,13 +411,20 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// Add a user message to the conversation.
-    /// Append the user's own message to the transcript. Returns the message's
+    /// Append the user's own message to the transcript, attaching media refs
+    /// (images, audio clips, files) so the bubble renders the media
+    /// immediately, before the gateway's history reply replaces it with the
+    /// persisted record (which carries the same refs). Returns the message's
     /// stable id, which the caller should hand to the gateway so the bubble
     /// the user sees and the persisted record agree (delete-by-id depends on
     /// the match).
-    pub fn add_user_message(&mut self, content: String) -> String {
-        let msg = ChatMessage::user(content);
+    pub fn add_user_message_with_media(
+        &mut self,
+        content: String,
+        media: Vec<rustyclaw_core::gateway::protocol::types::MediaRef>,
+    ) -> String {
+        let mut msg = ChatMessage::user(content);
+        msg.media = media;
         let id = msg.id.clone();
         self.messages.push_back(msg);
         id
@@ -1351,11 +1358,18 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         role,
-        content: message.display_content(),
+        // Raw content, not `display_content()`: the desktop renders media as
+        // inline bubbles, so the "📎 … /download" placeholder text would just
+        // duplicate the bubble. (The TUI keeps `display_content` — it has no
+        // media rendering and the placeholder is its only attachment signal.)
+        content: message.content.clone(),
         timestamp: chrono::Utc::now(),
         tool_calls,
         is_streaming: false,
         duration_ms: None,
+        // Media refs ride along on the wire; the transcript maps each one to
+        // an inline image / audio player / document bubble.
+        media: message.media.clone().unwrap_or_default(),
     }
 }
 
@@ -1364,6 +1378,23 @@ mod tests {
     use super::*;
     use rustyclaw_core::types::MessageRole;
     use rustyclaw_core::user_prompt_types::PromptType;
+
+    /// Media refs on the wire message land on the UI message, so the
+    /// transcript can render them as inline bubbles.
+    #[test]
+    fn gateway_media_refs_map_onto_the_ui_message() {
+        use rustyclaw_core::gateway::protocol::types::MediaRef;
+
+        let mut media = MediaRef::new("image/png".into());
+        media.filename = Some("chart.png".into());
+        media.local_path = Some("/tmp/chart.png".into());
+
+        let wire = protocol::types::ChatMessage::user_with_media("see attached", vec![media]);
+        let ui = ui_message_from_gateway(wire);
+        assert_eq!(ui.media.len(), 1);
+        assert_eq!(ui.media[0].mime_type, "image/png");
+        assert_eq!(ui.media[0].filename.as_deref(), Some("chart.png"));
+    }
 
     /// Regression test: with extended thinking, the reasoning block folds
     /// when the first answer chunk arrives — the chunk must open a fresh
@@ -2346,7 +2377,7 @@ mod tests {
     fn labelling_the_view_with_its_elected_thread_keeps_its_words() {
         let mut s = idle_state();
         s.foreground_thread_id = None;
-        s.add_user_message("sent before any thread existed".to_string());
+        s.add_user_message_with_media("sent before any thread existed".to_string(), Vec::new());
         s.mark_request_started();
 
         // What StreamStart's adoption does.
@@ -2407,7 +2438,7 @@ mod tests {
     fn labelling_the_view_with_its_elected_thread_keeps_it_working() {
         let mut s = idle_state();
         s.foreground_thread_id = None;
-        s.add_user_message("sent before any thread existed".to_string());
+        s.add_user_message_with_media("sent before any thread existed".to_string(), Vec::new());
         s.mark_request_started();
 
         // What the ThreadsUpdate handler does when the election's
@@ -2468,7 +2499,7 @@ mod tests {
     fn a_foreground_move_onto_a_busy_thread_swaps_the_view() {
         let mut s = idle_state();
         s.foreground_thread_id = Some(1);
-        s.add_user_message("thread one's words".to_string());
+        s.add_user_message_with_media("thread one's words".to_string(), Vec::new());
         // Thread 2 is mid-answer with cached history.
         s.in_flight.insert(2);
         s.thread_messages.insert(

@@ -97,10 +97,11 @@ pub(crate) async fn handle_chat_frame(
                     && (thread.label.is_empty()
                         || thread.label.starts_with("Session #")
                         || thread.label == "Main");
-                thread.add_message_with_id(
+                thread.add_message_with_media(
                     last_user.id.clone(),
                     rustyclaw_core::threads::MessageRole::User,
                     &last_user.content,
+                    last_user.media.clone().unwrap_or_default(),
                 );
                 did_append_user_message = true;
                 if is_first_message {

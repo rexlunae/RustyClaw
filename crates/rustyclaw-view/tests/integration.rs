@@ -23,6 +23,7 @@ fn from_chat_message_preserves_fields() {
         tool_calls: vec![],
         is_streaming: false,
         duration_ms: None,
+        media: vec![],
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, Some("Luthen".into()));
@@ -44,6 +45,7 @@ fn from_chat_message_handles_streaming() {
         tool_calls: vec![],
         is_streaming: true,
         duration_ms: None,
+        media: vec![],
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
@@ -62,6 +64,7 @@ fn from_chat_message_maps_tool_call_role_correctly() {
         tool_calls: vec![],
         is_streaming: false,
         duration_ms: None,
+        media: vec![],
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
@@ -205,6 +208,7 @@ fn empty_content_handled() {
         tool_calls: vec![],
         is_streaming: false,
         duration_ms: None,
+        media: vec![],
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
@@ -263,6 +267,7 @@ fn from_chat_message_preserves_timestamp() {
         tool_calls: vec![],
         is_streaming: false,
         duration_ms: None,
+        media: vec![],
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
