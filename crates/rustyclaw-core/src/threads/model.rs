@@ -208,6 +208,13 @@ pub struct ThreadMessage {
     /// that produced them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Media attachments (images, audio clips, files) referenced by this
+    /// message. Persisted as references (URL / local cache path), not
+    /// inline bytes, so history reloads can re-render them. Optional and
+    /// skipped when absent for backward compatibility with existing
+    /// `threads.json` files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<Vec<crate::gateway::protocol::types::MediaRef>>,
 }
 
 /// Message role.
@@ -564,6 +571,7 @@ impl AgentThread {
             timestamp: SystemTime::now(),
             tool_calls: None,
             tool_call_id: None,
+            media: None,
         });
     }
 
@@ -582,6 +590,29 @@ impl AgentThread {
             timestamp: SystemTime::now(),
             tool_calls: None,
             tool_call_id: None,
+            media: None,
+        });
+    }
+
+    /// Add a message carrying media references (images, audio clips, files).
+    ///
+    /// The refs are persisted with the record so history reloads re-render
+    /// them; the media bytes themselves live outside the thread log.
+    pub fn add_message_with_media(
+        &mut self,
+        id: Option<String>,
+        role: MessageRole,
+        content: impl Into<String>,
+        media: Vec<crate::gateway::protocol::types::MediaRef>,
+    ) {
+        self.push_message(ThreadMessage {
+            id,
+            role,
+            content: content.into(),
+            timestamp: SystemTime::now(),
+            tool_calls: None,
+            tool_call_id: None,
+            media: Some(media),
         });
     }
 
@@ -670,6 +701,7 @@ impl AgentThread {
             timestamp: SystemTime::now(),
             tool_calls: Some(tool_calls),
             tool_call_id: None,
+            media: None,
         });
     }
 
@@ -682,6 +714,7 @@ impl AgentThread {
             timestamp: SystemTime::now(),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
+            media: None,
         });
     }
 

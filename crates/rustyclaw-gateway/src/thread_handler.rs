@@ -453,31 +453,11 @@ pub(crate) async fn handle_thread_history(
     let tm = thread_mgr.lock().await;
     let (ok, messages, error) = match tm.get(target_id) {
         Some(thread) => {
-            let wire: Vec<ChatMessage> = thread
-                .messages
-                .iter()
-                .map(|m| {
-                    let role = match m.role {
-                        rustyclaw_core::threads::MessageRole::User => "user",
-                        rustyclaw_core::threads::MessageRole::Assistant => "assistant",
-                        rustyclaw_core::threads::MessageRole::System => "system",
-                        rustyclaw_core::threads::MessageRole::Tool => "tool",
-                    };
-                    ChatMessage {
-                        role: role.to_string(),
-                        content: m.content.clone(),
-                        id: m.id.clone(),
-                        // Threads persist as JSON and can hold a bare `Value`;
-                        // the bincode wire cannot. Decode here, at the boundary.
-                        tool_calls: m
-                            .tool_calls
-                            .as_ref()
-                            .map(rustyclaw_core::gateway::ToolCallRecord::from_stored_json),
-                        tool_call_id: m.tool_call_id.clone(),
-                        media: None,
-                    }
-                })
-                .collect();
+            // Same boundary conversion as the export path: the transcript a
+            // client downloads is byte-identical to the one it displays,
+            // media refs included.
+            let wire: Vec<ChatMessage> =
+                thread.messages.iter().map(thread_message_to_wire).collect();
             info!(
                 thread_id,
                 caption = %thread.label,
@@ -907,7 +887,7 @@ fn thread_message_to_wire(m: &rustyclaw_core::threads::ThreadMessage) -> ChatMes
             .as_ref()
             .map(rustyclaw_core::gateway::ToolCallRecord::from_stored_json),
         tool_call_id: m.tool_call_id.clone(),
-        media: None,
+        media: m.media.clone(),
     }
 }
 
@@ -1378,6 +1358,7 @@ mod tests {
                     timestamp: std::time::SystemTime::now(),
                     tool_calls: None,
                     tool_call_id: None,
+                    media: None,
                 });
             thread
                 .messages
@@ -1388,6 +1369,7 @@ mod tests {
                     timestamp: std::time::SystemTime::now(),
                     tool_calls: None,
                     tool_call_id: None,
+                    media: None,
                 });
         }
         let mut writer = CapturingWriter { frames: Vec::new() };

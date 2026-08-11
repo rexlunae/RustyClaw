@@ -37,6 +37,10 @@ pub struct ChatMessage {
     /// Set on Thinking messages when the reasoning block completes, so
     /// renderers can say "Thought for 4.2s".
     pub duration_ms: Option<u64>,
+    /// Media attachments (images, audio clips, files) referenced by this
+    /// message. Renderers map each ref to an inline image / audio player /
+    /// document bubble.
+    pub media: Vec<crate::gateway::protocol::types::MediaRef>,
 }
 
 /// Information about a tool call within a message.
@@ -269,6 +273,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             is_streaming: false,
             duration_ms: None,
+            media: Vec::new(),
         }
     }
 
@@ -282,6 +287,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             is_streaming: true,
             duration_ms: None,
+            media: Vec::new(),
         }
     }
 
@@ -295,6 +301,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             is_streaming: true,
             duration_ms: None,
+            media: Vec::new(),
         }
     }
 
@@ -309,6 +316,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             is_streaming: false,
             duration_ms: None,
+            media: Vec::new(),
         }
     }
 

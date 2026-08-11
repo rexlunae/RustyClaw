@@ -19,7 +19,8 @@ use rustyclaw_core::ui::ConnectionStatus;
 use rustyclaw_core::user_prompt_types::PromptResponseValue;
 
 use rustyclaw_view::{
-    BannerActionKind, HatchingDialogData, PromptAttachment, build_prompt_with_attachments,
+    BannerActionKind, HatchingDialogData, PromptAttachment, PromptAttachmentKind,
+    build_prompt_with_attachments,
 };
 
 mod dialogs;
@@ -708,10 +709,20 @@ pub fn App() -> Element {
     // Handlers
     let mut on_submit = move |message: String| {
         let attachments = state.read().prompt_attachments.clone();
-        let prompt = build_prompt_with_attachments(&message, &attachments);
+        // Files that can render inline (images, audio) go as media refs on
+        // the message; everything else stays as text context in the prompt.
+        let (media_attachments, context_attachments): (Vec<_>, Vec<_>) = attachments
+            .iter()
+            .cloned()
+            .partition(|a| a.kind == PromptAttachmentKind::File && is_inline_media_path(&a.path));
+        let media_refs: Vec<rustyclaw_core::gateway::protocol::types::MediaRef> = media_attachments
+            .iter()
+            .filter_map(media_ref_from_attachment)
+            .collect();
+        let prompt = build_prompt_with_attachments(&message, &context_attachments);
         let message_id = {
             let mut s = state.write();
-            let id = s.add_user_message(prompt.clone());
+            let id = s.add_user_message_with_media(prompt.clone(), media_refs.clone());
             s.prompt_attachments.clear();
             // Records which thread owns the response, so its stream events
             // don't follow the user if they switch threads mid-response.
@@ -727,8 +738,9 @@ pub fn App() -> Element {
         if let Some(client) = gw {
             spawn(async move {
                 if let Err(e) = client
-                    .chat_in_thread(
+                    .chat_in_thread_with_media(
                         prompt,
+                        media_refs,
                         turn_thread,
                         Some(SessionOrigin::Desktop),
                         Some(message_id),
@@ -1837,9 +1849,88 @@ pub fn App() -> Element {
     }
 }
 
+/// Whether a file attachment can render inline (image / audio). Everything
+/// else stays as text context embedded in the prompt.
+fn is_inline_media_path(path: &str) -> bool {
+    matches!(
+        std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "png"
+                | "jpg"
+                | "jpeg"
+                | "gif"
+                | "webp"
+                | "bmp"
+                | "svg"
+                | "avif"
+                | "ico"
+                | "mp3"
+                | "wav"
+                | "ogg"
+                | "oga"
+                | "flac"
+                | "m4a"
+                | "aac"
+                | "opus"
+                | "webm"
+        )
+    )
+}
+
+/// MIME type for an inline-media file path; used for the `data:` URI the
+/// transcript builds and for the persisted ref.
+fn mime_for_path(path: &str) -> String {
+    match std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        Some("avif") => "image/avif",
+        Some("ico") => "image/x-icon",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") | Some("oga") => "audio/ogg",
+        Some("flac") => "audio/flac",
+        Some("m4a") => "audio/mp4",
+        Some("aac") => "audio/aac",
+        Some("opus") => "audio/opus",
+        Some("webm") => "audio/webm",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+/// Build a [`MediaRef`] from an attachment the user picked in the file
+/// dialog (absolute path). `None` when the file is gone or unreadable —
+/// the attachment still travels as text context, so nothing is lost.
+fn media_ref_from_attachment(
+    attachment: &PromptAttachment,
+) -> Option<rustyclaw_core::gateway::protocol::types::MediaRef> {
+    use rustyclaw_core::gateway::protocol::types::MediaRef;
+
+    let path = &attachment.path;
+    let size = std::fs::metadata(path).ok().map(|m| m.len() as usize);
+    let mut media = MediaRef::new(mime_for_path(path));
+    media.filename = Some(attachment.display_name.clone());
+    media.size = size;
+    media.local_path = Some(path.clone());
+    Some(media)
+}
+
 #[cfg(test)]
 mod stylesheet_tests {
-    use super::{BULMA, STYLES};
+    use super::{BULMA, STYLES, is_inline_media_path, mime_for_path};
 
     /// Body of the first rule whose selector text ends with `selector`.
     ///
@@ -1938,5 +2029,58 @@ mod stylesheet_tests {
             STYLES.contains("[data-theme=\"dark\"] .notification.is-info.is-light"),
             "dark mode does not override the hard-coded notification background"
         );
+    }
+
+    /// The attachment classifier sends images/audio to the media path and
+    /// everything else (directories, documents) into the prompt context.
+    #[test]
+    fn attachment_classifier_split_images_and_audio_from_context() {
+        for image in [
+            "chart.png",
+            "PHOTO.JPG",
+            "pic.webp",
+            "diagram.svg",
+            "icon.ico",
+            "x.avif",
+        ] {
+            assert!(
+                is_inline_media_path(image),
+                "{image} should be inline media"
+            );
+        }
+        for audio in [
+            "note.mp3",
+            "clip.wav",
+            "voice.ogg",
+            "track.flac",
+            "song.m4a",
+            "a.aac",
+            "b.opus",
+            "c.webm",
+        ] {
+            assert!(
+                is_inline_media_path(audio),
+                "{audio} should be inline media"
+            );
+        }
+        for other in [
+            "report.pdf",
+            "archive.zip",
+            "main.rs",
+            "notes.txt",
+            "video.mp4",
+            "dir/",
+        ] {
+            assert!(
+                !is_inline_media_path(other),
+                "{other} should stay as context"
+            );
+        }
+
+        assert_eq!(mime_for_path("chart.png"), "image/png");
+        assert_eq!(mime_for_path("photo.JPG"), "image/jpeg");
+        assert_eq!(mime_for_path("voice.ogg"), "audio/ogg");
+        assert_eq!(mime_for_path("track.mp3"), "audio/mpeg");
+        assert_eq!(mime_for_path("report.pdf"), "application/octet-stream");
     }
 }

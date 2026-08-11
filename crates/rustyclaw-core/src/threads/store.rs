@@ -933,6 +933,56 @@ mod tests {
         std::fs::remove_dir_all(&dir).ignore();
     }
 
+    /// Media references persist with the message and survive a store
+    /// round-trip, so history reloads can re-render images and audio.
+    #[test]
+    fn media_refs_survive_the_store_round_trip() {
+        use crate::gateway::protocol::types::MediaRef;
+
+        let dir = temp_root("media-roundtrip");
+        let legacy = dir.join("threads.json");
+        let store = ThreadStore::at_legacy_path(&legacy);
+
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat("Media");
+        {
+            let thread = mgr.get_mut(id).unwrap();
+            let mut img = MediaRef::new("image/png".into());
+            img.filename = Some("chart.png".into());
+            img.local_path = Some("/tmp/chart.png".into());
+            let mut clip = MediaRef::new("audio/ogg".into());
+            clip.filename = Some("note.ogg".into());
+            clip.url = Some("https://cdn.example/note.ogg".into());
+            thread.add_message_with_media(
+                Some("media-1".into()),
+                MessageRole::User,
+                "see attached",
+                vec![img, clip],
+            );
+        }
+        store.persist(&mut mgr).unwrap();
+
+        let loaded = store.load().unwrap();
+        let thread = loaded.get(id).unwrap();
+        let msg = thread
+            .messages
+            .iter()
+            .find(|m| m.id.as_deref() == Some("media-1"))
+            .unwrap();
+        let media = msg.media.as_ref().expect("media persisted");
+        assert_eq!(media.len(), 2);
+        assert_eq!(media[0].mime_type, "image/png");
+        assert_eq!(media[0].filename.as_deref(), Some("chart.png"));
+        assert_eq!(media[0].local_path.as_deref(), Some("/tmp/chart.png"));
+        assert_eq!(media[1].mime_type, "audio/ogg");
+        assert_eq!(
+            media[1].url.as_deref(),
+            Some("https://cdn.example/note.ogg")
+        );
+
+        std::fs::remove_dir_all(&dir).ignore();
+    }
+
     /// `rewrite_thread_log` must not drop an open-turn marker: a thread with
     /// a live turn on screen has one, and deleting an older message while
     /// the turn streams must leave the marker (and the thread) open.

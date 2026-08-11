@@ -3559,6 +3559,66 @@ mod tests {
         Ok(())
     }
 
+    /// Media refs attached to a user message survive the full round trip:
+    /// seeded into the thread log → history reply carries them on the wire.
+    #[tokio::test]
+    async fn media_refs_survive_into_the_history_reply() -> Result<()> {
+        let (_tmp, cfg) = test_config_with_temp_state()?;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+
+        use rustyclaw_core::gateway::protocol::types::MediaRef;
+        use rustyclaw_core::threads::MessageRole;
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+        let thread_id = manager.create_chat("Media");
+        {
+            let thread = manager.get_mut(thread_id).unwrap();
+            let mut img = MediaRef::new("image/png".into());
+            img.filename = Some("chart.png".into());
+            img.local_path = Some("/home/user/chart.png".into());
+            thread.add_message_with_media(
+                Some("media-1".into()),
+                MessageRole::User,
+                "see attached",
+                vec![img],
+            );
+        }
+        let store = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path);
+        store.persist(&mut manager).unwrap();
+        let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
+
+        let outgoing = Arc::new(Mutex::new(Vec::new()));
+        let mut writer = MockWriter {
+            outgoing: outgoing.clone(),
+            fail_from_streaming: false,
+            dead: false,
+        };
+
+        thread_handler::handle_thread_history(&mut writer, &thread_mgr, thread_id.0).await?;
+
+        let frames = outgoing.lock().await;
+        let messages = frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadHistoryReply { messages, .. } => Some(messages),
+                _ => None,
+            })
+            .expect("the gateway replied with history");
+        let msg = messages
+            .iter()
+            .find(|m| m.id.as_deref() == Some("media-1"))
+            .expect("the media message is in the reply");
+        let media = msg.media.as_ref().expect("media is on the wire");
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].mime_type, "image/png");
+        assert_eq!(media[0].filename.as_deref(), Some("chart.png"));
+        assert_eq!(media[0].local_path.as_deref(), Some("/home/user/chart.png"));
+
+        Ok(())
+    }
+
     fn seed_two_threads(
         cfg: &Config,
         first: &str,

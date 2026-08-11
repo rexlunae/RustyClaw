@@ -466,6 +466,11 @@ pub enum GatewayCommand {
         /// bubble the user sees and the persisted record agree.
         #[serde(default)]
         message_id: Option<String>,
+        /// Media attachments (images, audio clips, files) referenced by the
+        /// message. The gateway persists the refs and echoes them back in
+        /// history so clients can re-render the media.
+        #[serde(default)]
+        media: Vec<crate::gateway::protocol::types::MediaRef>,
     },
 
     /// Delete one message from a thread's history by its stable id.
@@ -985,10 +990,13 @@ impl GatewayCommand {
                 thread_id,
                 client_kind,
                 message_id,
+                media,
             } => ClientFrame {
                 frame_type: ClientFrameType::Chat,
                 payload: ClientPayload::Chat {
-                    messages: vec![ChatMessage::text("user", &message).with_id(message_id)],
+                    messages: vec![
+                        ChatMessage::user_with_media(&message, media).with_id(message_id),
+                    ],
                     thread_id,
                     client_kind,
                 },

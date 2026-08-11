@@ -361,11 +361,15 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
     ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         role,
-        content: message.display_content(),
+        // Raw content; media renders as inline bubbles in the desktop
+        // transcript (see the note in the desktop's own copy of this
+        // conversion).
+        content: message.content.clone(),
         timestamp: chrono::Utc::now(),
         tool_calls,
         is_streaming: false,
         duration_ms: None,
+        media: message.media.clone().unwrap_or_default(),
     }
 }
 

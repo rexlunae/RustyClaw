@@ -407,6 +407,7 @@ impl App {
                             thread_id,
                             client_kind: Some(SessionOrigin::Tui),
                             message_id: None,
+                            media: Vec::new(),
                         })
                         .await
                         .context("sending Chat")
