@@ -36,6 +36,15 @@ use crate::{
 /// that process, and the resume path picks it up. A younger marker belongs
 /// to a turn running right now on some connection of this process, and
 /// must be left alone.
+/// How many times a crashed turn is resumed before the thread is given up on.
+///
+/// Two, so a genuine one-off crash still gets its answer, while a turn that
+/// reliably takes the gateway down with it stops taking it down. The failure
+/// mode this bounds is not "one thread does not finish" but "the gateway
+/// cannot be started at all", because every start resumes the turn that ends
+/// it.
+const MAX_RESUME_ATTEMPTS: u32 = 2;
+
 static PROCESS_START: std::sync::LazyLock<std::time::SystemTime> =
     std::sync::LazyLock::new(std::time::SystemTime::now);
 
@@ -953,6 +962,17 @@ pub(crate) async fn handle_connection(
                     tm.get(*id)
                         .is_some_and(|t| t.open_turn.is_some_and(|at| at < *PROCESS_START))
                 })
+                // A turn that killed the gateway cannot write its own stop
+                // indicator, so it still looks crashed on the next start and
+                // is resumed again — forever, with the gateway dying each
+                // time. `RESUMED_TURNS` below cannot see this: it is
+                // in-process state, and the process is what keeps dying.
+                // Past the cap the turn is abandoned instead, which loses one
+                // answer rather than the whole gateway.
+                .filter(|id| {
+                    tm.get(*id)
+                        .is_some_and(|t| t.resume_attempts < MAX_RESUME_ATTEMPTS)
+                })
                 .filter(|id| {
                     RESUMED_TURNS
                         .lock()
@@ -1005,9 +1025,19 @@ pub(crate) async fn handle_connection(
             .await?;
             {
                 let mut tm = agent_session.thread_mgr.lock().await;
+                // Counted before the turn runs, and written out by the same
+                // persist below. If this attempt is the one that kills the
+                // gateway, the increment has to have already reached disk —
+                // counting afterwards would leave it at zero every time and
+                // the cap would never bite.
+                if let Some(t) = tm.get_mut(thread) {
+                    t.resume_attempts += 1;
+                }
                 // The orphaned marker gets its overdue stop indicator, and
                 // the resumed turn opens its own — the log keeps the crash
-                // visible instead of papering over it.
+                // visible instead of papering over it. `end_turn(.., false)`
+                // does not clear the count; only a turn that actually
+                // finishes does.
                 tm.end_turn(thread, false);
                 tm.begin_turn(thread);
                 crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);

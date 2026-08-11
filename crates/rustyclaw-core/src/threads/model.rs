@@ -331,6 +331,17 @@ pub struct AgentThread {
     #[serde(skip)]
     pub open_turn: Option<SystemTime>,
 
+    /// How many times a crashed turn in this thread has been resumed.
+    ///
+    /// Persisted, unlike `open_turn` — surviving the gateway's death is the
+    /// entire point. A turn that takes the gateway down with it can never
+    /// write its own stop indicator, so the thread still looks crashed on
+    /// the next start and is resumed again, and again. Without a durable
+    /// count that loop has no exit: the gateway becomes unstartable, which
+    /// is a far worse failure than one turn not finishing.
+    #[serde(default)]
+    pub resume_attempts: u32,
+
     /// Whether a summary of this thread is being produced right now.
     ///
     /// Eligibility for compaction is "long enough, and not summarised yet",
@@ -380,6 +391,7 @@ impl AgentThread {
             share_context: true,
             memory_flushed: false,
             open_turn: None,
+            resume_attempts: 0,
             compacting: false,
             pending_log: Vec::new(),
         }
@@ -419,6 +431,7 @@ impl AgentThread {
             share_context: true,
             memory_flushed: false,
             open_turn: None,
+            resume_attempts: 0,
             compacting: false,
             pending_log: Vec::new(),
         }
@@ -456,6 +469,7 @@ impl AgentThread {
             share_context: false,
             memory_flushed: false,
             open_turn: None,
+            resume_attempts: 0,
             compacting: false,
             pending_log: Vec::new(),
         }
@@ -493,6 +507,7 @@ impl AgentThread {
             share_context: true,
             memory_flushed: false,
             open_turn: None,
+            resume_attempts: 0,
             compacting: false,
             pending_log: Vec::new(),
         }
@@ -614,6 +629,15 @@ impl AgentThread {
             let at = SystemTime::now();
             self.pending_log.push(ThreadLogRecord::TurnEnded { at, ok });
             self.last_activity = at;
+            if ok {
+                // A turn that finished clears the thread's crash history.
+                //
+                // Deliberately not in `begin_turn`: the resume path opens a
+                // turn marker of its own, so resetting there would zero the
+                // count on the very attempt it exists to count, and the loop
+                // this guards against would be back untouched.
+                self.resume_attempts = 0;
+            }
         }
     }
 
