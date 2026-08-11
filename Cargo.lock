@@ -2563,7 +2563,8 @@ dependencies = [
 [[package]]
 name = "dioxus-genai-chat"
 version = "0.5.0"
-source = "git+https://github.com/rexlunae/dioxus-genai-chat?rev=fb6dd4b#fb6dd4bcd1a589237ebc0bbf81233226bd3b08e7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ae1cd120aecfb39afc7f25af15881f83b37eb5ac22b2f320444555934c64ba9"
 dependencies = [
  "dioxus",
  "dioxus-bulma",
