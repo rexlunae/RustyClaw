@@ -36,6 +36,9 @@ use crate::{
 /// that process, and the resume path picks it up. A younger marker belongs
 /// to a turn running right now on some connection of this process, and
 /// must be left alone.
+static PROCESS_START: std::sync::LazyLock<std::time::SystemTime> =
+    std::sync::LazyLock::new(std::time::SystemTime::now);
+
 /// How many times a crashed turn is resumed before the thread is given up on.
 ///
 /// Two, so a genuine one-off crash still gets its answer, while a turn that
@@ -58,9 +61,6 @@ const MAX_RESUME_ATTEMPTS: u32 = 2;
 fn should_resume(t: &rustyclaw_core::threads::AgentThread) -> bool {
     !t.messages.is_empty() && t.resume_attempts < MAX_RESUME_ATTEMPTS
 }
-
-static PROCESS_START: std::sync::LazyLock<std::time::SystemTime> =
-    std::sync::LazyLock::new(std::time::SystemTime::now);
 
 /// Turns already resumed by this process, keyed by (agent, thread). Two
 /// clients connecting together would otherwise each load the same open
