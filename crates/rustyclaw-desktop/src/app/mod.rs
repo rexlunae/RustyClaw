@@ -709,17 +709,16 @@ pub fn App() -> Element {
     // Handlers
     let mut on_submit = move |message: String| {
         let attachments = state.read().prompt_attachments.clone();
-        // Files that can render inline (images, audio) go as media refs on
-        // the message; everything else stays as text context in the prompt.
-        let (media_attachments, context_attachments): (Vec<_>, Vec<_>) = attachments
+        // Image/audio files additionally travel as media refs so the bubble
+        // can render them inline. The paths are NOT removed from the prompt
+        // context: the agent must still see every attachment so it can act
+        // on it (vision/file tools).
+        let media_refs: Vec<rustyclaw_core::gateway::protocol::types::MediaRef> = attachments
             .iter()
-            .cloned()
-            .partition(|a| a.kind == PromptAttachmentKind::File && is_inline_media_path(&a.path));
-        let media_refs: Vec<rustyclaw_core::gateway::protocol::types::MediaRef> = media_attachments
-            .iter()
+            .filter(|a| a.kind == PromptAttachmentKind::File && is_inline_media_path(&a.path))
             .filter_map(media_ref_from_attachment)
             .collect();
-        let prompt = build_prompt_with_attachments(&message, &context_attachments);
+        let prompt = build_prompt_with_attachments(&message, &attachments);
         let message_id = {
             let mut s = state.write();
             let id = s.add_user_message_with_media(prompt.clone(), media_refs.clone());
@@ -783,6 +782,7 @@ pub fn App() -> Element {
             if let Some(file) = dialog.pick_file().await {
                 let path = file.path().display().to_string();
                 let attachment = PromptAttachment::from_file_path(path.clone());
+                crate::chat_transcript::trust_local_attachment(&path);
                 let mut s = state.write();
                 if !s
                     .prompt_attachments
