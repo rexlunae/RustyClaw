@@ -43,6 +43,22 @@ pub fn scratch_home(test: &str) -> PathBuf {
 pub fn scratch_command(binary: &Path, home: &Path) -> Command {
     let mut cmd = Command::new(binary);
     cmd.env("HOME", home);
+    // `dirs::home_dir()` — which is what resolves the settings directory, and
+    // so the PID file `gateway stop` reads — takes `HOME` only on Unix. On
+    // Windows it reads the user profile, so `HOME` alone leaves a Windows
+    // developer's real installation in reach and the stop test still kills
+    // their gateway. The CI matrix builds Windows targets.
+    cmd.env("USERPROFILE", home);
+    // Nothing on the `gateway stop` path uses these, but `config_dir`,
+    // `data_dir` and `cache_dir` are reached elsewhere in the tree (SSH
+    // known_hosts, model caches, messenger state). Redirected here so the
+    // harness is isolating by default rather than isolating for exactly the
+    // one command that has already caused trouble.
+    cmd.env("APPDATA", home);
+    cmd.env("LOCALAPPDATA", home);
+    cmd.env("XDG_CONFIG_HOME", home.join("config"));
+    cmd.env("XDG_DATA_HOME", home.join("data"));
+    cmd.env("XDG_CACHE_HOME", home.join("cache"));
     for leaked in [
         "RUSTYCLAW_CONFIG",
         "RUSTYCLAW_SETTINGS_DIR",
