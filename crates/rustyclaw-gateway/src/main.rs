@@ -46,7 +46,6 @@ mod tool_executor;
 mod trigger_dispatch;
 mod trigger_manager;
 
-use rustyclaw_core::ignore::Ignore;
 use std::io::IsTerminal;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -372,8 +371,22 @@ async fn main() -> Result<()> {
     let cancel_for_signal = cancel.clone();
     let settings_dir = config.settings_dir.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ignore();
-        cancel_for_signal.cancel();
+        // The `Result` decides whether to stop; it used to be discarded with
+        // `.ignore()` and the cancel ran either way. Failing to *listen* for
+        // Ctrl+C is not a reason to shut down, but that is what it did —
+        // silently, with no console output and without touching the PID file,
+        // so it looked exactly like a clean operator-requested stop.
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                tracing::info!("Received Ctrl+C — shutting down");
+                cancel_for_signal.cancel();
+            }
+            Err(e) => tracing::error!(
+                error = %e,
+                "Cannot listen for Ctrl+C; the gateway keeps running, but Ctrl+C \
+                 will not stop it"
+            ),
+        }
     });
 
     // On Unix, also handle SIGTERM for graceful shutdown when stopped via
@@ -386,10 +399,22 @@ async fn main() -> Result<()> {
         let settings_dir_term = settings_dir.clone();
         tokio::spawn(async move {
             use tokio::signal::unix::{SignalKind, signal};
-            if let Ok(mut sig) = signal(SignalKind::terminate()) {
-                sig.recv().await;
-                cancel_for_term.cancel();
-                daemon::remove_pid(&settings_dir_term);
+            match signal(SignalKind::terminate()) {
+                // `recv()` yields `None` when the stream closes, which is not
+                // a SIGTERM. Discarding the `Option` meant a closed stream
+                // shut the gateway down as if one had arrived.
+                Ok(mut sig) => match sig.recv().await {
+                    Some(()) => {
+                        tracing::info!("Received SIGTERM — shutting down");
+                        cancel_for_term.cancel();
+                        daemon::remove_pid(&settings_dir_term);
+                    }
+                    None => tracing::error!(
+                        "SIGTERM stream closed; the gateway keeps running, but \
+                         `rustyclaw gateway stop` will not stop it"
+                    ),
+                },
+                Err(e) => tracing::error!(error = %e, "Cannot listen for SIGTERM"),
             }
         });
     }
