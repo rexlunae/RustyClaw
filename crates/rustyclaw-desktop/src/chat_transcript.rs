@@ -59,12 +59,47 @@ fn is_trusted_local_path(path: &str) -> bool {
 /// The transcript is rebuilt on every render — including every chunk of a
 /// streaming reply — so reading and base64-encoding every attachment on each
 /// repaint would stall the window. Files are read once per (mtime, length)
-/// fingerprint; the cap keeps the cache from growing without bound.
-static DATA_URI_CACHE: LazyLock<Mutex<HashMap<(PathBuf, u64, u64), String>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// fingerprint; the budget bounds retained memory so a few large attachments
+/// cannot pin gigabytes of base64 text.
+#[derive(Default)]
+struct DataUriCache {
+    entries: HashMap<(PathBuf, u64, u64), String>,
+    total_bytes: usize,
+}
+
+impl DataUriCache {
+    const MAX_ENTRIES: usize = 64;
+    /// Budget for the sum of stored URI lengths (base64 text). A 25 MB file
+    /// becomes ~33 MB of text, so this keeps worst-case retention at the
+    /// budget plus one entry rather than ~2 GB at 64 × 33 MB.
+    const MAX_BYTES: usize = 64 * 1024 * 1024;
+
+    fn get(&self, key: &(PathBuf, u64, u64)) -> Option<String> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: (PathBuf, u64, u64), uri: String) {
+        let incoming = uri.len();
+        // Crossing either bound resets the cache. A single over-budget entry
+        // (impossible while the per-file cap holds) would still be kept alone
+        // rather than dropped, so the read work is never wasted.
+        if self.total_bytes + incoming > Self::MAX_BYTES && !self.entries.is_empty() {
+            self.entries.clear();
+            self.total_bytes = 0;
+        }
+        if self.entries.len() >= Self::MAX_ENTRIES {
+            self.entries.clear();
+            self.total_bytes = 0;
+        }
+        self.total_bytes += incoming;
+        self.entries.insert(key, uri);
+    }
+}
+
+static DATA_URI_CACHE: LazyLock<Mutex<DataUriCache>> =
+    LazyLock::new(|| Mutex::new(DataUriCache::default()));
 
 const INLINE_CAP_BYTES: u64 = 25 * 1024 * 1024;
-const DATA_URI_CACHE_MAX: usize = 64;
 
 fn mtime_nanos(meta: &std::fs::Metadata) -> u64 {
     meta.modified()
@@ -147,10 +182,14 @@ fn copy_only_actions() -> Vec<MessageAction> {
 }
 
 /// Resolve a media ref to a source the webview can load directly:
+/// - a `url` (remote media, e.g. messenger CDN) is used as-is — this is the
+///   only source for refs that carry no local path, which is exactly the
+///   shape gateway/messenger-supplied remote media has,
 /// - a `local_path` this desktop itself attached becomes a `data:` URI
 ///   (read once and cached; only files the user picked are trusted — a
-///   `local_path` echoed from thread history is not client-controlled),
-/// - otherwise a `url` (remote media, e.g. messenger CDN) is used as-is,
+///   `local_path` echoed from thread history is not client-controlled), and
+///   any failure (untrusted, missing, unreadable, over-cap) falls back to
+///   the URL rather than dropping the media,
 /// - otherwise `None` — the caller falls back to a name-only document tile.
 ///
 /// Files larger than the cap are not inlined: a multi-hundred-MB data URI
@@ -158,11 +197,15 @@ fn copy_only_actions() -> Vec<MessageAction> {
 /// length (via metadata), never the optional recorded `size`. They still
 /// render as a downloadable document.
 fn media_src(media: &MediaRef) -> Option<String> {
-    let path = media.local_path.as_deref()?;
+    let Some(path) = media.local_path.as_deref() else {
+        return media.url.clone();
+    };
     if !is_trusted_local_path(path) {
         return media.url.clone();
     }
-    let meta = std::fs::metadata(path).ok()?;
+    let Ok(meta) = std::fs::metadata(path) else {
+        return media.url.clone();
+    };
     if !meta.is_file() || meta.len() > INLINE_CAP_BYTES {
         return media.url.clone();
     }
@@ -172,23 +215,18 @@ fn media_src(media: &MediaRef) -> Option<String> {
         mtime_nanos(&meta),
         meta.len(),
     );
-    if let Some(uri) = DATA_URI_CACHE
-        .lock()
-        .ok()
-        .and_then(|c| c.get(&key).cloned())
-    {
+    if let Some(uri) = DATA_URI_CACHE.lock().ok().and_then(|c| c.get(&key)) {
         return Some(uri);
     }
 
-    let bytes = std::fs::read(path).ok()?;
+    let Ok(bytes) = std::fs::read(path) else {
+        return media.url.clone();
+    };
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let uri = format!("data:{};base64,{}", media.mime_type, encoded);
 
     if let Ok(mut cache) = DATA_URI_CACHE.lock() {
-        if cache.len() >= DATA_URI_CACHE_MAX {
-            cache.clear();
-        }
         cache.insert(key, uri.clone());
     }
     Some(uri)
@@ -1146,5 +1184,61 @@ mod tests {
         let src = media_src(&media).expect("small trusted file inlines");
         assert!(src.starts_with("data:image/png;base64,"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Remote media that only has a URL (messenger CDN, gateway-supplied —
+    /// `MediaRef::new` leaves `local_path: None`) still renders inline as an
+    /// image/audio bubble; it must not degrade to a document tile.
+    #[test]
+    fn url_only_remote_media_renders_inline() {
+        let mut media = MediaRef::new("image/jpeg".into());
+        media.filename = Some("photo.jpg".into());
+        media.url = Some("https://cdn.example/photo.jpg".into());
+
+        let src = media_src(&media).expect("url-only ref resolves to its URL");
+        assert_eq!(src, "https://cdn.example/photo.jpg");
+
+        let mut transcript = ChatTranscript::default();
+        push_message(&mut transcript, &user_message_with_media(vec![media]));
+        let bubbles: Vec<_> = transcript
+            .messages
+            .iter()
+            .filter(|m| matches!(m.payload, ChatMessagePayload::Image(_)))
+            .collect();
+        assert_eq!(
+            bubbles.len(),
+            1,
+            "url-only image renders as an image bubble"
+        );
+    }
+
+    /// The data-URI cache bounds retained memory by total bytes, not just
+    /// entry count: a handful of large attachments cannot pin gigabytes.
+    #[test]
+    fn data_uri_cache_bounds_total_bytes() {
+        let mut cache = DataUriCache::default();
+        // 4 MiB of encoded text per entry; 20 entries would be 80 MiB raw.
+        let chunk = "a".repeat(4 * 1024 * 1024);
+        for i in 0..20 {
+            cache.insert(
+                (PathBuf::from(format!("/tmp/img-{i}")), 0, 0),
+                chunk.clone(),
+            );
+        }
+        assert!(
+            cache.total_bytes <= DataUriCache::MAX_BYTES + chunk.len(),
+            "cache exceeded the byte budget: {} bytes",
+            cache.total_bytes
+        );
+        assert!(
+            cache.entries.len() < 20,
+            "byte budget should have evicted entries"
+        );
+        // A fresh small insert after a reset still works (read work never wasted).
+        cache.insert((PathBuf::from("/tmp/small"), 0, 0), "tiny".to_string());
+        assert_eq!(
+            cache.get(&(PathBuf::from("/tmp/small"), 0, 0)),
+            Some("tiny".to_string())
+        );
     }
 }
