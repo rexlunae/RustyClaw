@@ -174,16 +174,31 @@ pub async fn run_gateway(
             };
             let svc_mgr = rustyclaw_core::services::create_service_manager(svc_config);
             info!(count = svc_count, "Managed services configured");
-            // Auto-start services — standalone only, for the same reason the
-            // trigger manager and cron scheduler below are: under
-            // `--ssh-stdio` one gateway runs per SSH connection, so
-            // auto-starting here would start a fresh copy of every service on
-            // every connect — several local inference servers contending for
-            // one port — and leave them behind on disconnect. The manager
-            // itself is still registered, so the services panel can list and
-            // control them from a stdio session; only the automatic
-            // duplication is skipped.
-            if !options.ssh_stdio {
+            // Auto-start services, in every mode including `--ssh-stdio`.
+            //
+            // Skipping stdio looks tempting — one gateway runs per SSH
+            // connection there, so each connect starts its own copy of every
+            // service — but the OpenSSH subsystem deployment documented in
+            // `crate::ssh` has *no* standalone daemon: the stdio instance is
+            // the only gateway there is. Not starting them leaves that
+            // installation with no local inference server and a gateway that
+            // cannot reach a model, which is worse than starting a duplicate.
+            //
+            // What must not happen is leaving them behind, and that is
+            // handled at the other end: `stop_managed_services` runs on both
+            // ways out of this function, and `ServiceManager::stop_all`
+            // iterates only what this manager itself started, so an instance
+            // cleans up its own children and never reaps another session's.
+            //
+            // Concurrent stdio sessions therefore still duplicate — a second
+            // copy of a port-bound server will fail to bind and fall to its
+            // restart policy. That is pre-existing and inherent to a
+            // deployment with no process that outlives the connection;
+            // solving it needs a cross-process notion of "already running"
+            // (a health probe, or a lock in the settings dir with all the
+            // staleness that implies), which is a supervision feature, not a
+            // line in this function.
+            {
                 let mut mgr = svc_mgr.write().await;
                 mgr.auto_start_all().await;
             }
@@ -300,12 +315,11 @@ pub async fn run_gateway(
         )
         .await;
         // The other early return from this function, and it needs the same
-        // shutdown the listener path gets. Nothing is auto-started in this
-        // mode, but the services panel can start something during the
-        // session, and the `ServiceManager` that owns it lives in a `'static`
-        // runtime context that is never dropped — so without this, a service
-        // started from a stdio session outlives the connection with nobody
-        // managing it.
+        // shutdown the listener path gets. This mode auto-starts services
+        // like any other, and the `ServiceManager` that owns them lives in a
+        // `'static` runtime context that is never dropped — so without this,
+        // every SSH connection left a full set of service processes behind
+        // with nobody managing them.
         stop_managed_services().await;
         return served;
     }
