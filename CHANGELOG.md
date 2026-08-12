@@ -246,7 +246,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loop later stops — russh returns from it on the first accept error —
   `accept` reports that instead of parking forever on a queue nothing will
   feed, so the gateway exits rather than lingering unreachable. The accept
-  loop used to log-and-continue on that error, spinning at full CPU.
+  loop used to log-and-continue on that error, spinning at full CPU. Listener
+  setup and the accept loop now share one exit path, so a failed bind runs the
+  same managed-service shutdown a cancelled one does: the `ServiceManager`
+  lives in a `'static` runtime context that is never dropped, so an early
+  return would have left every auto-started `[services.*]` process — a local
+  inference server, say — running with nobody managing it, and `kill_on_drop`
+  cannot fire on a child whose manager outlives the process.
 
 - **The gateway never asked for the vault passphrase on an encrypted setup
   whose config flag had gone false.** The decision to prompt read only

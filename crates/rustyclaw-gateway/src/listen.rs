@@ -485,95 +485,103 @@ pub async fn run_gateway(
         allow_unknown_keys_with_totp: config.totp_enabled,
     };
 
-    let mut ssh_server = SshServer::new(ssh_cfg).await?;
-    // Binds before returning, so a failure here is reported instead of
-    // becoming a gateway that runs and answers nothing — see `SshServer::listen`.
-    ssh_server.listen(bind_addr).await?;
-    let bound_addr = ssh_server.local_addr().unwrap_or(bind_addr);
+    // Everything from here on runs inside the block, so every way out of it
+    // — a failed bind, a dead acceptor, a cancelled token — reaches the
+    // shutdown below. The managed services are already running by this point
+    // and the `ServiceManager` that owns them lives in a `'static`
+    // `runtime_ctx` that is never dropped, so a `?` that stepped over the
+    // shutdown would leave them orphaned: `kill_on_drop` cannot fire on a
+    // child whose manager outlives the process. That was survivable while a
+    // failed bind left the process running; it is not now that the bind
+    // fails fast, and "start a second gateway on a busy port" is the common
+    // way to hit it.
+    let serve_result: Result<()> = async {
+        let mut ssh_server = SshServer::new(ssh_cfg).await?;
+        // Binds before returning, so a failure here is reported instead of
+        // becoming a gateway that runs and answers nothing — see
+        // `SshServer::listen`.
+        ssh_server.listen(bind_addr).await?;
+        let bound_addr = ssh_server.local_addr().unwrap_or(bind_addr);
 
-    info!(address = %bound_addr, "Gateway listening (SSH-only)");
-    // The one line an operator watching a foreground run needs, and it is
-    // printed only now that a socket is actually bound. It used to be
-    // printed from `main` before any of this ran, against the address the
-    // config asked for rather than the one in use.
-    if !options.ssh_stdio {
-        println!(
-            "{}",
-            t::icon_ok(&format!(
-                "Gateway listening on SSH {}",
-                t::info(&bound_addr.to_string())
-            ))
-        );
-    }
-    if messenger_mgr.is_some() {
-        info!("Messenger polling enabled");
-    }
+        info!(address = %bound_addr, "Gateway listening (SSH-only)");
+        // The one line an operator watching a foreground run needs, and it is
+        // printed only now that a socket is actually bound. It used to be
+        // printed from `main` before any of this ran, against the address the
+        // config asked for rather than the one in use.
+        if !options.ssh_stdio {
+            println!(
+                "{}",
+                t::icon_ok(&format!(
+                    "Gateway listening on SSH {}",
+                    t::info(&bound_addr.to_string())
+                ))
+            );
+        }
+        if messenger_mgr.is_some() {
+            info!("Messenger polling enabled");
+        }
 
-    // Set when the acceptor stops for a reason that is not our own shutdown,
-    // so it can be returned after the shutdown sequence below rather than
-    // exiting `Ok` from a gateway that failed.
-    let mut acceptor_failure: Option<anyhow::Error> = None;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return Ok(()),
+                accepted = ssh_server.accept() => {
+                    match accepted {
+                        Ok(transport) => {
+                            let peer_info = transport.peer_info().clone();
+                            info!(
+                                transport = %peer_info.transport_type,
+                                user = ?peer_info.username,
+                                fingerprint = ?peer_info.key_fingerprint,
+                                "SSH connection accepted"
+                            );
 
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            accepted = ssh_server.accept() => {
-                match accepted {
-                    Ok(transport) => {
-                        let peer_info = transport.peer_info().clone();
-                        info!(
-                            transport = %peer_info.transport_type,
-                            user = ?peer_info.username,
-                            fingerprint = ?peer_info.key_fingerprint,
-                            "SSH connection accepted"
-                        );
+                            let shared_cfg = shared_config.clone();
+                            let shared_ctx = shared_model_ctx.clone();
+                            let shared_session = shared_copilot_session.clone();
+                            let vault_clone = vault.clone();
+                            let skill_clone = skill_mgr.clone();
+                            let task_mgr_clone = task_mgr.clone();
+                            let model_reg_clone = model_registry.clone();
+                            let observer_clone = observer.clone();
+                            let rate_limiter_clone = rate_limiter.clone();
+                            let child_cancel = cancel.child_token();
 
-                        let shared_cfg = shared_config.clone();
-                        let shared_ctx = shared_model_ctx.clone();
-                        let shared_session = shared_copilot_session.clone();
-                        let vault_clone = vault.clone();
-                        let skill_clone = skill_mgr.clone();
-                        let task_mgr_clone = task_mgr.clone();
-                        let model_reg_clone = model_registry.clone();
-                        let observer_clone = observer.clone();
-                        let rate_limiter_clone = rate_limiter.clone();
-                        let child_cancel = cancel.child_token();
-
-                        tokio::spawn(async move {
-                            if let Err(err) = handle_transport_connection(
-                                transport,
-                                shared_cfg,
-                                shared_ctx,
-                                shared_session,
-                                vault_clone,
-                                skill_clone,
-                                task_mgr_clone,
-                                model_reg_clone,
-                                observer_clone,
-                                rate_limiter_clone,
-                                child_cancel,
-                            ).await {
-                                debug!(error = %err, "SSH connection error");
-                            }
-                        });
-                    }
-                    // Not a per-connection hiccup: the acceptor only fails
-                    // once the server behind it is gone, and every later
-                    // call fails the same way. Logging and looping turned
-                    // that into a spin at full CPU on a gateway nobody could
-                    // reach; stop instead, and say why.
-                    Err(e) => {
-                        error!(
-                            error = %e,
-                            "SSH acceptor stopped; the gateway can no longer accept connections"
-                        );
-                        acceptor_failure = Some(e);
-                        break;
+                            tokio::spawn(async move {
+                                if let Err(err) = handle_transport_connection(
+                                    transport,
+                                    shared_cfg,
+                                    shared_ctx,
+                                    shared_session,
+                                    vault_clone,
+                                    skill_clone,
+                                    task_mgr_clone,
+                                    model_reg_clone,
+                                    observer_clone,
+                                    rate_limiter_clone,
+                                    child_cancel,
+                                ).await {
+                                    debug!(error = %err, "SSH connection error");
+                                }
+                            });
+                        }
+                        // Not a per-connection hiccup: the acceptor only fails
+                        // once the server behind it is gone, and every later
+                        // call fails the same way. Logging and looping turned
+                        // that into a spin at full CPU on a gateway nobody could
+                        // reach; stop instead, and say why.
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                "SSH acceptor stopped; the gateway can no longer accept connections"
+                            );
+                            return Err(e);
+                        }
                     }
                 }
             }
         }
     }
+    .await;
 
     // Graceful shutdown: stop all managed services.
     if let Some(svc_mgr) = rustyclaw_core::runtime_ctx::get_service_manager() {
@@ -582,10 +590,7 @@ pub async fn run_gateway(
         mgr.stop_all().await;
     }
 
-    match acceptor_failure {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    serve_result
 }
 
 /// Handle a connection using the Transport trait.
