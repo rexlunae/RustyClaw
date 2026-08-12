@@ -193,8 +193,15 @@ fn resolve_output(workspace_dir: &Path, rel: &str) -> ToolResult<std::path::Path
     // parent misses `link/sub/out.svg`, where `link` is a symlink out of the
     // workspace and `sub` does not exist yet — the parent cannot be resolved,
     // and the symlink one level up never gets looked at.
+    // `symlink_metadata`, not `exists`. `exists` follows the link and answers
+    // false for a dangling one, so a broken symlink as the final component
+    // looked absent, the walk stopped at its parent — legitimately inside the
+    // workspace — and the check passed. On Linux the later `O_NOFOLLOW` open
+    // caught it; on macOS there is no such open, and the write created the
+    // link's target outside the workspace. lstat sees the link itself, so the
+    // walk stops there and `canonicalize` below refuses it.
     let mut existing = candidate.as_path();
-    while !existing.exists() {
+    while std::fs::symlink_metadata(existing).is_err() {
         match existing.parent() {
             Some(parent) if parent != existing => existing = parent,
             _ => break,
@@ -213,6 +220,13 @@ fn resolve_output(workspace_dir: &Path, rel: &str) -> ToolResult<std::path::Path
     // Rebuild from the resolved anchor so the path handed to the writer is the
     // one that was actually checked.
     let rest = candidate.strip_prefix(existing).unwrap_or(Path::new(""));
+    // Nothing left to append when the target itself already exists — the
+    // second render to the same path. `join("")` still adds a separator, so
+    // the reported location came back as `…/chart.svg/`, which the write
+    // survived but every later `open` of that literal path does not.
+    if rest.as_os_str().is_empty() {
+        return Ok(anchor);
+    }
     Ok(anchor.join(rest))
 }
 
@@ -947,6 +961,46 @@ mod tests {
             !outside.path().join("sub").exists(),
             "create_dir_all followed the symlink out"
         );
+    }
+
+    /// Re-rendering to the same path used to report `…/chart.svg/`. The write
+    /// survived it; every later `open` of that literal path would not.
+    #[test]
+    fn re_rendering_reports_a_path_that_can_actually_be_opened() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        exec_chart(&json!({"values": [1, 2]}), dir.path()).expect("first render");
+        let second = exec_chart(&json!({"values": [3, 4]}), dir.path()).expect("second render");
+
+        assert!(
+            !second.contains(".svg/"),
+            "reported a directory-shaped path: {second}"
+        );
+        // And the reported file is genuinely openable.
+        let reported = second.rsplit(" to ").next().expect("a path in the message");
+        assert!(
+            std::fs::read_to_string(reported).is_ok(),
+            "cannot open the path the tool reported: {reported}"
+        );
+    }
+
+    /// A dangling symlink as the final component reads as absent to `exists`,
+    /// so the walk stopped at its parent and the check passed. Linux caught it
+    /// at `O_NOFOLLOW`; macOS has no such open and wrote the link's target.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_target_is_refused() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let target = outside.path().join("not-there-yet.svg");
+        std::os::unix::fs::symlink(&target, workspace.path().join("dangling.svg"))
+            .expect("symlink");
+
+        let err = exec_chart(
+            &json!({"values": [1], "path": "dangling.svg"}),
+            workspace.path(),
+        )
+        .expect_err("a dangling symlink out of the workspace must be refused");
+        assert!(!target.exists(), "the write followed the link: {err}");
     }
 
     /// A pie draws one set of proportions. Rendering the first series and
