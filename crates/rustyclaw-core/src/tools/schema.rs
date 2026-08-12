@@ -146,8 +146,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "npm_manage" => npm_manage_params(),
         "agent_setup" => agent_setup_params(),
         "pdf" => pdf_params(),
-        #[cfg(feature = "office-docs")]
         "chart" => chart_params(),
+        #[cfg(feature = "office-docs")]
         "document" => document_params(),
         "swarm_create" => swarm_create_params(),
         "swarm_list" => swarm_list_params(),

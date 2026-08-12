@@ -13,10 +13,10 @@ use tracing::{debug, instrument, warn};
 
 mod ast_grep;
 mod browser;
-#[cfg(feature = "office-docs")]
 pub mod chart;
 mod cron_tool;
 mod devices;
+#[cfg(feature = "office-docs")]
 pub mod document;
 pub mod exa;
 pub mod exo_ai;
@@ -200,9 +200,10 @@ use sysadmin::{
     exec_user_manage,
 };
 
+use chart::exec_chart;
+
 // PDF tool
 #[cfg(feature = "office-docs")]
-use chart::exec_chart;
 use document::exec_document;
 use pdf::exec_pdf;
 
