@@ -53,6 +53,10 @@ static FORCE_DIALOG: OnceLock<bool> = OnceLock::new();
 /// `--profile` that would have started and stopped a daemon belonging to a
 /// different profile than the one running.
 static RESOLVED_CONFIG: OnceLock<Config> = OnceLock::new();
+/// The global flags `main` parsed, kept so a caller that must re-read the
+/// config from disk can re-read the same file and re-apply the same
+/// overrides. See [`reload_config`].
+static RESOLVED_ARGS: OnceLock<CommonArgs> = OnceLock::new();
 
 #[derive(Debug, Parser)]
 #[command(
@@ -90,6 +94,7 @@ fn main() -> Result<()> {
 
     let mut config = Config::load(cli.common.config_path())?;
     cli.common.apply_overrides(&mut config);
+    RESOLVED_ARGS.set(cli.common.clone()).ignore();
     RESOLVED_CONFIG.set(config.clone()).ignore();
 
     // Only forward an explicit URL (from --url or config). When neither is set,
@@ -235,6 +240,23 @@ pub(crate) fn resolved_config() -> Config {
         .cloned()
         .or_else(|| Config::load(None).ok())
         .unwrap_or_default()
+}
+
+/// Re-read the config from the same file `main` loaded, with the same
+/// overrides re-applied.
+///
+/// For read-modify-write callers only. [`resolved_config`] hands back a
+/// startup snapshot, and saving a snapshot back over the file would discard
+/// anything changed since launch — by the gateway, the CLI, or the user's
+/// editor. Read-only callers should take the snapshot: it is free, and none
+/// of the fields they read can change while the process runs.
+pub(crate) fn reload_config() -> Result<Config> {
+    let args = RESOLVED_ARGS.get();
+    let mut config = Config::load(args.and_then(|a| a.config_path()))?;
+    if let Some(args) = args {
+        args.apply_overrides(&mut config);
+    }
+    Ok(config)
 }
 
 pub(crate) fn skip_connection_dialog() -> bool {

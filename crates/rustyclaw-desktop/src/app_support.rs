@@ -1314,7 +1314,7 @@ fn swarm_context() -> anyhow::Result<(
     rustyclaw_core::swarm::SwarmStore,
     rustyclaw_core::agents::AgentRegistry,
 )> {
-    let config = rustyclaw_core::config::Config::load(None)?;
+    let config = crate::resolved_config();
     Ok((
         rustyclaw_core::swarm::SwarmStore::new(&config.settings_dir),
         rustyclaw_core::agents::AgentRegistry::new(&config.settings_dir, &config.agent_name),
@@ -1396,9 +1396,11 @@ pub(crate) fn delete_swarm(name: &str) -> anyhow::Result<()> {
 /// Skills live on the local filesystem, so this mirrors the TUI's local
 /// `SkillManager` rather than going through the gateway.
 pub(crate) fn load_skills_list() -> Vec<rustyclaw_view::SkillInfoData> {
-    let Ok(config) = rustyclaw_core::config::Config::load(None) else {
-        return Vec::new();
-    };
+    // The resolved config, not a fresh `Config::load(None)`: `skills_dirs()`
+    // derives from `settings_dir`, which is exactly what `--profile` and
+    // `--settings-dir` rewrite. Reading the default location listed — and
+    // toggling wrote into — another profile's skills.
+    let config = crate::resolved_config();
     let mut mgr = rustyclaw_core::skills::SkillManager::with_dirs(config.skills_dirs());
     // An unreadable skills dir would otherwise render as an empty dialog that
     // looks like "you have no skills" rather than "we could not read them".
@@ -1417,7 +1419,9 @@ pub(crate) fn load_skills_list() -> Vec<rustyclaw_view::SkillInfoData> {
 
 /// Toggle a skill's enabled state and return the refreshed list.
 pub(crate) fn toggle_skill(name: &str) -> Vec<rustyclaw_view::SkillInfoData> {
-    if let Ok(config) = rustyclaw_core::config::Config::load(None) {
+    {
+        // Same directory the listing above reads; see the note there.
+        let config = crate::resolved_config();
         let mut mgr = rustyclaw_core::skills::SkillManager::with_dirs(config.skills_dirs());
         if let Err(e) = mgr.load_skills() {
             tracing::warn!("cannot toggle '{}' — loading skills failed: {}", name, e);
@@ -1449,9 +1453,15 @@ pub(crate) fn toggle_skill(name: &str) -> Vec<rustyclaw_view::SkillInfoData> {
 /// half of [`rustyclaw_view::GatewayControlData`] is filled in by the caller
 /// from live signals; nothing about it needs a disk read.
 pub struct LocalGatewaySnapshot {
+    /// Whether the daemon named by the PID file is running, stale or absent.
     pub local: rustyclaw_view::LocalDaemonState,
+    /// Address the daemon would be started on, from the resolved config.
     pub ssh_listen: String,
+    /// Where the daemon's output goes — the place a failed start explains
+    /// itself, since the panel only gets the spawn error.
     pub log_path: String,
+    /// Whether the local secrets vault needs a password, and so whether a
+    /// daemon started from the panel comes up with the vault locked.
     pub vault_password_protected: bool,
 }
 

@@ -154,8 +154,11 @@ pub struct GatewayControlData {
 /// it finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingAction {
+    /// Spawning the daemon.
     Start,
+    /// Terminating the daemon, or clearing a stale PID file.
     Stop,
+    /// Stop then start, in one action the user cannot interleave with.
     Restart,
 }
 

@@ -72,13 +72,33 @@ pub fn remove_pid(settings_dir: &Path, pid: u32) {
 }
 
 /// Check whether a process with the given PID is alive.
+///
+/// A zombie does not count. On Unix an exited child stays in the process
+/// table until its parent reaps it, and [`start`] spawns the gateway with
+/// `Command::spawn` and drops the `Child` without ever waiting. That is
+/// harmless for the CLI, which exits moments later and hands the child to
+/// init — but the desktop client calls [`start`] too and then stays running
+/// for hours. Asking `sysinfo` whether the PID exists finds the zombie and
+/// says yes, so a gateway that died at startup would keep reading as
+/// `Running`: the status badge lies, `start` refuses because "it is already
+/// running", and `stop` sits through its full two-second wait for a process
+/// that is already gone.
+///
+/// `Dead` is included for completeness; Linux effectively never reports it,
+/// but a process in either state is one no client can talk to.
 pub fn is_process_alive(pid: u32) -> bool {
     let mut sys = System::new();
     sys.refresh_processes(
         sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
         true,
     );
-    sys.process(Pid::from_u32(pid)).is_some()
+    match sys.process(Pid::from_u32(pid)) {
+        Some(process) => !matches!(
+            process.status(),
+            sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+        ),
+        None => false,
+    }
 }
 
 // ── High-level daemon operations ────────────────────────────────────────────
@@ -369,6 +389,75 @@ pub fn run_foreground_named(name: &str, args: &[String]) -> Result<std::process:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An exited-but-unreaped child is not a running gateway.
+    ///
+    /// This is the desktop client's case, not the CLI's: `start` drops the
+    /// `Child` without waiting, and a long-lived parent therefore accumulates
+    /// zombies. `sysinfo` still finds the PID, so the naive existence check
+    /// reported a dead gateway as `Running` — the panel showed a stale PID,
+    /// Start stayed disabled, and Stop waited out two seconds for nothing.
+    ///
+    /// Unix-only because zombies are: Windows drops an exited process from
+    /// the table outright, so there is nothing to misread.
+    #[cfg(unix)]
+    #[test]
+    fn a_zombie_child_does_not_count_as_alive() {
+        // Deliberately not waited on until the assertions are done — the
+        // unreaped exited child is the condition under test.
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawning /bin/sh");
+        let pid = child.id();
+
+        // Wait for the zombie state rather than assuming a duration: the PID
+        // has to still be in the table (unreaped) *and* reported as exited.
+        let mut became_zombie = false;
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let mut sys = System::new();
+            sys.refresh_processes(
+                sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+                true,
+            );
+            let zombie = match sys.process(Pid::from_u32(pid)) {
+                Some(p) => matches!(p.status(), sysinfo::ProcessStatus::Zombie),
+                None => false,
+            };
+            if zombie {
+                became_zombie = true;
+                break;
+            }
+        }
+        assert!(
+            became_zombie,
+            "child never reached the zombie state, so this test proves nothing"
+        );
+
+        assert!(
+            !is_process_alive(pid),
+            "an exited child still in the process table is not a running gateway"
+        );
+
+        // A zombie is `Stale`, not `Running`, which is what lets `start`
+        // clear the record and `stop` skip its two-second wait loop.
+        let dir = tempfile::tempdir().unwrap();
+        write_pid(dir.path(), pid).unwrap();
+        assert!(matches!(status(dir.path()), DaemonStatus::Stale { .. }));
+
+        // Reap, so the test does not leave the zombie behind for whatever
+        // runs next in this process.
+        child.wait().expect("reaping the child");
+    }
+
+    /// A process that really is running still reads as alive — the new guard
+    /// must not have turned the check into a constant `false`.
+    #[test]
+    fn our_own_process_counts_as_alive() {
+        assert!(is_process_alive(std::process::id()));
+    }
 
     /// The record is a claim to *be* the gateway, so only the process it
     /// names may retract it. A gateway that exits for any reason used to
