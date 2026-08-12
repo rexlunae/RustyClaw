@@ -272,6 +272,35 @@ fn n(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Format a number a person will read: tick labels, tooltips, percentages.
+///
+/// Separate from [`n`], which exists for SVG coordinates. Two decimals is
+/// plenty for a coordinate and wrong for data: a chart of rates or ratios
+/// draws the correct shape while every label reads "0", which is worse than
+/// an error because the picture looks fine. This keeps roughly four
+/// significant figures, so the magnitude survives whatever it is.
+fn data_label(v: f64) -> String {
+    if !v.is_finite() {
+        return "—".to_string();
+    }
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let magnitude = v.abs();
+    // Beyond these bounds the fixed form is either unreadably long or a wall
+    // of zeroes, and exponent notation is the honest rendering.
+    if !(1e-4..1e7).contains(&magnitude) {
+        return format!("{v:.3e}");
+    }
+    let decimals = (3 - magnitude.log10().floor() as i32).clamp(0, 12) as usize;
+    let text = format!("{v:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        text
+    }
+}
+
 /// The value range to plot, always including zero for bar charts so a bar's
 /// length stays proportional to its value.
 fn value_range(series: &[Series], include_zero: bool) -> (f64, f64) {
@@ -345,7 +374,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
             r#"<text x="{}" y="{}" text-anchor="end" font-size="11" fill="{MUTED}">{}</text>"#,
             n(MARGIN_LEFT - 8.0),
             n(y + 4.0),
-            n(value)
+            data_label(value)
         );
     }
     _ = write!(
@@ -457,7 +486,7 @@ fn render_bar(
                 n(bar_w),
                 n(height.max(0.0)),
                 esc(&s.label),
-                n(v)
+                data_label(v)
             );
         }
     }
@@ -535,7 +564,7 @@ fn render_line(
                 n(*x),
                 n(*y),
                 esc(&s.label),
-                n(*v)
+                data_label(*v)
             );
         }
     }
@@ -599,7 +628,7 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
                 n(cx),
                 n(cy),
                 esc(&label),
-                n(v)
+                data_label(v)
             );
             angle = end;
             continue;
@@ -614,8 +643,8 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
             n(x1),
             n(y1),
             esc(&label),
-            n(v),
-            n(v / total * 100.0)
+            data_label(v),
+            data_label(v / total * 100.0)
         );
         angle = end;
     }
@@ -640,7 +669,7 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
             n(WIDTH - 173.0),
             n(ly),
             esc(&category(categories, i)),
-            n(v / total * 100.0)
+            data_label(v / total * 100.0)
         );
         ly += 20.0;
     }
@@ -742,6 +771,47 @@ mod tests {
     fn a_single_point_does_not_divide_by_zero() {
         let svg = render(json!({"type": "line", "values": [42]}));
         assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+    }
+
+    /// Two decimals is right for an SVG coordinate and wrong for data. A chart
+    /// of rates or ratios drew the correct shape while every tick label and
+    /// tooltip read "0" — worse than an error, because the picture looks fine.
+    #[test]
+    fn small_numbers_keep_their_magnitude_in_labels() {
+        let svg = render(json!({
+            "type": "line",
+            "categories": ["a", "b", "c"],
+            "values": [0.001, 0.002, 0.003],
+        }));
+        assert!(
+            svg.contains("0.001"),
+            "small values collapsed to zero: {svg}"
+        );
+        assert!(svg.contains("0.003"), "{svg}");
+    }
+
+    /// Round numbers must not gain a tail of zeroes for it.
+    #[test]
+    fn ordinary_numbers_stay_short() {
+        assert_eq!(data_label(5.0), "5");
+        assert_eq!(data_label(0.0), "0");
+        assert_eq!(data_label(1234.0), "1234");
+        assert_eq!(data_label(33.333_333), "33.33");
+        assert_eq!(data_label(0.5), "0.5");
+    }
+
+    /// Past the point where a fixed form is a wall of zeroes, exponent
+    /// notation is the honest rendering.
+    #[test]
+    fn extreme_magnitudes_fall_back_to_exponent_form() {
+        assert!(
+            data_label(0.000_000_12).contains('e'),
+            "{}",
+            data_label(0.000_000_12)
+        );
+        assert!(data_label(9.9e12).contains('e'), "{}", data_label(9.9e12));
+        // And a non-finite value renders as a dash rather than "NaN" on a chart.
+        assert_eq!(data_label(f64::NAN), "—");
     }
 
     /// A slice covering the whole circle has an arc whose end point equals its

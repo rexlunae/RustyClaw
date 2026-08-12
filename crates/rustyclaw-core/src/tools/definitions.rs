@@ -1202,6 +1202,7 @@ pub static PDF: ToolDef = ToolDef {
 
 // ── Chart tool ──────────────────────────────────────────────────────────────
 
+/// `chart` — render data as a self-contained SVG chart in the workspace.
 pub static CHART: ToolDef = ToolDef {
     name: "chart",
     description: "Render data as an SVG chart when a picture answers better than a \
