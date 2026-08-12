@@ -53,6 +53,15 @@ const PALETTE: &[&str] = &[
     "#3b7dd8", "#e0662b", "#2e9e6b", "#b5522f", "#8250c4", "#c04a86", "#7a7f87", "#b8992c",
 ];
 
+/// Legend metrics. `CHAR_W` approximates the advance width of the 11px font
+/// and is deliberately generous: overestimating costs a little whitespace,
+/// underestimating puts an entry back over the edge.
+const ROW_HEIGHT: f64 = 15.0;
+const SWATCH: f64 = 10.0;
+const GAP_AFTER_SWATCH: f64 = 5.0;
+const GAP_BETWEEN: f64 = 18.0;
+const CHAR_W: f64 = 6.6;
+
 const INK: &str = "#1c1f24";
 const MUTED: &str = "#6b7280";
 const GRID: &str = "#d8dce2";
@@ -391,24 +400,35 @@ fn value_range(series: &[Series], include_zero: bool) -> (f64, f64) {
     }
     // A flat series has no range to scale against; give it one so the line
     // lands mid-plot instead of dividing by zero.
+    //
+    // Widened relative to the magnitude, not by a literal 1. Past 2^53 the
+    // gap between representable doubles exceeds 1, so `lo - 1.0 == lo` and
+    // the range comes back just as degenerate as it went in — then
+    // `(v - lo) / (hi - lo)` is 0/0, `n()` writes the text `NaN` into a
+    // coordinate, and the renderer drops the element. A flat series of large
+    // numbers came out blank with no error.
     if (hi - lo).abs() < f64::EPSILON {
-        return (lo - 1.0, hi + 1.0);
+        let pad = lo.abs().max(1.0) * 0.5;
+        return (lo - pad, hi + pad);
     }
     (lo, hi)
 }
 
 /// Document header, background and title.
-fn open_svg(title: &str) -> String {
+fn open_svg(title: &str, canvas_h: f64) -> String {
     let mut s = String::new();
     svg!(
         s,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}" font-family="system-ui, -apple-system, Segoe UI, sans-serif">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{}" viewBox="0 0 {WIDTH} {}" font-family="system-ui, -apple-system, Segoe UI, sans-serif">"#,
+        n(canvas_h),
+        n(canvas_h)
     );
     // An explicit ground: without it the chart borrows the viewer's
     // background, and dark-theme clients get near-black text on near-black.
     svg!(
         s,
-        r#"<rect width="{WIDTH}" height="{HEIGHT}" fill="{GROUND}"/>"#
+        r#"<rect width="{WIDTH}" height="{}" fill="{GROUND}"/>"#,
+        n(canvas_h)
     );
     if !title.is_empty() {
         svg!(
@@ -422,7 +442,7 @@ fn open_svg(title: &str) -> String {
 }
 
 /// Axes, gridlines, tick labels and axis titles.
-fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
+fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str, canvas_h: f64) {
     let plot_h = HEIGHT - MARGIN_TOP - MARGIN_BOTTOM;
     let plot_w = WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
     const TICKS: usize = 5;
@@ -468,7 +488,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
             svg,
             r#"<text x="{}" y="{}" text-anchor="middle" font-size="12" fill="{MUTED}">{}</text>"#,
             n(MARGIN_LEFT + plot_w / 2.0),
-            n(HEIGHT - 14.0),
+            n(canvas_h - 14.0),
             esc(x_label)
         );
     }
@@ -483,36 +503,16 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
 }
 
 /// Series legend, drawn along the bottom.
-fn legend(svg: &mut String, series: &[Series]) {
+fn legend_layout(series: &[Series]) -> Vec<Vec<(usize, String)>> {
     if series.len() < 2 {
-        return;
+        return Vec::new();
     }
-
-    // The canvas is a fixed width with a matching viewBox, so anything past
-    // its right edge is not clipped-but-present — it is simply not drawn. A
-    // single row advancing per entry ran off the edge at around five series,
-    // or fewer with long names, leaving colours in the plot with no key and
-    // no indication a key was missing. The palette holds eight colours, so
-    // charts that size are an expected input, not an edge case.
-    const ROW_HEIGHT: f64 = 15.0;
-    const SWATCH: f64 = 10.0;
-    const GAP_AFTER_SWATCH: f64 = 5.0;
-    const GAP_BETWEEN: f64 = 18.0;
-    // Roughly the advance width of the 11px font used here. Deliberately a
-    // little generous: overestimating costs a bit of whitespace, while
-    // underestimating puts an entry back over the edge.
-    const CHAR_W: f64 = 6.6;
     let right_edge = WIDTH - MARGIN_RIGHT;
-
-    // Laid out first, drawn second, so the number of rows is known before a
-    // baseline is chosen — rows grow upward from the bottom, and picking the
-    // baseline before counting them would push the first row under the axis
-    // label.
     let mut rows: Vec<Vec<(usize, String)>> = vec![Vec::new()];
     let mut x = MARGIN_LEFT;
     for (i, s) in series.iter().enumerate() {
         let text = elide(&s.label);
-        let width = SWATCH + GAP_AFTER_SWATCH + CHAR_W * text.chars().count() as f64 + GAP_BETWEEN;
+        let width = entry_width(&text);
         // `x > MARGIN_LEFT` so a single entry too wide for the whole canvas
         // still gets its own row rather than looping forever on an empty one.
         if x + width > right_edge && x > MARGIN_LEFT {
@@ -522,10 +522,25 @@ fn legend(svg: &mut String, series: &[Series]) {
         rows.last_mut().expect("a row exists").push((i, text));
         x += width;
     }
+    rows
+}
 
-    let baseline = HEIGHT - 34.0 - (rows.len().saturating_sub(1)) as f64 * ROW_HEIGHT;
+/// How much taller the canvas has to be to hold a wrapped legend.
+///
+/// The first row fits in the existing bottom margin; each additional one does
+/// not. Growing the canvas rather than moving the legend up is the whole
+/// point: the first version raised the baseline by a row per extra row, which
+/// put row zero at y=391 — directly on the category labels at y=392 — so the
+/// key and the axis labels printed over each other. Space that does not exist
+/// cannot be reclaimed by moving into it.
+fn legend_extra_height(rows: &[Vec<(usize, String)>]) -> f64 {
+    ROW_HEIGHT * rows.len().saturating_sub(1) as f64
+}
+
+/// Draw a laid-out legend, rows running downward from the usual baseline.
+fn draw_legend(svg: &mut String, rows: &[Vec<(usize, String)>]) {
     for (r, row) in rows.iter().enumerate() {
-        let y = baseline + r as f64 * ROW_HEIGHT;
+        let y = HEIGHT - 34.0 + r as f64 * ROW_HEIGHT;
         let mut x = MARGIN_LEFT;
         for (i, text) in row {
             let colour = PALETTE[i % PALETTE.len()];
@@ -542,9 +557,16 @@ fn legend(svg: &mut String, series: &[Series]) {
                 n(y),
                 esc(text)
             );
-            x += SWATCH + GAP_AFTER_SWATCH + CHAR_W * text.chars().count() as f64 + GAP_BETWEEN;
+            x += entry_width(text);
         }
     }
+}
+
+/// Horizontal space one legend entry occupies, swatch and trailing gap
+/// included. Shared by the layout and the drawing so the two cannot disagree
+/// about where the next entry starts.
+fn entry_width(text: &str) -> f64 {
+    SWATCH + GAP_AFTER_SWATCH + CHAR_W * text.chars().count() as f64 + GAP_BETWEEN
 }
 
 /// Shorten a series name that would crowd out everything beside it.
@@ -576,9 +598,14 @@ fn render_bar(
     categories: &[String],
     series: &[Series],
 ) -> String {
-    let mut svg = open_svg(title);
+    // Laid out before anything is drawn: the canvas has to be tall enough
+    // for however many rows the legend needs, and the axis title sits at the
+    // real bottom rather than a fixed one.
+    let rows = legend_layout(series);
+    let canvas_h = HEIGHT + legend_extra_height(&rows);
+    let mut svg = open_svg(title, canvas_h);
     let (lo, hi) = value_range(series, true);
-    axes(&mut svg, lo, hi, x_label, y_label);
+    axes(&mut svg, lo, hi, x_label, y_label, canvas_h);
 
     let plot_h = HEIGHT - MARGIN_TOP - MARGIN_BOTTOM;
     let plot_w = WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
@@ -622,7 +649,7 @@ fn render_bar(
             esc(&category(categories, i))
         );
     }
-    legend(&mut svg, series);
+    draw_legend(&mut svg, &rows);
     svg.push_str("</svg>");
     svg
 }
@@ -635,9 +662,14 @@ fn render_line(
     series: &[Series],
     points_only: bool,
 ) -> String {
-    let mut svg = open_svg(title);
+    // Laid out before anything is drawn: the canvas has to be tall enough
+    // for however many rows the legend needs, and the axis title sits at the
+    // real bottom rather than a fixed one.
+    let rows = legend_layout(series);
+    let canvas_h = HEIGHT + legend_extra_height(&rows);
+    let mut svg = open_svg(title, canvas_h);
     let (lo, hi) = value_range(series, false);
-    axes(&mut svg, lo, hi, x_label, y_label);
+    axes(&mut svg, lo, hi, x_label, y_label, canvas_h);
 
     let plot_h = HEIGHT - MARGIN_TOP - MARGIN_BOTTOM;
     let plot_w = WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
@@ -700,13 +732,13 @@ fn render_line(
             esc(&category(categories, i))
         );
     }
-    legend(&mut svg, series);
+    draw_legend(&mut svg, &rows);
     svg.push_str("</svg>");
     svg
 }
 
 fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
-    let mut svg = open_svg(title);
+    let mut svg = open_svg(title, HEIGHT);
     // Negative slices have no meaning in a pie — a share of a whole cannot be
     // below nothing — so they are dropped rather than drawn inside out.
     let values: Vec<f64> = series.values.iter().map(|v| v.max(0.0)).collect();
@@ -1138,6 +1170,64 @@ mod tests {
                 "series {i} missing"
             );
         }
+    }
+
+    /// The x-position test above passed while the rows were colliding
+    /// vertically: with two rows the first landed at y=391, one pixel above
+    /// the category labels at y=392, and its swatch covered them. Checking
+    /// only one axis is how a wrapped legend looked correct.
+    #[test]
+    fn a_wrapped_legend_does_not_land_on_the_category_labels() {
+        let series: Vec<_> = (0..8)
+            .map(|i| json!({"name": format!("series number {i}"), "values": [1, 2]}))
+            .collect();
+        let svg = render(json!({"series": series, "categories": ["a", "b"]}));
+
+        // The canvas has to have grown to hold the extra rows.
+        let declared: f64 = svg
+            .split("height=\"")
+            .nth(1)
+            .and_then(|f| f.split('"').next())
+            .expect("a canvas height")
+            .parse()
+            .expect("a number");
+        assert!(
+            declared > HEIGHT,
+            "canvas did not grow for the wrapped legend: {declared}"
+        );
+
+        // Category labels sit at MARGIN_TOP + plot_h + 16; no legend swatch
+        // may overlap that band.
+        let labels_y = MARGIN_TOP + (HEIGHT - MARGIN_TOP - MARGIN_BOTTOM) + 16.0;
+        for frag in svg.split("<rect x=\"").skip(1) {
+            let mut parts = frag.split('"');
+            let _x: f64 = parts.next().expect("x").parse().expect("number");
+            let y: f64 = parts.nth(1).expect("y").parse().expect("number");
+            assert!(
+                y + SWATCH <= labels_y || y > labels_y + 4.0,
+                "a legend swatch at y={y} overlaps the category labels at {labels_y}"
+            );
+        }
+
+        // And every entry is still inside the (now taller) canvas.
+        assert!(
+            svg.contains("series number 7"),
+            "last series missing: {svg}"
+        );
+    }
+
+    /// Past 2^53 the gap between doubles exceeds 1, so widening a flat range
+    /// by a literal ±1 changes nothing and the coordinate maths divides by
+    /// zero. Bars were spared because zero is folded in; lines were not.
+    #[test]
+    fn a_flat_series_of_huge_numbers_still_renders() {
+        for chart in ["line", "scatter", "bar"] {
+            let svg = render(json!({"type": chart, "values": [1e18, 1e18]}));
+            assert!(!svg.contains("NaN"), "{chart} produced NaN: {svg}");
+            assert!(!svg.contains("inf"), "{chart} produced inf: {svg}");
+        }
+        let single = render(json!({"type": "line", "values": [1e18]}));
+        assert!(!single.contains("NaN"), "{single}");
     }
 
     /// A name long enough to fill the canvas on its own is shortened rather
