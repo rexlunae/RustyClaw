@@ -25,7 +25,7 @@
 //! API keys are *not* in boot.toml: they already resolve per-provider from
 //! the vault or `*_API_KEY` env vars (see `crate::providers`).
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -175,6 +175,86 @@ impl BootConfig {
         }
 
         Ok(boot)
+    }
+
+    /// The boot-critical slice of an already-loaded config.
+    ///
+    /// The inverse of [`apply`](Self::apply), and the basis of both the
+    /// migration in `Config::load` and the write-through in `Config::save`.
+    ///
+    /// `ssh_bind` is taken only from a config that actually has an `[ssh]`
+    /// section. Manufacturing one from the gateway's built-in default would
+    /// write an address the user never chose into the file that outranks
+    /// their config.
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            provider: config.model.as_ref().map(|m| m.provider.clone()),
+            model: config.model.as_ref().and_then(|m| m.model.clone()),
+            workspace: config.workspace_dir.clone(),
+            ssh_bind: config.ssh.as_ref().map(|s| s.bind.clone()),
+        }
+    }
+
+    /// Whether this carries anything worth writing.
+    ///
+    /// An all-`None` boot config applies nothing, so writing one buys no
+    /// resilience and leaves a puzzling empty file next to the real config.
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none()
+            && self.model.is_none()
+            && self.workspace.is_none()
+            && self.ssh_bind.is_none()
+    }
+
+    /// Write this boot slice to `path`, atomically.
+    ///
+    /// Built through `toml` rather than formatted by hand: a Windows
+    /// workspace path is full of backslashes, and a file this one exists to
+    /// make unbreakable is the last place to hand-roll escaping. Sections
+    /// with nothing in them are omitted rather than emitted empty.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let mut doc = toml::Table::new();
+
+        let mut provider = toml::Table::new();
+        if let Some(name) = &self.provider {
+            provider.insert("name".into(), name.clone().into());
+        }
+        if let Some(model) = &self.model {
+            provider.insert("model".into(), model.clone().into());
+        }
+        if !provider.is_empty() {
+            doc.insert("provider".into(), provider.into());
+        }
+
+        if let Some(workspace) = &self.workspace {
+            let mut section = toml::Table::new();
+            section.insert(
+                "path".into(),
+                workspace.to_string_lossy().into_owned().into(),
+            );
+            doc.insert("workspace".into(), section.into());
+        }
+
+        if let Some(bind) = &self.ssh_bind {
+            let mut section = toml::Table::new();
+            section.insert("ssh_bind".into(), bind.clone().into());
+            doc.insert("gateway".into(), section.into());
+        }
+
+        // The header earns its place: this file outranks config.toml for the
+        // fields in it, and someone finding it for the first time — it is
+        // written for them, not by them — needs to know that before they edit
+        // the other one and wonder why nothing changed.
+        let body = format!(
+            "# RustyClaw boot config — the small, stable slice needed to start\n\
+             # the gateway and reach a model. Written automatically; safe to edit.\n\
+             #\n\
+             # These fields win over config.toml, and changes made through the\n\
+             # app are written back here too, so the two cannot drift.\n\n{}",
+            toml::to_string_pretty(&doc)?
+        );
+        crate::persist::write_atomically(path, body.as_bytes())
+            .with_context(|| format!("Failed to write boot config {}", path.display()))
     }
 
     /// Apply boot-critical fields onto a loaded config.

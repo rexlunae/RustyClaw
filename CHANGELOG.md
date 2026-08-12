@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`boot.toml` is now created automatically (#175, migration rungs 3–4).**
+  The boot/extended config split shipped with nothing that ever *wrote*
+  `boot.toml` — `BootConfig` had no `save`, onboarding did not create one, and
+  `Config::save` wrote only `config.toml`. Every install was therefore still
+  single-file, and the resilience the split exists for had never engaged for
+  anybody: a torn `config.toml` cost the user every setting they had, the
+  vault's `secrets_password_protected` flag among them, which is one way the
+  gateway ends up starting without asking for a passphrase. `Config::load`
+  now derives the boot slice from a config that loaded successfully and
+  writes it the first time it finds `boot.toml` missing, so existing installs
+  migrate themselves on next start. Deliberately *not* from a config that did
+  not load: the missing-file and quarantined-file paths leave `config` as
+  defaults, and writing those into the file that outranks `config.toml` would
+  turn one bad boot into a permanent one. A boot slice with nothing in it is
+  not written at all, `ssh_bind` is recorded only for a config that really has
+  an `[ssh]` section (rather than inventing the built-in default), and a write
+  that fails is a warning, never a failed start — a safety net that can stop
+  the gateway from starting is worse than no safety net.
+
 - **Message relevance filter — rule tier (`relevance_filter = "mentions"`).**
   In group chats, every message previously triggered a full agent response
   cycle, burning tokens on chatter that was never directed at the agent.
@@ -229,6 +248,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/engines load|unload|remove <engine> <model>`.
 
 ### Fixed
+
+- **Saving a provider, model, workspace or SSH bind change was silently
+  reverted on the next start once `boot.toml` existed.** `boot.toml` wins over
+  `config.toml` for the fields it carries, but nothing kept it in sync, so
+  `Config::save` wrote a change that the next `Config::load` overwrote from a
+  stale boot file. `rustyclaw config set model.provider anthropic` printed
+  `✓ Set model.provider = anthropic`, `config.toml` genuinely said
+  `anthropic`, and the next boot read `openai` — the same for `/model`, the
+  gateway's admin model switch, the workspace path and the SSH bind. `save`
+  now writes the boot slice through to `boot.toml`, anchored at
+  `settings_dir` so it lands where `load` looks for it.
+
+- **A failed gateway start deleted the running gateway's PID file, leaving it
+  unstoppable.** The PID file is written before anything is bound and was
+  removed unconditionally on the way out, so a second gateway started against
+  an occupied port overwrote the record on the way in and deleted it on the
+  way out: `gateway status` reported `stopped` while the real gateway kept
+  serving connections, and `gateway stop` could no longer reach it. Removal
+  now happens only while the file still names the exiting process, and the
+  gateway refuses to start at all when the record names another live process
+  — the same refusal `rustyclaw gateway start` has always made, now also made
+  by the binary run directly, and made *before* any managed service is
+  started. The PID file is not touched at all under `--ssh-stdio`, where one
+  instance runs per connection and the record belongs to the daemon.
 
 - **A gateway that could not bind its SSH port reported itself as listening
   and then accepted nothing for the rest of its life.** The bind happened

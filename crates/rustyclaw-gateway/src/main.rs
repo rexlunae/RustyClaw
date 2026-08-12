@@ -384,8 +384,32 @@ async fn main() -> Result<()> {
     };
 
     // Write PID file so `rustyclaw gateway stop` can find us.
+    //
+    // Not in `--ssh-stdio` mode: there, one instance runs per SSH connection,
+    // and the PID file names *the daemon*. A subsystem instance writing its
+    // own pid there would hand `gateway stop` a process that exits with the
+    // connection, and take the daemon's record with it.
     let pid = std::process::id();
-    daemon::write_pid(&config.settings_dir, pid)?;
+    if !protocol_stdio {
+        // Refuse rather than overwrite. The record is a claim to be the
+        // gateway for this settings directory, and a second one here means
+        // two processes sharing a vault, a thread store and a port. `rustyclaw
+        // gateway start` has always refused this; the binary run directly did
+        // not, and it wrote its own pid first and deleted the file on the way
+        // out — leaving the healthy gateway running but unreachable by
+        // `gateway stop`.
+        if let daemon::DaemonStatus::Running { pid: running } = daemon::status(&config.settings_dir)
+            && running != pid
+        {
+            anyhow::bail!(
+                "A gateway is already running for {} (PID {running}). Stop it with \
+                 `rustyclaw gateway stop`, or if no gateway is running, delete {}.",
+                config.settings_dir.display(),
+                daemon::pid_path(&config.settings_dir).display(),
+            );
+        }
+        daemon::write_pid(&config.settings_dir, pid)?;
+    }
 
     // Set up graceful shutdown on Ctrl+C (all platforms).
     let cancel = CancellationToken::new();
@@ -428,7 +452,7 @@ async fn main() -> Result<()> {
                     Some(()) => {
                         tracing::info!("Received SIGTERM — shutting down");
                         cancel_for_term.cancel();
-                        daemon::remove_pid(&settings_dir_term);
+                        daemon::remove_pid(&settings_dir_term, pid);
                     }
                     None => tracing::error!(
                         "SIGTERM stream closed; the gateway keeps running, but \
@@ -497,7 +521,9 @@ async fn main() -> Result<()> {
         )
         .await
     };
-    daemon::remove_pid(&settings_dir);
+    // Only if it is still ours — see `daemon::remove_pid`. A run that bailed
+    // before claiming the record must not retract someone else's.
+    daemon::remove_pid(&settings_dir, pid);
 
     result
 }
