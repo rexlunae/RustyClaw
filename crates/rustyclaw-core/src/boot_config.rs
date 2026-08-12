@@ -286,15 +286,47 @@ impl BootConfig {
             } else {
                 None
             };
+            // A pinned trust anchor names a certificate for one provider's
+            // endpoint, so it goes the same way as `base_url`: kept while the
+            // provider is unchanged, dropped on a switch, where it could only
+            // pin the new endpoint to the old provider's CA.
+            //
+            // Dropping it silently is not acceptable even when it is right.
+            // `Config::load` installs the pin immediately after this, so an
+            // operator who configured one would otherwise go on believing
+            // provider traffic was pinned while it quietly used the system
+            // trust store. stderr, not tracing: this runs before the gateway
+            // installs its subscriber (see the note in `load`).
+            let tls_ca_cert = if same_provider {
+                existing.and_then(|m| m.tls_ca_cert.clone())
+            } else {
+                if let Some(dropped) = existing.and_then(|m| m.tls_ca_cert.as_ref()) {
+                    eprintln!(
+                        "WARNING: boot.toml switches the provider to {provider}, so the TLS \
+                         trust-anchor pin {} configured for the previous provider no longer \
+                         applies — provider traffic will use the system trust store. Re-pin \
+                         under the new provider if it should stay pinned.",
+                        dropped.display()
+                    );
+                }
+                None
+            };
             config.model = Some(ModelProvider {
                 provider: provider.clone(),
                 model,
                 base_url,
-                tls_ca_cert: None,
-                reasoning_effort: None,
-                max_tokens: None,
-                temperature: None,
-                token_budget: None,
+                tls_ca_cert,
+                // Tuning, not identity. These describe how the user wants
+                // requests shaped and mean the same thing under any provider,
+                // so unlike `model`/`base_url`/`tls_ca_cert` they are not the
+                // old provider's to lose. Hard-coding them to `None` was
+                // harmless only while no install had a boot.toml; once one is
+                // written for every install it silently erases them on the
+                // next start, and the following save makes that permanent.
+                reasoning_effort: existing.and_then(|m| m.reasoning_effort.clone()),
+                max_tokens: existing.and_then(|m| m.max_tokens),
+                temperature: existing.and_then(|m| m.temperature),
+                token_budget: existing.and_then(|m| m.token_budget),
             });
         } else if let Some(model) = &self.model {
             // A model without a provider only makes sense on an existing one.
@@ -501,6 +533,76 @@ ssh_bind = "0.0.0.0:2222"
             "boot ssh_bind must not enable the SSH transport"
         );
         assert_eq!(ssh.mode, crate::config::SshMode::Standalone);
+    }
+
+    /// Everything `boot.toml` does not carry must survive `apply`.
+    ///
+    /// `apply` rebuilt `ModelProvider` from scratch with these hard-coded to
+    /// `None`, which cost nothing while no install had a boot.toml. Writing
+    /// one for every install turned it into a silent wipe of the user's model
+    /// tuning on the next start — and the save after that made it permanent.
+    #[test]
+    fn apply_preserves_model_settings_the_boot_slice_does_not_carry() {
+        let mut config = Config {
+            model: Some(crate::config::ModelProvider {
+                provider: "openai".into(),
+                model: Some("gpt-4o".into()),
+                base_url: None,
+                tls_ca_cert: Some(PathBuf::from("/etc/pin.pem")),
+                reasoning_effort: Some("high".into()),
+                max_tokens: Some(9001),
+                temperature: Some(0.25),
+                token_budget: Some(5_000_000),
+            }),
+            ..Config::default()
+        };
+        let boot = BootConfig {
+            provider: Some("openai".into()),
+            model: Some("gpt-4o".into()),
+            ..BootConfig::default()
+        };
+        boot.apply(&mut config);
+
+        let m = config.model.unwrap();
+        assert_eq!(m.tls_ca_cert.as_deref(), Some(Path::new("/etc/pin.pem")));
+        assert_eq!(m.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(m.max_tokens, Some(9001));
+        assert_eq!(m.temperature, Some(0.25));
+        assert_eq!(m.token_budget, Some(5_000_000));
+    }
+
+    /// A pin names a certificate for one provider's endpoint, so a provider
+    /// switch drops it — pinning the new endpoint to the old provider's CA
+    /// would be worse than not pinning. The tuning fields are not endpoint
+    /// bound and still survive.
+    #[test]
+    fn apply_drops_only_the_endpoint_bound_fields_on_a_provider_switch() {
+        let mut config = Config {
+            model: Some(crate::config::ModelProvider {
+                provider: "openai".into(),
+                model: Some("gpt-4o".into()),
+                base_url: Some("https://proxy.example".into()),
+                tls_ca_cert: Some(PathBuf::from("/etc/openai-pin.pem")),
+                reasoning_effort: Some("high".into()),
+                max_tokens: Some(9001),
+                temperature: Some(0.25),
+                token_budget: Some(5_000_000),
+            }),
+            ..Config::default()
+        };
+        let boot = BootConfig {
+            provider: Some("anthropic".into()),
+            ..BootConfig::default()
+        };
+        boot.apply(&mut config);
+
+        let m = config.model.unwrap();
+        assert!(m.base_url.is_none(), "endpoint belongs to the old provider");
+        assert!(m.tls_ca_cert.is_none(), "so does its trust anchor");
+        assert_eq!(m.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(m.max_tokens, Some(9001));
+        assert_eq!(m.temperature, Some(0.25));
+        assert_eq!(m.token_budget, Some(5_000_000));
     }
 
     /// Regression for Devin review #442 (BUG_0001 / SEC_0001): switching the

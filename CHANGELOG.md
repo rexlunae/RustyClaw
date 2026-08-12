@@ -249,6 +249,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Model tuning and the provider TLS pin were erased by `boot.toml`.**
+  `BootConfig::apply` rebuilt the whole `[model]` section from the boot slice,
+  hard-coding `tls_ca_cert`, `reasoning_effort`, `max_tokens`, `temperature`
+  and `token_budget` to `None`. That cost nothing while no install had a
+  `boot.toml`; creating one for every install would have made it universal —
+  a user's tuning silently gone on the next start, made permanent by the
+  following save, and the trust-anchor pin from #234 never installed, so
+  provider traffic fell back to the system trust store while the operator
+  believed it was pinned. `apply` now overrides only what the boot slice
+  actually owns. The tuning fields describe how requests should be shaped and
+  mean the same thing under any provider, so they always survive; `base_url`
+  and `tls_ca_cert` name one provider's endpoint, so they survive while the
+  provider is unchanged and are dropped on a switch — and dropping a pin now
+  says so on stderr rather than un-pinning in silence.
+
 - **Saving a provider, model, workspace or SSH bind change was silently
   reverted on the next start once `boot.toml` existed.** `boot.toml` wins over
   `config.toml` for the fields it carries, but nothing kept it in sync, so
