@@ -21,12 +21,27 @@ fn params_to_json_schema(params: &[ToolParam]) -> (Value, Value) {
 
     for p in params {
         let mut prop = serde_json::Map::new();
-        prop.insert("type".into(), json!(p.param_type));
         prop.insert("description".into(), json!(p.description));
 
-        // Arrays need an items schema
-        if p.param_type == "array" {
-            prop.insert("items".into(), json!({"type": "string"}));
+        // Arrays need an items schema, and the item type has to be the truth.
+        // It used to be hard-coded to "string", which was right for every
+        // array parameter that existed — all lists of names or paths — and
+        // wrong the moment one carried numbers: the model is handed a schema
+        // saying "list of strings", a strict provider makes it so, and the
+        // tool then refuses its own advertised shape.
+        //
+        // `array<number>` / `array<object>` say what is inside; a bare
+        // `array` still means strings, so nothing already in the registry
+        // changes.
+        if let Some(item) = p.param_type.strip_prefix("array<") {
+            let item = item.strip_suffix('>').unwrap_or(item);
+            prop.insert("type".into(), json!("array"));
+            prop.insert("items".into(), json!({ "type": item }));
+        } else {
+            prop.insert("type".into(), json!(p.param_type));
+            if p.param_type == "array" {
+                prop.insert("items".into(), json!({"type": "string"}));
+            }
         }
 
         properties.insert(p.name.clone(), Value::Object(prop));

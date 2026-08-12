@@ -291,9 +291,16 @@ fn numbers(v: Option<&Value>, whose: &str) -> ToolResult<Vec<f64>> {
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            item.as_f64().ok_or_else(|| {
-                ToolError::msg(format!("{whose}[{i}] is {item}, which is not a number"))
-            })
+            // A quoted number is still a number. Providers differ in how
+            // strictly they type function arguments, and `"3"` is unambiguous
+            // — parsing it is not the silent coercion this function refuses
+            // elsewhere, because a string that is *not* a number still errors
+            // rather than being dropped or read as zero.
+            item.as_f64()
+                .or_else(|| item.as_str().and_then(|t| t.trim().parse::<f64>().ok()))
+                .ok_or_else(|| {
+                    ToolError::msg(format!("{whose}[{i}] is {item}, which is not a number"))
+                })
         })
         .collect()
 }
@@ -961,6 +968,40 @@ mod tests {
             !outside.path().join("sub").exists(),
             "create_dir_all followed the symlink out"
         );
+    }
+
+    /// The schema handed to the model must describe what the tool accepts. It
+    /// advertised `values` as a list of strings while the executor demanded
+    /// numbers, so a provider enforcing its own schema would send exactly the
+    /// shape the tool then rejected.
+    #[test]
+    fn the_advertised_item_types_match_what_the_tool_accepts() {
+        let params = crate::tools::params::chart_params();
+        let kind = |n: &str| {
+            params
+                .iter()
+                .find(|p| p.name == n)
+                .unwrap_or_else(|| panic!("no {n} parameter"))
+                .param_type
+                .clone()
+        };
+        assert_eq!(kind("values"), "array<number>");
+        assert_eq!(kind("series"), "array<object>");
+        // Categories really are text, so they stay a plain string array.
+        assert_eq!(kind("categories"), "array");
+    }
+
+    /// A quoted number is still a number — providers differ on how strictly
+    /// they type arguments. A string that is not a number still errors.
+    #[test]
+    fn quoted_numbers_are_accepted_but_words_are_not() {
+        let svg = render(json!({"values": ["3", "5", 4]}));
+        assert!(svg.contains("<rect"), "{svg}");
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let err = exec_chart(&json!({"values": ["three"]}), dir.path())
+            .expect_err("a word is still not a number");
+        assert!(format!("{err}").contains("not a number"), "{err}");
     }
 
     /// Re-rendering to the same path used to report `…/chart.svg/`. The write

@@ -860,7 +860,7 @@ pub fn chart_params() -> Vec<ToolParam> {
                           common case; use `series` instead when plotting more \
                           than one line or bar group."
                 .into(),
-            param_type: "array".into(),
+            param_type: "array<number>".into(),
             required: false,
         },
         ToolParam {
@@ -869,7 +869,7 @@ pub fn chart_params() -> Vec<ToolParam> {
                           Each `values` is a list of numbers. Series are coloured \
                           and listed in a legend in the order given."
                 .into(),
-            param_type: "array".into(),
+            param_type: "array<object>".into(),
             required: false,
         },
         ToolParam {
