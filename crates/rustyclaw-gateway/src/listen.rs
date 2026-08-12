@@ -13,12 +13,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
     CopilotSession, GatewayOptions, ModelContext, Transport, TransportAcceptor,
 };
+use rustyclaw_core::theme as t;
 use rustyclaw_core::tools;
 
 use crate::messenger_handler::SharedMessengerManager;
@@ -173,7 +174,30 @@ pub async fn run_gateway(
             };
             let svc_mgr = rustyclaw_core::services::create_service_manager(svc_config);
             info!(count = svc_count, "Managed services configured");
-            // Auto-start services
+            // Auto-start services, in every mode including `--ssh-stdio`.
+            //
+            // Skipping stdio looks tempting — one gateway runs per SSH
+            // connection there, so each connect starts its own copy of every
+            // service — but the OpenSSH subsystem deployment documented in
+            // `crate::ssh` has *no* standalone daemon: the stdio instance is
+            // the only gateway there is. Not starting them leaves that
+            // installation with no local inference server and a gateway that
+            // cannot reach a model, which is worse than starting a duplicate.
+            //
+            // What must not happen is leaving them behind, and that is
+            // handled at the other end: `stop_managed_services` runs on both
+            // ways out of this function, and `ServiceManager::stop_all`
+            // iterates only what this manager itself started, so an instance
+            // cleans up its own children and never reaps another session's.
+            //
+            // Concurrent stdio sessions therefore still duplicate — a second
+            // copy of a port-bound server will fail to bind and fall to its
+            // restart policy. That is pre-existing and inherent to a
+            // deployment with no process that outlives the connection;
+            // solving it needs a cross-process notion of "already running"
+            // (a health probe, or a lock in the settings dir with all the
+            // staleness that implies), which is a supervision feature, not a
+            // line in this function.
             {
                 let mut mgr = svc_mgr.write().await;
                 mgr.auto_start_all().await;
@@ -203,7 +227,7 @@ pub async fn run_gateway(
             tokio::spawn(async move {
                 let mgr = mcp_mgr.lock().await;
                 if let Err(e) = mgr.connect_all().await {
-                    warn!(error = %e, "Failed to connect MCP servers");
+                    tracing::warn!(error = %e, "Failed to connect MCP servers");
                 } else {
                     info!(count = server_count, "MCP servers connected");
                 }
@@ -276,7 +300,7 @@ pub async fn run_gateway(
         let transport = Box::new(StdioTransport::new(username));
 
         info!("Gateway running in SSH stdio mode");
-        return handle_transport_connection(
+        let served = handle_transport_connection(
             transport,
             shared_config,
             shared_model_ctx,
@@ -290,6 +314,14 @@ pub async fn run_gateway(
             cancel,
         )
         .await;
+        // The other early return from this function, and it needs the same
+        // shutdown the listener path gets. This mode auto-starts services
+        // like any other, and the `ServiceManager` that owns them lives in a
+        // `'static` runtime context that is never dropped — so without this,
+        // every SSH connection left a full set of service processes behind
+        // with nobody managing them.
+        stop_managed_services().await;
+        return served;
     }
 
     // ── Initialize and start messenger loop ─────────────────────────
@@ -484,71 +516,122 @@ pub async fn run_gateway(
         allow_unknown_keys_with_totp: config.totp_enabled,
     };
 
-    let mut ssh_server = SshServer::new(ssh_cfg).await?;
-    ssh_server.listen(bind_addr).await?;
+    // Everything from here on runs inside the block, so every way out of it
+    // — a failed bind, a dead acceptor, a cancelled token — reaches the
+    // shutdown below. The managed services are already running by this point
+    // and the `ServiceManager` that owns them lives in a `'static`
+    // `runtime_ctx` that is never dropped, so a `?` that stepped over the
+    // shutdown would leave them orphaned: `kill_on_drop` cannot fire on a
+    // child whose manager outlives the process. That was survivable while a
+    // failed bind left the process running; it is not now that the bind
+    // fails fast, and "start a second gateway on a busy port" is the common
+    // way to hit it.
+    let serve_result: Result<()> = async {
+        let mut ssh_server = SshServer::new(ssh_cfg).await?;
+        // Binds before returning, so a failure here is reported instead of
+        // becoming a gateway that runs and answers nothing — see
+        // `SshServer::listen`.
+        ssh_server.listen(bind_addr).await?;
+        let bound_addr = ssh_server.local_addr().unwrap_or(bind_addr);
 
-    info!(address = %bind_addr, "Gateway listening (SSH-only)");
-    if messenger_mgr.is_some() {
-        info!("Messenger polling enabled");
-    }
+        info!(address = %bound_addr, "Gateway listening (SSH-only)");
+        // The one line an operator watching a foreground run needs, and it is
+        // printed only now that a socket is actually bound. It used to be
+        // printed from `main` before any of this ran, against the address the
+        // config asked for rather than the one in use.
+        if !options.ssh_stdio {
+            println!(
+                "{}",
+                t::icon_ok(&format!(
+                    "Gateway listening on SSH {}",
+                    t::info(&bound_addr.to_string())
+                ))
+            );
+        }
+        if messenger_mgr.is_some() {
+            info!("Messenger polling enabled");
+        }
 
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            accepted = ssh_server.accept() => {
-                match accepted {
-                    Ok(transport) => {
-                        let peer_info = transport.peer_info().clone();
-                        info!(
-                            transport = %peer_info.transport_type,
-                            user = ?peer_info.username,
-                            fingerprint = ?peer_info.key_fingerprint,
-                            "SSH connection accepted"
-                        );
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return Ok(()),
+                accepted = ssh_server.accept() => {
+                    match accepted {
+                        Ok(transport) => {
+                            let peer_info = transport.peer_info().clone();
+                            info!(
+                                transport = %peer_info.transport_type,
+                                user = ?peer_info.username,
+                                fingerprint = ?peer_info.key_fingerprint,
+                                "SSH connection accepted"
+                            );
 
-                        let shared_cfg = shared_config.clone();
-                        let shared_ctx = shared_model_ctx.clone();
-                        let shared_session = shared_copilot_session.clone();
-                        let vault_clone = vault.clone();
-                        let skill_clone = skill_mgr.clone();
-                        let task_mgr_clone = task_mgr.clone();
-                        let model_reg_clone = model_registry.clone();
-                        let observer_clone = observer.clone();
-                        let rate_limiter_clone = rate_limiter.clone();
-                        let child_cancel = cancel.child_token();
+                            let shared_cfg = shared_config.clone();
+                            let shared_ctx = shared_model_ctx.clone();
+                            let shared_session = shared_copilot_session.clone();
+                            let vault_clone = vault.clone();
+                            let skill_clone = skill_mgr.clone();
+                            let task_mgr_clone = task_mgr.clone();
+                            let model_reg_clone = model_registry.clone();
+                            let observer_clone = observer.clone();
+                            let rate_limiter_clone = rate_limiter.clone();
+                            let child_cancel = cancel.child_token();
 
-                        tokio::spawn(async move {
-                            if let Err(err) = handle_transport_connection(
-                                transport,
-                                shared_cfg,
-                                shared_ctx,
-                                shared_session,
-                                vault_clone,
-                                skill_clone,
-                                task_mgr_clone,
-                                model_reg_clone,
-                                observer_clone,
-                                rate_limiter_clone,
-                                child_cancel,
-                            ).await {
-                                debug!(error = %err, "SSH connection error");
-                            }
-                        });
+                            tokio::spawn(async move {
+                                if let Err(err) = handle_transport_connection(
+                                    transport,
+                                    shared_cfg,
+                                    shared_ctx,
+                                    shared_session,
+                                    vault_clone,
+                                    skill_clone,
+                                    task_mgr_clone,
+                                    model_reg_clone,
+                                    observer_clone,
+                                    rate_limiter_clone,
+                                    child_cancel,
+                                ).await {
+                                    debug!(error = %err, "SSH connection error");
+                                }
+                            });
+                        }
+                        // Not a per-connection hiccup: the acceptor only fails
+                        // once the server behind it is gone, and every later
+                        // call fails the same way. Logging and looping turned
+                        // that into a spin at full CPU on a gateway nobody could
+                        // reach; stop instead, and say why.
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                "SSH acceptor stopped; the gateway can no longer accept connections"
+                            );
+                            return Err(e);
+                        }
                     }
-                    Err(e) => warn!(error = %e, "SSH accept error"),
                 }
             }
         }
     }
+    .await;
 
-    // Graceful shutdown: stop all managed services.
+    stop_managed_services().await;
+
+    serve_result
+}
+
+/// Stop every managed service this process started.
+///
+/// `run_gateway` has exactly two ways out — the stdio branch and the
+/// listener block — and both must come through here. The `ServiceManager`
+/// lives in a `'static` runtime context that is never dropped, so
+/// `kill_on_drop` cannot collect its children: a return that skips this
+/// leaves them running with nobody managing them.
+async fn stop_managed_services() {
     if let Some(svc_mgr) = rustyclaw_core::runtime_ctx::get_service_manager() {
         info!("Stopping managed services…");
         let mut mgr = svc_mgr.write().await;
         mgr.stop_all().await;
     }
-
-    Ok(())
 }
 
 /// Handle a connection using the Transport trait.

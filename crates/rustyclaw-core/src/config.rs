@@ -766,8 +766,37 @@ impl Config {
         // params already come from config.toml). If boot.toml itself is
         // unreadable, still allow the old single-file config as a backup.
         let boot_path = config.settings_dir.join("boot.toml");
+        let boot_existed = boot_path.exists();
         match crate::boot_config::BootConfig::load(&boot_path) {
-            Ok(boot) => boot.apply(&mut config),
+            Ok(boot) => {
+                boot.apply(&mut config);
+                // Migration rung 3 (#175): an install that predates the split
+                // has no boot.toml, and nothing used to create one — so the
+                // resilience the split exists for had never engaged for
+                // anybody, and a torn config.toml still cost the user every
+                // setting they had, the vault's password flag among them.
+                // Derive the boot slice from the config that just loaded.
+                //
+                // Only from a config that genuinely loaded: `skip_post` marks
+                // the missing-file and quarantined-file paths, where `config`
+                // is defaults. Writing boot.toml from those would carve the
+                // defaults into the file that outranks config.toml — turning
+                // one bad boot into a permanent one.
+                //
+                // And only for the install's *own* config, the same test
+                // `save` applies for the same reason. `boot_path` is derived
+                // from the settings dir the loaded file names, which need not
+                // be the directory that file lives in: without this,
+                // `--config /tmp/experiment.toml` naming `~/.rustyclaw` wrote
+                // the experiment's provider and model into the real install's
+                // boot.toml — and since boot.toml outranks config.toml, every
+                // later normal start read the planted values instead of its
+                // own. Reading someone else's config file must not
+                // reconfigure this machine.
+                if !boot_existed && !skip_post && Self::owns_config_file(&config, &config_path) {
+                    Self::migrate_boot_config(&config, &boot_path);
+                }
+            }
             Err(e) => {
                 if config.model.is_some() {
                     // The gateway installs its tracing subscriber only
@@ -801,6 +830,93 @@ impl Config {
         Ok(config)
     }
 
+    /// Whether `config_path` is the file this install keeps its config in,
+    /// rather than one that merely names the same settings directory.
+    ///
+    /// The boot mirror lives at `<settings_dir>/boot.toml` and outranks
+    /// config.toml, so writing it is a change to *that install*. A config
+    /// read from or written to somewhere else is an export or an experiment,
+    /// and neither is entitled to reconfigure the machine — in both
+    /// directions: `Config::load` must not plant a mirror in a settings dir a
+    /// side file happens to name, and `Config::save` must not delete or
+    /// rewrite one there.
+    fn owns_config_file(config: &Config, config_path: &Path) -> bool {
+        config_path.parent().unwrap_or(Path::new("")) == config.settings_dir
+    }
+
+    /// Create `boot_path` from a config that has just loaded, if there is
+    /// anything boot-critical to put in it.
+    ///
+    /// The migration half: an empty file is never created, because it would
+    /// apply nothing and only puzzle whoever finds it. Contrast
+    /// [`sync_boot_config`](Self::sync_boot_config), which must handle the
+    /// empty case by deleting.
+    ///
+    /// A failure is never fatal. This file is a safety net, and a safety net
+    /// that can stop the gateway from starting — a read-only settings
+    /// directory, a full disk — is worse than not having one.
+    fn migrate_boot_config(config: &Config, boot_path: &Path) {
+        let boot = crate::boot_config::BootConfig::from_config(config);
+        if boot.is_empty() {
+            return;
+        }
+        if let Err(e) = boot.save(boot_path) {
+            // stderr, not `tracing`: this runs from `Config::load`, before
+            // the gateway installs its subscriber, so a tracing event would
+            // be dropped and the user would never learn the mirror is
+            // missing (STYLE_GUIDE §11's boot-time exception). The identical
+            // write in `sync_boot_config` sits on the *other* side of that
+            // line and must not do this — which is why the two are separate
+            // rather than sharing one reporting helper.
+            eprintln!(
+                "WARNING: Could not write boot config {}: {e}. Startup is unaffected, \
+                 but a corrupt config.toml will not be recoverable from boot.toml.",
+                boot_path.display()
+            );
+        }
+    }
+
+    /// Make `boot_path` mirror `config`'s boot-critical slice — including
+    /// when that slice is now empty, in which case the file is removed.
+    ///
+    /// The save half. Skipping an empty slice here instead, as the migration
+    /// does, left the old file in place after the settings it mirrors were
+    /// cleared — and since boot.toml outranks config.toml, the next start
+    /// silently reinstated the provider the user had just removed. Clearing
+    /// the boot-critical settings is precisely where a stale mirror misleads
+    /// most, so it is the one case that must not be a no-op.
+    ///
+    /// Reports through `tracing`, unlike
+    /// [`migrate_boot_config`](Self::migrate_boot_config): `Config::save`
+    /// runs at runtime, with the subscriber long since installed — and in the
+    /// TUI it runs while the client owns the terminal's alternate screen,
+    /// where a raw stderr write scribbles over the display and still never
+    /// reaches `gateway.log`.
+    fn sync_boot_config(config: &Config, boot_path: &Path) {
+        let boot = crate::boot_config::BootConfig::from_config(config);
+        if !boot.is_empty() {
+            if let Err(e) = boot.save(boot_path) {
+                tracing::warn!(
+                    path = %boot_path.display(),
+                    error = %e,
+                    "Could not update the boot config; it may now disagree with config.toml \
+                     and override it on the next start"
+                );
+            }
+            return;
+        }
+        if boot_path.exists()
+            && let Err(e) = std::fs::remove_file(boot_path)
+        {
+            tracing::warn!(
+                path = %boot_path.display(),
+                error = %e,
+                "Could not remove the stale boot config; it no longer matches config.toml \
+                 and will override it on the next start — delete it by hand"
+            );
+        }
+    }
+
     /// Save configuration to file
     pub fn save(&self, path: Option<PathBuf>) -> Result<()> {
         let config_path = if let Some(p) = path {
@@ -813,6 +929,26 @@ impl Config {
         // change, and a torn write here used to be a failed startup.
         let content = toml::to_string_pretty(self)?;
         crate::persist::write_atomically(&config_path, content.as_bytes())?;
+
+        // Write the boot slice through to boot.toml, because boot.toml wins
+        // over config.toml for the fields it carries. Without this, saving a
+        // provider change reported success, wrote config.toml correctly, and
+        // was silently reverted by boot.toml on the next start — `/model`, the
+        // gateway's admin model switch, the workspace path and the SSH bind
+        // all read back the old value with nothing to explain it.
+        //
+        // Only when the file just written *is* this install's config, which is
+        // the case `load` will later read the mirror back for. Anchoring on
+        // `settings_dir` alone made a save to an unrelated path reach into the
+        // state directory the config happens to name: `Config::default()`
+        // points `settings_dir` at `~/.rustyclaw`, so a test saving a default
+        // config to a tempdir deleted the developer's real boot.toml — the
+        // suite passing while destroying a live install, which is exactly the
+        // failure #456 was about. A save to somewhere else is an export, and
+        // an export writes one file.
+        if Self::owns_config_file(self, &config_path) {
+            Self::sync_boot_config(self, &self.settings_dir.join("boot.toml"));
+        }
 
         // Keep the runtime provider catalogue in sync with edits made
         // through the UI (add/remove custom provider then save).
@@ -926,7 +1062,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("deep/nested/config.toml");
 
-        let config = Config::default();
+        // Anchored at the tempdir, not `Config::default()`'s `~/.rustyclaw`:
+        // a test that saves and loads must not reach into the developer's
+        // real installation to do it.
+        let config = Config {
+            settings_dir: path.parent().unwrap().to_path_buf(),
+            ..Config::default()
+        };
         config.save(Some(path.clone())).expect("save must succeed");
 
         let loaded = Config::load(Some(path)).expect("load what was saved");
@@ -958,6 +1100,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         let config = Config {
             relevance_filter: RelevanceFilter::Mentions,
+            settings_dir: dir.path().to_path_buf(),
             ..Config::default()
         };
         config.save(Some(path.clone())).expect("save must succeed");
@@ -974,6 +1117,7 @@ mod tests {
         let config = Config {
             relevance_filter: RelevanceFilter::Smart,
             relevance_model: Some("gpt-4o-mini".to_string()),
+            settings_dir: dir.path().to_path_buf(),
             ..Config::default()
         };
         config.save(Some(path.clone())).expect("save must succeed");
@@ -1000,6 +1144,250 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    // ── Boot config migration & write-through (RustyClaw#175, rung 3) ──
+    //
+    // Nothing used to create boot.toml, so no install had one and the
+    // resilience the split exists for never engaged for anybody. These pin
+    // both halves of closing that: the migration that creates the file, and
+    // the write-through without which creating it would silently revert
+    // every later provider change.
+
+    #[test]
+    fn loading_a_single_file_install_migrates_it_to_boot_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+        let boot_path = dir.path().join("boot.toml");
+        assert!(!boot_path.exists(), "the fixture is an unmigrated install");
+
+        Config::load(Some(path)).unwrap();
+
+        assert!(boot_path.exists(), "load must migrate the install");
+        let boot = crate::boot_config::BootConfig::load(&boot_path).unwrap();
+        assert_eq!(boot.provider.as_deref(), Some("openai"));
+        assert_eq!(boot.model.as_deref(), Some("gpt-4o"));
+    }
+
+    /// The migration must not fire from a config that did not actually load.
+    /// Deriving boot.toml from the defaults left behind by a quarantined
+    /// config would carve those defaults into the file that outranks
+    /// config.toml, turning one bad boot into a permanent one.
+    #[test]
+    fn a_quarantined_config_does_not_seed_boot_toml_with_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "this is not toml !!!").unwrap();
+
+        Config::load(Some(path)).unwrap();
+
+        assert!(
+            !dir.path().join("boot.toml").exists(),
+            "defaults must never be written to boot.toml"
+        );
+    }
+
+    #[test]
+    fn a_config_with_nothing_boot_critical_writes_no_boot_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(dir.path(), "");
+        Config::load(Some(path)).unwrap();
+        assert!(
+            !dir.path().join("boot.toml").exists(),
+            "an all-empty boot slice buys nothing and only confuses"
+        );
+    }
+
+    /// Boot wins on load, so a saved provider change that did not reach
+    /// boot.toml was silently reverted on the next start — `config set` and
+    /// `/model` both reported success and read back the old value.
+    #[test]
+    fn a_saved_provider_change_survives_the_next_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+        // First load migrates, so boot.toml now says openai.
+        let mut config = Config::load(Some(path.clone())).unwrap();
+        assert!(dir.path().join("boot.toml").exists());
+
+        // The user switches provider, exactly as the config UI does.
+        config.model = Some(ModelProvider {
+            provider: "anthropic".into(),
+            model: Some("claude-sonnet-4-20250514".into()),
+            base_url: None,
+            tls_ca_cert: None,
+            reasoning_effort: None,
+            max_tokens: None,
+            temperature: None,
+            token_budget: None,
+        });
+        config.save(Some(path.clone())).unwrap();
+
+        let reloaded = Config::load(Some(path)).unwrap().model.unwrap();
+        assert_eq!(
+            reloaded.provider, "anthropic",
+            "boot.toml must not revert a saved provider change"
+        );
+        assert_eq!(reloaded.model.as_deref(), Some("claude-sonnet-4-20250514"));
+    }
+
+    /// Reading someone else's config file must not reconfigure this machine.
+    ///
+    /// `boot_path` comes from the settings dir the loaded file *names*, which
+    /// need not be the directory that file lives in. Without the ownership
+    /// test, `--config /tmp/experiment.toml` naming the real settings dir
+    /// planted the experiment's provider and model in the install's
+    /// boot.toml — and since boot.toml outranks config.toml, every later
+    /// normal start read the planted values. The load-side twin of
+    /// `saving_to_an_unrelated_path_leaves_the_settings_dir_alone`.
+    #[test]
+    fn loading_a_side_config_plants_no_boot_file_in_the_install_it_names() {
+        let install = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+
+        // The install's own config, not yet migrated.
+        write_full_config(
+            install.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+
+        // A side file that merely names the same settings dir.
+        let side = elsewhere.path().join("experiment.toml");
+        std::fs::write(
+            &side,
+            format!(
+                "settings_dir = \"{}\"\nuse_secrets = true\n\
+                 [model]\nprovider = \"anthropic\"\nmodel = \"claude-experimental\"\n",
+                install.path().display()
+            ),
+        )
+        .unwrap();
+
+        Config::load(Some(side)).unwrap();
+
+        assert!(
+            !install.path().join("boot.toml").exists(),
+            "a side config must not plant a mirror in the install it names"
+        );
+        // And the install still starts as itself.
+        let own = Config::load(Some(install.path().join("config.toml"))).unwrap();
+        assert_eq!(own.model.unwrap().model.as_deref(), Some("gpt-4o"));
+    }
+
+    /// A save aimed somewhere else must not touch the install it names.
+    ///
+    /// The boot mirror was anchored on `settings_dir` alone, so saving a
+    /// config to an unrelated path reached into whatever state directory that
+    /// config happened to name. `Config::default()` names `~/.rustyclaw`, so
+    /// `cargo test` deleted the developer's real boot.toml — and passed. Same
+    /// shape as #456, one file over.
+    #[test]
+    fn saving_to_an_unrelated_path_leaves_the_settings_dir_alone() {
+        let install = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let boot_path = install.path().join("boot.toml");
+        std::fs::write(&boot_path, "[provider]\nname = \"anthropic\"\n").unwrap();
+
+        // A config that names the install, written somewhere it is not.
+        let config = Config {
+            settings_dir: install.path().to_path_buf(),
+            ..Config::default()
+        };
+        config
+            .save(Some(elsewhere.path().join("config.toml")))
+            .unwrap();
+
+        assert!(
+            boot_path.exists(),
+            "an export must not delete the install's boot config"
+        );
+        assert!(
+            !elsewhere.path().join("boot.toml").exists(),
+            "nor write a mirror beside the exported file"
+        );
+    }
+
+    /// Clearing the boot-critical settings must clear the mirror too.
+    ///
+    /// `write_boot_config` skipped an empty slice, which is right when
+    /// creating the file and wrong when maintaining it: the old boot.toml
+    /// stayed on disk, still outranking config.toml, and quietly reinstated
+    /// the provider the user had just removed.
+    #[test]
+    fn clearing_the_boot_critical_settings_removes_the_stale_boot_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+        let boot_path = dir.path().join("boot.toml");
+        let mut config = Config::load(Some(path.clone())).unwrap();
+        assert!(
+            boot_path.exists(),
+            "migrated, so there is a mirror to go stale"
+        );
+
+        // What `rustyclaw config unset model` does.
+        config.model = None;
+        config.save(Some(path.clone())).unwrap();
+
+        assert!(
+            !boot_path.exists(),
+            "a mirror must not outlive the settings it mirrors"
+        );
+        assert!(
+            Config::load(Some(path)).unwrap().model.is_none(),
+            "and the removed provider must not come back on the next load"
+        );
+    }
+
+    /// The write-through covers every field boot.toml owns, not just the
+    /// provider: workspace and the SSH bind revert the same way.
+    #[test]
+    fn a_saved_workspace_and_ssh_bind_survive_the_next_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(
+            dir.path(),
+            "[model]\nprovider = \"openai\"\n\n\
+             [ssh]\nenabled = true\nmode = \"standalone\"\nbind = \"127.0.0.1:2222\"\n",
+        );
+        let mut config = Config::load(Some(path.clone())).unwrap();
+
+        config.workspace_dir = Some(dir.path().join("elsewhere"));
+        if let Some(ssh) = config.ssh.as_mut() {
+            ssh.bind = "0.0.0.0:2300".into();
+        }
+        config.save(Some(path.clone())).unwrap();
+
+        let reloaded = Config::load(Some(path)).unwrap();
+        assert_eq!(reloaded.workspace_dir, Some(dir.path().join("elsewhere")));
+        assert_eq!(reloaded.ssh.unwrap().bind, "0.0.0.0:2300");
+    }
+
+    /// A boot bind must not be invented for a config that has no `[ssh]`
+    /// section: `apply` would then create one, so writing the gateway's
+    /// built-in default here would put an address the user never chose into
+    /// the file that outranks their config.
+    #[test]
+    fn migration_records_no_ssh_bind_when_the_config_has_no_ssh_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_full_config(dir.path(), "[model]\nprovider = \"ollama\"\n");
+        Config::load(Some(path)).unwrap();
+
+        let boot = crate::boot_config::BootConfig::load(&dir.path().join("boot.toml")).unwrap();
+        assert!(boot.ssh_bind.is_none());
+        assert!(
+            Config::load(Some(dir.path().join("config.toml")))
+                .unwrap()
+                .ssh
+                .is_none(),
+            "and no ssh section appears out of nowhere on reload"
+        );
     }
 
     #[test]

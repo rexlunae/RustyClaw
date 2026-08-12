@@ -61,6 +61,18 @@ pub struct SshServer {
     connection_tx: mpsc::Sender<SshTransport>,
     /// Receiver for accepted connections.
     connection_rx: Option<mpsc::Receiver<SshTransport>>,
+    /// The address [`listen`](Self::listen) actually bound.
+    ///
+    /// `None` until it succeeds, which is the point: nothing may report the
+    /// gateway as listening on the strength of a *requested* address.
+    bound_addr: Option<SocketAddr>,
+    /// Why the russh accept loop stopped, once it has.
+    ///
+    /// The loop lives in a detached task, so its death is invisible from
+    /// here without a channel to say so. A `watch` rather than a `oneshot`
+    /// because [`accept`](TransportAcceptor::accept) is called in a `select!`
+    /// and must stay pollable after the reason arrives.
+    server_stopped: watch::Receiver<Option<String>>,
 }
 
 impl SshServer {
@@ -124,6 +136,7 @@ impl SshServer {
         };
 
         let (tx, rx) = mpsc::channel(16);
+        let (_stopped_tx, stopped_rx) = watch::channel(None);
 
         Ok(Self {
             config: Arc::new(config),
@@ -131,20 +144,43 @@ impl SshServer {
             authorized_clients: Arc::new(Mutex::new(authorized_clients)),
             connection_tx: tx,
             connection_rx: Some(rx),
+            bound_addr: None,
+            // Replaced wholesale by `listen`. Until then the sender is
+            // dropped, so `accept` reads the server as stopped — which it
+            // is: nothing has started it.
+            server_stopped: stopped_rx,
         })
     }
 
-    /// Start listening for SSH connections.
+    /// Bind `addr` and start serving SSH connections on it.
+    ///
+    /// The bind happens here, not in the spawned task, and its error is
+    /// returned. It used to happen inside `run_on_address` *after* this
+    /// function had already logged "SSH server listening" and returned
+    /// `Ok(())`, so a port already in use — a second gateway, a stale one
+    /// the PID file had lost track of — produced a process that announced
+    /// itself as listening three times over, wrote a PID file, reported
+    /// `running` from `gateway status`, and refused every connection for the
+    /// rest of its life. The only sign was one `ERROR` line logged from a
+    /// detached task, below the three cheerful ones.
     pub async fn listen(&mut self, addr: SocketAddr) -> Result<()> {
+        let socket = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("Failed to bind SSH listener on {addr}"))?;
+        // Port 0 is a real request ("pick one"), so report what was bound
+        // rather than what was asked for.
+        let bound = socket.local_addr().unwrap_or(addr);
+
         let config = self.config.clone();
         let authorized = self.authorized_clients.clone();
         let authorized_clients_path = self.ssh_config.authorized_clients_path.clone();
         let allow_unknown_keys_with_totp = self.ssh_config.allow_unknown_keys_with_totp;
         let tx = self.connection_tx.clone();
+        let (stopped_tx, stopped_rx) = watch::channel(None);
 
-        info!(address = %addr, "SSH server listening");
-
-        // Spawn the server
+        // Detached deliberately: this task *is* the server, and it runs for
+        // the process's life. It cannot be silently lost — every way out
+        // publishes a reason on `stopped_tx`, which `accept` reports.
         tokio::spawn(async move {
             let mut handler = SshHandler {
                 authorized_clients: authorized,
@@ -157,12 +193,23 @@ impl SshServer {
                 rate_limiter: Arc::new(Mutex::new(HashMap::new())),
             };
 
-            // Use Server trait's run_on_address method
             use russh::server::Server;
-            if let Err(e) = handler.run_on_address(config, addr).await {
-                error!(error = %e, "SSH server error");
-            }
+            // russh returns from its accept loop on the first accept error
+            // (a descriptor limit, for instance), and a clean return means a
+            // shutdown nobody here requested. Both leave a gateway that can
+            // no longer be reached, so both are reported as failures rather
+            // than letting the accept loop wait on a socket that is gone.
+            let reason = match handler.run_on_socket(config, &socket).await {
+                Ok(()) => "the SSH accept loop exited".to_string(),
+                Err(e) => format!("the SSH accept loop failed: {e}"),
+            };
+            error!(address = %bound, reason = %reason, "SSH server stopped");
+            stopped_tx.send_replace(Some(reason));
         });
+
+        self.bound_addr = Some(bound);
+        self.server_stopped = stopped_rx;
+        info!(address = %bound, "SSH server listening");
 
         Ok(())
     }
@@ -170,21 +217,57 @@ impl SshServer {
 
 #[async_trait]
 impl TransportAcceptor for SshServer {
+    /// Wait for the next authenticated SSH channel.
+    ///
+    /// Returns an error once the server behind it has stopped, so the caller
+    /// can shut down instead of waiting forever on a queue nothing will ever
+    /// feed again.
     async fn accept(&mut self) -> Result<Box<dyn Transport>> {
-        let rx = self
-            .connection_rx
+        // Split borrows: the connection queue and the stop signal are polled
+        // together below.
+        let Self {
+            connection_rx,
+            server_stopped,
+            ..
+        } = self;
+        let rx = connection_rx
             .as_mut()
             .context("SSH server not initialized")?;
 
-        rx.recv()
-            .await
-            .context("SSH server closed")
-            .map(|t| Box::new(t) as Box<dyn Transport>)
+        // Already stopped — including "never started", where `listen` has not
+        // replaced the placeholder sender.
+        let stopped = server_stopped.borrow().clone();
+        if let Some(reason) = stopped {
+            anyhow::bail!("SSH server stopped: {reason}");
+        }
+
+        tokio::select! {
+            conn = rx.recv() => conn
+                .context("SSH server closed")
+                .map(|t| Box::new(t) as Box<dyn Transport>),
+            changed = server_stopped.changed() => {
+                let reason = match changed {
+                    // A sender dropped without publishing is still a stop.
+                    Err(_) => "the SSH server task ended".to_string(),
+                    Ok(()) => server_stopped
+                        .borrow()
+                        .clone()
+                        .unwrap_or_else(|| "the SSH server task ended".to_string()),
+                };
+                anyhow::bail!("SSH server stopped: {reason}")
+            }
+        }
     }
 
+    /// The address the listener is bound to.
+    ///
+    /// Errors before [`listen`](SshServer::listen) has bound one. It used to
+    /// answer `0.0.0.0:2222` unconditionally, which was wrong for every
+    /// gateway configured anywhere else and wrong for all of them before the
+    /// bind.
     fn local_addr(&self) -> Result<SocketAddr> {
-        // TODO: Track the bound address
-        Ok("0.0.0.0:2222".parse()?)
+        self.bound_addr
+            .context("SSH server is not listening yet — call `listen` first")
     }
 }
 
@@ -787,6 +870,98 @@ mod tests {
             _server_public_key: &PublicKey,
         ) -> std::result::Result<bool, Self::Error> {
             Ok(true)
+        }
+    }
+
+    fn test_config(dir: &std::path::Path) -> SshConfig {
+        SshConfig {
+            listen_addr: "127.0.0.1:0".parse().expect("addr"),
+            host_key_path: dir.join("ssh_host_key"),
+            authorized_clients_path: dir.join("authorized_clients"),
+            allow_password: false,
+            require_pubkey: true,
+            allow_unknown_keys_with_totp: false,
+        }
+    }
+
+    /// A gateway that cannot bind must say so, not report itself listening.
+    ///
+    /// The bind used to happen inside the spawned `run_on_address`, after
+    /// `listen` had already logged "SSH server listening" and returned `Ok`.
+    /// An occupied port then produced a process that announced itself as
+    /// listening, wrote a PID file, and refused every connection for the rest
+    /// of its life — the whole of the reported "it runs but does not accept
+    /// connections".
+    #[tokio::test]
+    async fn a_failed_bind_is_reported_rather_than_announced_as_listening() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("occupying listener");
+        let addr = occupied.local_addr().expect("addr");
+
+        let mut server = SshServer::new(test_config(dir.path()))
+            .await
+            .expect("server constructs");
+        let err = server
+            .listen(addr)
+            .await
+            .expect_err("binding an occupied port must fail");
+        assert!(
+            format!("{err:#}").contains("Failed to bind SSH listener"),
+            "the error must name the bind: {err:#}"
+        );
+        assert!(
+            server.local_addr().is_err(),
+            "nothing may report an address that was never bound"
+        );
+    }
+
+    /// A successful bind reports the address actually in use, including the
+    /// one the kernel picked for port 0.
+    #[tokio::test]
+    async fn a_bound_server_reports_the_address_it_is_listening_on() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut server = SshServer::new(test_config(dir.path()))
+            .await
+            .expect("server constructs");
+        server
+            .listen("127.0.0.1:0".parse().expect("addr"))
+            .await
+            .expect("bind");
+
+        let bound = server.local_addr().expect("bound address");
+        assert_ne!(bound.port(), 0, "port 0 must resolve to the chosen port");
+        // The socket is real: something is accepting on it.
+        tokio::net::TcpStream::connect(bound)
+            .await
+            .expect("the reported address must be connectable");
+    }
+
+    /// `accept` must fail once the server behind it is gone.
+    ///
+    /// It used to park on a queue nothing would ever feed again, and the
+    /// caller's accept loop merely logged and looped — a live process with an
+    /// unreachable gateway, spinning.
+    #[tokio::test]
+    async fn accept_fails_once_the_server_has_stopped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut server = SshServer::new(test_config(dir.path()))
+            .await
+            .expect("server constructs");
+
+        // Never started: `listen` has not run, so there is no server at all.
+        // `Transport` is not `Debug`, so the success arm cannot be unwrapped
+        // into an assertion message — match instead.
+        let accepted = tokio::time::timeout(std::time::Duration::from_secs(5), server.accept())
+            .await
+            .expect("accept must not hang on a server that was never started");
+        match accepted {
+            Ok(_) => panic!("accept must fail when no server is running"),
+            Err(err) => assert!(
+                format!("{err:#}").contains("SSH server stopped"),
+                "the error must name the stop: {err:#}"
+            ),
         }
     }
 
