@@ -343,7 +343,15 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     // Persist to the local config; `Config::save` re-registers
                     // the runtime provider catalogue, so the model bar picks
                     // the new provider up immediately.
-                    match rustyclaw_core::config::Config::load(None) {
+                    //
+                    // `reload_config`, not `resolved_config`: this is a
+                    // read-modify-write, so it needs the file's current
+                    // contents rather than the startup snapshot. It is also
+                    // not `Config::load(None)`, which read the *default*
+                    // location and then saved to that config's settings dir —
+                    // under `--profile` the provider landed in the wrong
+                    // installation.
+                    match crate::reload_config() {
                         Ok(mut config) => {
                             let id = cfg.id.clone();
                             let replaced = config
@@ -380,7 +388,8 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_custom_provider_remove: move |id: String| {
-                    match rustyclaw_core::config::Config::load(None) {
+                    // Same read-modify-write as the add handler above.
+                    match crate::reload_config() {
                         Ok(mut config) => {
                             let before = config.custom_providers.len();
                             config.custom_providers.retain(|p| p.id != id);
