@@ -344,9 +344,18 @@ pub fn expand_tilde(p: &str) -> PathBuf {
 }
 
 /// Blocked shell metacharacter patterns for command validation.
-const BLOCKED_COMMAND_PATTERNS: &[&str] = &["$(<", "${HOME", "${cred", "${CRED"];
+///
+/// `${HOME` used to be here, as a way of catching `${HOME}/.rustyclaw/…`
+/// spellings that the literal `~/.rustyclaw` check missed. It blocked every
+/// ordinary use of the variable with it — `cd ${HOME}/src && cargo build` was
+/// refused — and it is no longer needed: the settings-directory rule below
+/// matches on the path's leaf, so it sees `${HOME}` spellings for free.
+const BLOCKED_COMMAND_PATTERNS: &[&str] = &["$(<", "${cred", "${CRED"];
 
 /// Blocked substrings in command strings indicating credential access attempts.
+///
+/// These are matched anywhere in the command, because a file with one of
+/// these names is credential material wherever it lives.
 const BLOCKED_CRED_SUBSTRINGS: &[&str] = &[
     "/secrets.json",
     "/secrets.key",
@@ -356,17 +365,73 @@ const BLOCKED_CRED_SUBSTRINGS: &[&str] = &[
     "/.openclaw/",
 ];
 
+/// Files inside a RustyClaw settings directory that hold credential material.
+///
+/// The settings directory as a whole is *not* sensitive — it holds the log
+/// the agent may need to read, `boot.toml`, threads, projects and skills — so
+/// only these leaf names are refused.
+///
+/// `config.toml` is on the list because it can still carry secrets in
+/// plaintext: `MessengerConfig` has `token`, `password` and `access_token`
+/// fields, and installs that predate the move to vault `secret_refs` keep
+/// live bot tokens there. It comes off this list the day those fields do.
+const SENSITIVE_SETTINGS_FILES: &[&str] = &[
+    "config.toml",
+    "ssh_host_key",
+    "client_ed25519_key",
+    "authorized_clients",
+];
+
+/// Split a command into path-like tokens on whitespace, shell separators and
+/// quotes.
+///
+/// Matching on tokens rather than raw substrings is what lets the checks
+/// below look at a path's *leaf*. `/proc/meminfo` and `/proc/<pid>/mem` share
+/// the substring `/mem`; only one of them is a way to read another process's
+/// memory, and the difference is visible only once the token is split out and
+/// its last component examined.
+fn command_tokens(command: &str) -> impl Iterator<Item = &str> {
+    command
+        .split(|c: char| {
+            c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(' | ')' | '<' | '>' | '"' | '\'')
+        })
+        .filter(|t| !t.is_empty())
+}
+
+/// The last path component of a token, or `""` for a token ending in `/`.
+fn path_leaf(token: &str) -> &str {
+    token.rsplit('/').next().unwrap_or("")
+}
+
 /// Check a command string for direct credential-exfiltration patterns.
 ///
-/// This supplements `command_references_credentials` by catching patterns
-/// that the simple substring check misses.  Returns `true` if the command
-/// should be blocked.
+/// A heuristic pre-filter, not the enforcement boundary: the credentials
+/// directory is denied at the OS level by
+/// [`SandboxPolicy::protect_credentials`](crate::sandbox::SandboxPolicy)
+/// (bubblewrap, Landlock, or seatbelt depending on platform), and the file
+/// tools refuse protected paths through [`is_protected_path`]. This catches
+/// shell spellings before the command runs, so precision matters: a rule that
+/// refuses ordinary work trains the agent to give up, and an agent that
+/// stops after three blocked commands is not more secure than one that reads
+/// its own log.
+///
+/// Returns `true` if the command should be blocked.
 pub fn command_has_exfiltration_patterns(command: &str) -> bool {
     let lower = command.to_lowercase();
 
-    // Block commands that read /proc/self/fd or /proc/<pid>/mem
-    if lower.contains("/proc/") && (lower.contains("mem") || lower.contains("fd/")) {
-        return true;
+    // Process introspection. `/proc/<pid>/mem` and `/proc/<pid>/environ` read
+    // another process's memory and environment; the gateway is handed
+    // `RUSTYCLAW_VAULT_PASSWORD` and `RUSTYCLAW_MODEL_API_KEY` through its
+    // environment (see `daemon::start`), so `environ` is the most direct
+    // route to both — and it was not previously blocked at all, while
+    // `/proc/meminfo` was.
+    for token in command_tokens(&lower) {
+        if !token.contains("/proc/") {
+            continue;
+        }
+        if matches!(path_leaf(token), "mem" | "environ") || token.contains("/fd/") {
+            return true;
+        }
     }
 
     // Block sensitive patterns.
@@ -383,8 +448,14 @@ pub fn command_has_exfiltration_patterns(command: &str) -> bool {
         }
     }
 
-    // Block `~/.rustyclaw` or `$HOME/.rustyclaw` references
-    if lower.contains("~/.rustyclaw") || lower.contains("$home/.rustyclaw") {
+    // Credential material inside a settings directory. Both halves are
+    // checked across the whole command rather than within one token, so
+    // `cd ~/.rustyclaw && cat config.toml` is caught as well as the single
+    // path spelling. `.rustyclaw` rather than `.rustyclaw/` so that
+    // `--profile` directories (`~/.rustyclaw-work`) match too.
+    if lower.contains(".rustyclaw")
+        && command_tokens(&lower).any(|t| SENSITIVE_SETTINGS_FILES.contains(&path_leaf(t)))
+    {
         return true;
     }
 
@@ -554,5 +625,103 @@ mod expand_tilde_tests {
         // home would quietly resolve to `$HOME/alice/notes`, a path the caller
         // never asked for; leaving it alone fails visibly instead.
         assert_eq!(expand_tilde("~alice/notes"), PathBuf::from("~alice/notes"));
+    }
+}
+
+#[cfg(test)]
+mod command_guard_tests {
+    use super::{command_has_exfiltration_patterns, path_leaf};
+
+    // ── Command exfiltration heuristic ──────────────────────────────────
+    //
+    // This function had no tests, which is how three rules that refuse
+    // ordinary work survived: the whole settings directory, every `${HOME}`
+    // expansion, and `/proc/meminfo`. The two halves are kept as separate
+    // tests so a future tightening that breaks legitimate commands, or a
+    // loosening that lets credential material through, fails on the half it
+    // actually broke.
+
+    /// Commands an agent runs in the course of ordinary work. Every one of
+    /// these was refused before; a `false` here is the bug the user reported
+    /// as "running into this way too often".
+    #[test]
+    fn ordinary_commands_are_not_mistaken_for_exfiltration() {
+        for cmd in [
+            // The settings directory is not itself a secret. Reading the
+            // gateway's own log is the first thing to do when it misbehaves.
+            "ls -la ~/.rustyclaw/",
+            "tail -50 ~/.rustyclaw/logs/gateway.log",
+            "cat ~/.rustyclaw/boot.toml",
+            "wc -l ~/.rustyclaw/threads/12.log.jsonl",
+            // `${HOME}` is how you write a path in a shell.
+            "cd ${HOME}/src && cargo build",
+            "echo ${HOME}/projects",
+            // Machine stats share a prefix with process introspection.
+            "cat /proc/meminfo",
+            "cat /proc/cpuinfo",
+            "head -1 /proc/loadavg",
+            // Nothing to do with credentials at all.
+            "cargo test --workspace",
+            "git log --oneline -20",
+        ] {
+            assert!(
+                !command_has_exfiltration_patterns(cmd),
+                "ordinary command was blocked: {cmd}"
+            );
+        }
+    }
+
+    /// The cases the guard exists for. `/proc/<pid>/environ` is new: the
+    /// gateway receives the vault password and the model API key through its
+    /// environment, so it is the most direct route to both, and the previous
+    /// `contains("mem")` rule let it through while refusing `/proc/meminfo`.
+    #[test]
+    fn credential_access_is_still_blocked() {
+        for cmd in [
+            "cat /proc/self/environ",
+            "cat /proc/1234/environ",
+            "cat /proc/1234/mem",
+            "ls /proc/self/fd/",
+            "cat ~/.rustyclaw/credentials/openai",
+            "cat ~/.rustyclaw/secrets.json",
+            "cat ~/.rustyclaw/secrets.key",
+            "cat ~/.rustyclaw/ssh_host_key",
+            "cat ~/.rustyclaw/client_ed25519_key",
+            "cat ~/.openclaw/credentials/anthropic",
+            // config.toml can still hold plaintext messenger tokens.
+            "cat ~/.rustyclaw/config.toml",
+            "grep token ~/.rustyclaw/config.toml",
+            // Spellings that avoid the literal `~/`.
+            "cat $HOME/.rustyclaw/config.toml",
+            "cat ${HOME}/.rustyclaw/config.toml",
+            "cat /home/someone/.rustyclaw/config.toml",
+            // A `--profile` settings directory is still a settings directory.
+            "cat ~/.rustyclaw-work/config.toml",
+            // Split across the command rather than in one path.
+            "cd ~/.rustyclaw && cat config.toml",
+            // Substitution tricks the metacharacter list exists for.
+            "$(< ~/.somewhere/key)",
+        ] {
+            assert!(
+                command_has_exfiltration_patterns(cmd),
+                "credential access was allowed: {cmd}"
+            );
+        }
+    }
+
+    /// A project's own `config.toml` is not the settings directory's, and is
+    /// refused only when the command also reaches for a settings directory.
+    #[test]
+    fn a_project_config_is_not_the_settings_config() {
+        assert!(!command_has_exfiltration_patterns("cat ./config.toml"));
+        assert!(!command_has_exfiltration_patterns("cat src/config.toml"));
+    }
+
+    #[test]
+    fn path_leaf_handles_trailing_slashes_and_bare_names() {
+        assert_eq!(path_leaf("~/.rustyclaw/config.toml"), "config.toml");
+        assert_eq!(path_leaf("~/.rustyclaw/"), "");
+        assert_eq!(path_leaf("config.toml"), "config.toml");
+        assert_eq!(path_leaf(""), "");
     }
 }
