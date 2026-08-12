@@ -18,6 +18,7 @@ pub struct AppMenuIds {
     pub swarm: muda::MenuId,
     pub skills: muda::MenuId,
     pub system_info: muda::MenuId,
+    pub gateway_control: muda::MenuId,
     pub local_models: muda::MenuId,
     pub services: muda::MenuId,
     pub downloads: muda::MenuId,
@@ -61,6 +62,7 @@ pub fn build_app_menu() -> muda::Menu {
     // ── Tools ─────────────────────────────────────────────────────────────
     let settings = muda::MenuItem::new("Settings…", true, None);
     let system_info = muda::MenuItem::new("System Info…", true, "CmdOrCtrl+I".parse().ok());
+    let gateway_control = muda::MenuItem::new("Gateway…", true, "CmdOrCtrl+G".parse().ok());
     let secrets = muda::MenuItem::new("Secrets Vault…", true, None);
     let pair = muda::MenuItem::new("Pair Gateway…", true, None);
     let swarm = muda::MenuItem::new("Swarm Manager…", true, None);
@@ -90,6 +92,7 @@ pub fn build_app_menu() -> muda::Menu {
         swarm: swarm.id().clone(),
         skills: skills.id().clone(),
         system_info: system_info.id().clone(),
+        gateway_control: gateway_control.id().clone(),
         local_models: local_models.id().clone(),
         services: services.id().clone(),
         downloads: downloads.id().clone(),
@@ -153,6 +156,7 @@ pub fn build_app_menu() -> muda::Menu {
             &settings,
             &secrets,
             &pair,
+            &gateway_control,
             &tools_sep,
             &swarm,
             &skills,

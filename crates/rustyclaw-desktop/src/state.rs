@@ -218,6 +218,17 @@ pub struct AppState {
     /// changes, so this is a live view rather than something the panel polls.
     pub downloads: rustyclaw_view::DownloadsData,
 
+    /// Whether the gateway control dialog is visible.
+    pub show_gateway_dialog: bool,
+
+    /// Local daemon status and action state for the gateway dialog.
+    ///
+    /// The daemon half is a snapshot, not a subscription: it is re-probed when
+    /// the dialog opens and after every action, because nothing pushes PID
+    /// file changes at us. `url` and `connected` are refreshed from the live
+    /// state at render time instead of being mirrored here.
+    pub gateway_control: rustyclaw_view::GatewayControlData,
+
     /// Whether the services dialog is visible.
     pub show_services_dialog: bool,
 
@@ -302,27 +313,29 @@ impl Default for AppState {
         let working_directory = std::env::current_dir()
             .ok()
             .map(|p| p.display().to_string());
-        let configured_model = rustyclaw_core::config::Config::load(None)
-            .ok()
-            .and_then(|cfg| cfg.model);
+        // The config `main` resolved, so `--config` / `--settings-dir` /
+        // `--profile` are honoured. Each of these used to call
+        // `Config::load(None)` independently, which re-read the default
+        // location and quietly ignored all three: launching with `--profile
+        // work` showed the default profile's model and asked an already
+        // hatched agent to hatch again.
+        let config = crate::resolved_config();
+        let configured_model = config.model.clone();
         let provider = configured_model.as_ref().map(|m| m.provider.clone());
         let model = configured_model.and_then(|m| m.model);
 
         // Check whether SOUL.md needs first-run setup.
-        let needs_hatching = rustyclaw_core::config::Config::load(None)
-            .ok()
-            .map(|cfg| {
-                let mut sm = rustyclaw_core::soul::SoulManager::new(cfg.soul_path());
-                // A failed load leaves the manager empty, and an empty manager
-                // reads as "never hatched" — so an unreadable SOUL.md sends the
-                // user back through first-run setup for an agent that already
-                // exists. Worth a line saying which of the two happened.
-                if let Err(e) = sm.load() {
-                    tracing::warn!("treating the agent as unhatched — SOUL.md did not load: {e}");
-                }
-                sm.needs_hatching()
-            })
-            .unwrap_or(false);
+        let needs_hatching = {
+            let mut sm = rustyclaw_core::soul::SoulManager::new(config.soul_path());
+            // A failed load leaves the manager empty, and an empty manager
+            // reads as "never hatched" — so an unreadable SOUL.md sends the
+            // user back through first-run setup for an agent that already
+            // exists. Worth a line saying which of the two happened.
+            if let Err(e) = sm.load() {
+                tracing::warn!("treating the agent as unhatched — SOUL.md did not load: {e}");
+            }
+            sm.needs_hatching()
+        };
 
         Self {
             connection: ConnectionStatus::Disconnected,
@@ -375,6 +388,8 @@ impl Default for AppState {
             show_system_info: false,
             show_downloads_dialog: false,
             downloads: Default::default(),
+            show_gateway_dialog: false,
+            gateway_control: Default::default(),
             show_services_dialog: false,
             services_data: None,
             show_engines_dialog: false,
@@ -395,9 +410,7 @@ impl Default for AppState {
             show_tools_dialog: false,
             tools_data: None,
             tools_stale: false,
-            custom_providers: rustyclaw_core::config::Config::load(None)
-                .map(|cfg| cfg.custom_providers)
-                .unwrap_or_default(),
+            custom_providers: config.custom_providers,
             show_skills_dialog: false,
             skills_data: Vec::new(),
             show_analytics_dialog: false,
@@ -411,6 +424,21 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// Whether there is a live gateway session.
+    ///
+    /// `Connected` and `Authenticated` are both live: a gateway that demands
+    /// auth leaves the state at `Authenticated` and never returns to
+    /// `Connected`, so checking only the latter reads a fully authenticated
+    /// session as offline. Three call sites already spelled the pair out by
+    /// hand; this is the one definition they now share, because the fourth
+    /// spelled it wrong.
+    pub fn is_connected(&self) -> bool {
+        matches!(
+            self.connection,
+            ConnectionStatus::Connected | ConnectionStatus::Authenticated
+        )
+    }
+
     /// Append the user's own message to the transcript, attaching media refs
     /// (images, audio clips, files) so the bubble renders the media
     /// immediately, before the gateway's history reply replaces it with the

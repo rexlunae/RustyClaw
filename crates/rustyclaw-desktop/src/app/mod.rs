@@ -238,12 +238,7 @@ pub fn App() -> Element {
     // Close the connection dialog automatically once we've successfully
     // connected (or authenticated, for gateways that require auth).
     use_effect(move || {
-        let status = state.read().connection.clone();
-        if matches!(
-            status,
-            ConnectionStatus::Connected | ConnectionStatus::Authenticated
-        ) && *show_connection.read()
-        {
+        if state.read().is_connected() && *show_connection.read() {
             show_connection.set(false);
         }
     });
@@ -259,10 +254,7 @@ pub fn App() -> Element {
         let (provider, connected, already_requested) = {
             let s = state.read();
             let provider = s.provider.clone();
-            let connected = matches!(
-                s.connection,
-                ConnectionStatus::Connected | ConnectionStatus::Authenticated
-            );
+            let connected = s.is_connected();
             let requested = provider
                 .as_deref()
                 .map(|p| s.provider_models_requested.contains(p))
@@ -1131,6 +1123,14 @@ pub fn App() -> Element {
                 let mut s = state.write();
                 s.skills_data = skills;
                 s.show_skills_dialog = !s.show_skills_dialog;
+            } else if event.id == ids.gateway_control {
+                let v = state.read().show_gateway_dialog;
+                state.write().show_gateway_dialog = !v;
+                if !v {
+                    // Opening: nothing pushes PID-file changes at us, so the
+                    // status is only ever as fresh as the last time we looked.
+                    crate::app_support::refresh_gateway_control(state);
+                }
             } else if event.id == ids.system_info {
                 let v = state.read().show_system_info;
                 state.write().show_system_info = !v;

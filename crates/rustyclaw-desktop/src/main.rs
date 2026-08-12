@@ -42,6 +42,17 @@ use rustyclaw_core::client_prefs::{
 static GATEWAY_URL: OnceLock<Option<String>> = OnceLock::new();
 static SKIP_DIALOG: OnceLock<bool> = OnceLock::new();
 static FORCE_DIALOG: OnceLock<bool> = OnceLock::new();
+/// The config `main` resolved, after `--settings-dir` / `--profile` / `-c`
+/// were applied.
+///
+/// The rest of the crate used to reach for `Config::load(None)`, which
+/// re-reads the default location and so silently discards those flags. Mild
+/// for the fields that did it (the configured model, whether the agent needs
+/// hatching, custom providers), but the gateway panel derives a settings
+/// directory from the config and then acts on the PID file inside it — under
+/// `--profile` that would have started and stopped a daemon belonging to a
+/// different profile than the one running.
+static RESOLVED_CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Debug, Parser)]
 #[command(
@@ -79,6 +90,7 @@ fn main() -> Result<()> {
 
     let mut config = Config::load(cli.common.config_path())?;
     cli.common.apply_overrides(&mut config);
+    RESOLVED_CONFIG.set(config.clone()).ignore();
 
     // Only forward an explicit URL (from --url or config). When neither is set,
     // leave it None so the desktop client shows its connection dialog with the
@@ -209,6 +221,20 @@ pub(crate) fn set_dock_icon() {
 
 pub(crate) fn configured_gateway_url() -> Option<String> {
     GATEWAY_URL.get().cloned().flatten()
+}
+
+/// The config resolved at startup, with the command-line overrides applied.
+///
+/// Falls back to a plain load, then to the defaults, for callers that reach
+/// this before `main` has set it — the `AppState::default()` unit tests in
+/// `state.rs` are the ones that do. Neither fallback runs in the app itself,
+/// where `main` sets it before the window opens.
+pub(crate) fn resolved_config() -> Config {
+    RESOLVED_CONFIG
+        .get()
+        .cloned()
+        .or_else(|| Config::load(None).ok())
+        .unwrap_or_default()
 }
 
 pub(crate) fn skip_connection_dialog() -> bool {

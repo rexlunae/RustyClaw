@@ -73,6 +73,7 @@ pub mod dialogs;
 pub mod downloads;
 pub mod engines;
 pub mod file_browser;
+pub mod gateway_control;
 pub mod kernel;
 pub mod logs;
 pub mod mcp;
@@ -114,6 +115,9 @@ pub use dialogs::{
 };
 pub use downloads::{DownloadData, DownloadsData};
 pub use file_browser::{FileBrowserData, FileBrowserEntry};
+pub use gateway_control::{
+    ActionOutcome, GatewayControlData, LocalDaemonState, PendingAction, url_is_loopback,
+};
 pub use kernel::{GpuDisplayInfo, HostInfoData, LoadStatusData};
 pub use message::{
     MessageBubbleData, StreamingIndicatorData, ToolCallData, format_bytes, format_duration_ms,

@@ -36,6 +36,7 @@ mod dir_picker;
 mod downloads;
 mod edit_dialogs;
 mod engines;
+mod gateway_control;
 mod hatching;
 mod logs;
 mod mcp;
@@ -69,6 +70,7 @@ pub use downloads::DownloadsDialog;
 pub use edit_dialogs::{EditProjectDialog, EditThreadDialog};
 #[allow(unused_imports)]
 pub use engines::EnginesDialog;
+pub use gateway_control::{GatewayControlCommand, GatewayControlDialog};
 pub use hatching::HatchingDialog;
 pub use logs::LogsDialog;
 pub use mcp::McpDialog;
