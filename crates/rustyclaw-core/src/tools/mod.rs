@@ -411,8 +411,8 @@ pub fn tool_summary(name: &str) -> &'static str {
         "npm_manage" => "Manage Node.js packages & scripts via npm",
         "agent_setup" => "Set up local model infrastructure",
         "pdf" => "Analyze PDF files (extract text, metadata, page counts)",
-        #[cfg(feature = "office-docs")]
         "chart" => "Render a bar, line, scatter or pie chart as an SVG",
+        #[cfg(feature = "office-docs")]
         "document" => "Extract text from Office documents (.docx, .xlsx, .pptx)",
         "swarm_create" => "Create a swarm of persistent registered agents",
         "swarm_list" => "List all swarms and their health",

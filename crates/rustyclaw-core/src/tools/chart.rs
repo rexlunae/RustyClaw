@@ -125,25 +125,25 @@ fn resolve_output(workspace_dir: &Path, rel: &str) -> ToolResult<std::path::Path
     } else {
         workspace_dir.join(rel)
     };
-    // Compared lexically after normalising `.`/`..`, because the file does not
-    // exist yet and `canonicalize` fails on paths that do not.
-    let mut normalised = std::path::PathBuf::new();
-    for part in candidate.components() {
-        match part {
-            std::path::Component::ParentDir => {
-                normalised.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => normalised.push(other),
-        }
-    }
-    if !normalised.starts_with(workspace_dir) {
+    // Resolved, not just normalised. Stripping `.`/`..` textually and then
+    // comparing prefixes misses the case that matters: `link/out.svg`, where
+    // `link` is a symlink inside the workspace pointing somewhere else, passes
+    // a lexical check and then `create_dir_all` and the write both follow it
+    // straight out. `resolve_path_no_race` canonicalises — via the parent when
+    // the file does not exist yet, which is always here — and double-checks
+    // for a symlink swapped in between the two resolutions.
+    let resolved = super::helpers::resolve_path_no_race(&candidate)
+        .map_err(|e| ToolError::context("Could not resolve the chart path", e))?;
+    let root = workspace_dir
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_dir.to_path_buf());
+    if !resolved.starts_with(&root) {
         return Err(ToolError::msg(format!(
             "chart path {} escapes the workspace",
-            normalised.display()
+            resolved.display()
         )));
     }
-    Ok(normalised)
+    Ok(resolved)
 }
 
 /// Category labels for the x axis, when the caller supplied them.
@@ -544,6 +544,22 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
         // renderer takes the short way round and draws its complement.
         let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
         let label = category(categories, i);
+        // A slice covering the whole circle has an arc whose end point is its
+        // start point, and the SVG spec says a renderer drops such a segment —
+        // so a one-value pie drew nothing but its title. A circle has no start
+        // and end to coincide.
+        if sweep >= std::f64::consts::TAU - 1e-9 {
+            _ = write!(
+                svg,
+                r#"<circle cx="{}" cy="{}" r="{r}" fill="{colour}"><title>{}: {} (100%)</title></circle>"#,
+                n(cx),
+                n(cy),
+                esc(&label),
+                n(v)
+            );
+            angle = end;
+            continue;
+        }
         _ = write!(
             svg,
             r#"<path d="M {} {} L {} {} A {r} {r} 0 {large} 1 {} {} Z" fill="{colour}"><title>{}: {} ({}%)</title></path>"#,
@@ -682,6 +698,56 @@ mod tests {
     fn a_single_point_does_not_divide_by_zero() {
         let svg = render(json!({"type": "line", "values": [42]}));
         assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+    }
+
+    /// A slice covering the whole circle has an arc whose end point equals its
+    /// start point, and the SVG spec says renderers drop such a segment — so a
+    /// one-value pie drew nothing but its title. Nothing errored; the picture
+    /// was simply blank.
+    #[test]
+    fn a_single_slice_pie_draws_a_circle_not_a_vanishing_arc() {
+        let svg = render(json!({
+            "type": "pie",
+            "categories": ["everything"],
+            "values": [5],
+        }));
+        assert!(svg.contains("<circle"), "the only slice vanished: {svg}");
+        assert!(svg.contains("(100%)"), "{svg}");
+    }
+
+    /// The same when several values are given but only one is positive: the
+    /// others are dropped, so the survivor still spans the full circle.
+    #[test]
+    fn one_positive_value_among_many_still_draws_a_circle() {
+        let svg = render(json!({
+            "type": "pie",
+            "categories": ["kept", "dropped"],
+            "values": [3, -1],
+        }));
+        assert!(svg.contains("<circle"), "{svg}");
+    }
+
+    /// Lexical containment misses the case that matters: a symlink inside the
+    /// workspace pointing out of it passes a prefix check, and both
+    /// `create_dir_all` and the write then follow it.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_out_of_the_workspace_does_not_smuggle_the_chart_out() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        std::os::unix::fs::symlink(outside.path(), workspace.path().join("escape"))
+            .expect("symlink");
+
+        let err = exec_chart(
+            &json!({"values": [1], "path": "escape/out.svg"}),
+            workspace.path(),
+        )
+        .expect_err("a symlink out of the workspace must be refused");
+        assert!(format!("{err}").contains("escapes the workspace"), "{err}");
+        assert!(
+            !outside.path().join("out.svg").exists(),
+            "the chart was written outside the workspace anyway"
+        );
     }
 
     #[test]

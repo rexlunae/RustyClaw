@@ -845,6 +845,7 @@ pub fn agent_setup_params() -> Vec<ToolParam> {
     }]
 }
 
+/// Parameters for the `chart` tool.
 pub fn chart_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
