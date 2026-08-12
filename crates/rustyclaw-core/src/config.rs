@@ -900,10 +900,19 @@ impl Config {
         // gateway's admin model switch, the workspace path and the SSH bind
         // all read back the old value with nothing to explain it.
         //
-        // Anchored at `settings_dir` rather than `config_path`'s directory so
-        // it lands where `load` looks for it, even when a caller passes an
-        // explicit config path.
-        Self::sync_boot_config(self, &self.settings_dir.join("boot.toml"));
+        // Only when the file just written *is* this install's config, which is
+        // the case `load` will later read the mirror back for. Anchoring on
+        // `settings_dir` alone made a save to an unrelated path reach into the
+        // state directory the config happens to name: `Config::default()`
+        // points `settings_dir` at `~/.rustyclaw`, so a test saving a default
+        // config to a tempdir deleted the developer's real boot.toml — the
+        // suite passing while destroying a live install, which is exactly the
+        // failure #456 was about. A save to somewhere else is an export, and
+        // an export writes one file.
+        let boot_dir = config_path.parent().unwrap_or(Path::new(""));
+        if boot_dir == self.settings_dir {
+            Self::sync_boot_config(self, &self.settings_dir.join("boot.toml"));
+        }
 
         // Keep the runtime provider catalogue in sync with edits made
         // through the UI (add/remove custom provider then save).
@@ -1017,7 +1026,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("deep/nested/config.toml");
 
-        let config = Config::default();
+        // Anchored at the tempdir, not `Config::default()`'s `~/.rustyclaw`:
+        // a test that saves and loads must not reach into the developer's
+        // real installation to do it.
+        let config = Config {
+            settings_dir: path.parent().unwrap().to_path_buf(),
+            ..Config::default()
+        };
         config.save(Some(path.clone())).expect("save must succeed");
 
         let loaded = Config::load(Some(path)).expect("load what was saved");
@@ -1049,6 +1064,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         let config = Config {
             relevance_filter: RelevanceFilter::Mentions,
+            settings_dir: dir.path().to_path_buf(),
             ..Config::default()
         };
         config.save(Some(path.clone())).expect("save must succeed");
@@ -1065,6 +1081,7 @@ mod tests {
         let config = Config {
             relevance_filter: RelevanceFilter::Smart,
             relevance_model: Some("gpt-4o-mini".to_string()),
+            settings_dir: dir.path().to_path_buf(),
             ..Config::default()
         };
         config.save(Some(path.clone())).expect("save must succeed");
@@ -1181,6 +1198,39 @@ mod tests {
             "boot.toml must not revert a saved provider change"
         );
         assert_eq!(reloaded.model.as_deref(), Some("claude-sonnet-4-20250514"));
+    }
+
+    /// A save aimed somewhere else must not touch the install it names.
+    ///
+    /// The boot mirror was anchored on `settings_dir` alone, so saving a
+    /// config to an unrelated path reached into whatever state directory that
+    /// config happened to name. `Config::default()` names `~/.rustyclaw`, so
+    /// `cargo test` deleted the developer's real boot.toml — and passed. Same
+    /// shape as #456, one file over.
+    #[test]
+    fn saving_to_an_unrelated_path_leaves_the_settings_dir_alone() {
+        let install = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let boot_path = install.path().join("boot.toml");
+        std::fs::write(&boot_path, "[provider]\nname = \"anthropic\"\n").unwrap();
+
+        // A config that names the install, written somewhere it is not.
+        let config = Config {
+            settings_dir: install.path().to_path_buf(),
+            ..Config::default()
+        };
+        config
+            .save(Some(elsewhere.path().join("config.toml")))
+            .unwrap();
+
+        assert!(
+            boot_path.exists(),
+            "an export must not delete the install's boot config"
+        );
+        assert!(
+            !elsewhere.path().join("boot.toml").exists(),
+            "nor write a mirror beside the exported file"
+        );
     }
 
     /// Clearing the boot-critical settings must clear the mirror too.
