@@ -25,9 +25,9 @@ use crate::ignore::Ignore;
 /// `write!` into a `String` returns a `Result` that cannot be an error — the
 /// only failure `fmt::Write` has is one the underlying writer raises, and a
 /// `String` raises none. The discard is written down here, once, rather than
-/// spelled out at each of the twenty-odd call sites; `svg!(…)` at every
-/// one of them slipped past `clippy::let_underscore_must_use` while still
-/// being an undocumented discard, which is what STYLE_GUIDE.md is about.
+/// spelled out at each of the twenty-odd call sites. The `_ = write!(…)` this
+/// replaces slipped past `clippy::let_underscore_must_use` while still being
+/// an undocumented discard, which is what STYLE_GUIDE.md is about.
 macro_rules! svg {
     ($buf:expr, $($arg:tt)*) => {
         write!($buf, $($arg)*).ignore()
@@ -487,25 +487,78 @@ fn legend(svg: &mut String, series: &[Series]) {
     if series.len() < 2 {
         return;
     }
+
+    // The canvas is a fixed width with a matching viewBox, so anything past
+    // its right edge is not clipped-but-present — it is simply not drawn. A
+    // single row advancing per entry ran off the edge at around five series,
+    // or fewer with long names, leaving colours in the plot with no key and
+    // no indication a key was missing. The palette holds eight colours, so
+    // charts that size are an expected input, not an edge case.
+    const ROW_HEIGHT: f64 = 15.0;
+    const SWATCH: f64 = 10.0;
+    const GAP_AFTER_SWATCH: f64 = 5.0;
+    const GAP_BETWEEN: f64 = 18.0;
+    // Roughly the advance width of the 11px font used here. Deliberately a
+    // little generous: overestimating costs a bit of whitespace, while
+    // underestimating puts an entry back over the edge.
+    const CHAR_W: f64 = 6.6;
+    let right_edge = WIDTH - MARGIN_RIGHT;
+
+    // Laid out first, drawn second, so the number of rows is known before a
+    // baseline is chosen — rows grow upward from the bottom, and picking the
+    // baseline before counting them would push the first row under the axis
+    // label.
+    let mut rows: Vec<Vec<(usize, String)>> = vec![Vec::new()];
     let mut x = MARGIN_LEFT;
-    let y = HEIGHT - 34.0;
     for (i, s) in series.iter().enumerate() {
-        let colour = PALETTE[i % PALETTE.len()];
-        svg!(
-            svg,
-            r#"<rect x="{}" y="{}" width="10" height="10" fill="{colour}"/>"#,
-            n(x),
-            n(y - 9.0)
-        );
-        svg!(
-            svg,
-            r#"<text x="{}" y="{}" font-size="11" fill="{INK}">{}</text>"#,
-            n(x + 15.0),
-            n(y),
-            esc(&s.label)
-        );
-        x += 15.0 + 8.0 * s.label.chars().count() as f64 + 22.0;
+        let text = elide(&s.label);
+        let width = SWATCH + GAP_AFTER_SWATCH + CHAR_W * text.chars().count() as f64 + GAP_BETWEEN;
+        // `x > MARGIN_LEFT` so a single entry too wide for the whole canvas
+        // still gets its own row rather than looping forever on an empty one.
+        if x + width > right_edge && x > MARGIN_LEFT {
+            rows.push(Vec::new());
+            x = MARGIN_LEFT;
+        }
+        rows.last_mut().expect("a row exists").push((i, text));
+        x += width;
     }
+
+    let baseline = HEIGHT - 34.0 - (rows.len().saturating_sub(1)) as f64 * ROW_HEIGHT;
+    for (r, row) in rows.iter().enumerate() {
+        let y = baseline + r as f64 * ROW_HEIGHT;
+        let mut x = MARGIN_LEFT;
+        for (i, text) in row {
+            let colour = PALETTE[i % PALETTE.len()];
+            svg!(
+                svg,
+                r#"<rect x="{}" y="{}" width="{SWATCH}" height="{SWATCH}" fill="{colour}"/>"#,
+                n(x),
+                n(y - 9.0)
+            );
+            svg!(
+                svg,
+                r#"<text x="{}" y="{}" font-size="11" fill="{INK}">{}</text>"#,
+                n(x + SWATCH + GAP_AFTER_SWATCH),
+                n(y),
+                esc(text)
+            );
+            x += SWATCH + GAP_AFTER_SWATCH + CHAR_W * text.chars().count() as f64 + GAP_BETWEEN;
+        }
+    }
+}
+
+/// Shorten a series name that would crowd out everything beside it.
+///
+/// Counted in `char`s, not bytes: slicing a multi-byte name by byte offset
+/// panics, and a label is exactly the sort of string that arrives with an
+/// accent or an emoji in it.
+fn elide(label: &str) -> String {
+    const MAX: usize = 22;
+    if label.chars().count() <= MAX {
+        return label.to_string();
+    }
+    let kept: String = label.chars().take(MAX - 1).collect();
+    format!("{}…", kept.trim_end())
 }
 
 /// The category label under slot `i`, or its 1-based index if unnamed.
@@ -1048,6 +1101,81 @@ mod tests {
         // And a finite chart never emits those literals into a coordinate.
         let svg = render(json!({"values": [1, 2, 3]}));
         assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+    }
+
+    /// Every legend entry has to be inside the viewport. Content past the
+    /// right edge of a fixed-size SVG is not drawn at all, so a run-on row
+    /// left later series with a colour in the plot and no key — and nothing
+    /// indicating a key was missing.
+    #[test]
+    fn every_legend_entry_stays_inside_the_canvas() {
+        let series: Vec<_> = (0..8)
+            .map(|i| json!({"name": format!("series number {i}"), "values": [1, 2]}))
+            .collect();
+        let svg = render(json!({"series": series}));
+
+        // Pull every legend swatch's x and confirm none is off-canvas.
+        let mut checked = 0;
+        for frag in svg.split("<rect x=\"").skip(1) {
+            let x: f64 = frag
+                .split('"')
+                .next()
+                .expect("an x value")
+                .parse()
+                .expect("a number");
+            assert!(
+                x < WIDTH - MARGIN_RIGHT,
+                "a swatch sits at x={x}, off-canvas"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 8, "expected 8 legend swatches, saw {checked}");
+
+        // And all eight names are present, so none was dropped to make room.
+        for i in 0..8 {
+            assert!(
+                svg.contains(&format!("series number {i}")),
+                "series {i} missing"
+            );
+        }
+    }
+
+    /// A name long enough to fill the canvas on its own is shortened rather
+    /// than pushing everything after it off the edge.
+    #[test]
+    fn an_overlong_series_name_is_elided() {
+        let long = "an extraordinarily long series name that would never fit";
+        let svg = render(json!({
+            "series": [
+                {"name": long, "values": [1, 2]},
+                {"name": "short", "values": [2, 1]},
+            ]
+        }));
+        // The legend entry is shortened…
+        assert!(
+            svg.contains(&format!("fill=\"{INK}\">an extraordinarily lo…</text>")),
+            "the legend entry was not elided: {svg}"
+        );
+        // …while the tooltip keeps the whole name, which is the point of
+        // eliding only the label.
+        assert!(
+            svg.contains(&format!("<title>{long}: 1</title>")),
+            "the tooltip lost the full name: {svg}"
+        );
+        assert!(svg.contains(">short<"), "the second entry vanished: {svg}");
+    }
+
+    /// Eliding counts characters, not bytes — slicing a multi-byte name by
+    /// byte offset panics.
+    #[test]
+    fn eliding_a_multibyte_name_does_not_panic() {
+        let svg = render(json!({
+            "series": [
+                {"name": "日本語のとても長いシリーズ名前ですこれは切られます", "values": [1]},
+                {"name": "b", "values": [2]},
+            ]
+        }));
+        assert!(svg.contains('…'), "{svg}");
     }
 
     /// Re-rendering to the same path used to report `…/chart.svg/`. The write
