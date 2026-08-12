@@ -18,6 +18,21 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::error::{ToolError, ToolResult};
+use crate::ignore::Ignore;
+
+/// Append a formatted fragment to the SVG buffer.
+///
+/// `write!` into a `String` returns a `Result` that cannot be an error — the
+/// only failure `fmt::Write` has is one the underlying writer raises, and a
+/// `String` raises none. The discard is written down here, once, rather than
+/// spelled out at each of the twenty-odd call sites; `svg!(…)` at every
+/// one of them slipped past `clippy::let_underscore_must_use` while still
+/// being an undocumented discard, which is what STYLE_GUIDE.md is about.
+macro_rules! svg {
+    ($buf:expr, $($arg:tt)*) => {
+        write!($buf, $($arg)*).ignore()
+    };
+}
 
 /// Plot area geometry. Margins leave room for the title, axis labels and the
 /// legend; the plot itself is what remains.
@@ -298,6 +313,14 @@ fn numbers(v: Option<&Value>, whose: &str) -> ToolResult<Vec<f64>> {
             // rather than being dropped or read as zero.
             item.as_f64()
                 .or_else(|| item.as_str().and_then(|t| t.trim().parse::<f64>().ok()))
+                // NaN and the infinities parse happily and are not data.
+                // `f64::min`/`max` ignore NaN outright, one `inf` collapses the
+                // whole range to 0..1 so every honest bar is drawn off-plot,
+                // and the coordinate maths then writes the literal text `NaN`
+                // into an SVG attribute, which renderers drop — a blank or
+                // silently mis-scaled picture, never an error. `data_label`
+                // already guarded its half of this; the geometry did not.
+                .filter(|v| v.is_finite())
                 .ok_or_else(|| {
                     ToolError::msg(format!("{whose}[{i}] is {item}, which is not a number"))
                 })
@@ -377,18 +400,18 @@ fn value_range(series: &[Series], include_zero: bool) -> (f64, f64) {
 /// Document header, background and title.
 fn open_svg(title: &str) -> String {
     let mut s = String::new();
-    _ = write!(
+    svg!(
         s,
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}" font-family="system-ui, -apple-system, Segoe UI, sans-serif">"#
     );
     // An explicit ground: without it the chart borrows the viewer's
     // background, and dark-theme clients get near-black text on near-black.
-    _ = write!(
+    svg!(
         s,
         r#"<rect width="{WIDTH}" height="{HEIGHT}" fill="{GROUND}"/>"#
     );
     if !title.is_empty() {
-        _ = write!(
+        svg!(
             s,
             r#"<text x="{}" y="28" text-anchor="middle" font-size="17" font-weight="600" fill="{INK}">{}</text>"#,
             WIDTH / 2.0,
@@ -408,7 +431,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
         let frac = i as f64 / TICKS as f64;
         let y = MARGIN_TOP + plot_h * (1.0 - frac);
         let value = lo + (hi - lo) * frac;
-        _ = write!(
+        svg!(
             svg,
             r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{GRID}" stroke-width="1"/>"#,
             n(MARGIN_LEFT),
@@ -416,7 +439,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
             n(MARGIN_LEFT + plot_w),
             n(y)
         );
-        _ = write!(
+        svg!(
             svg,
             r#"<text x="{}" y="{}" text-anchor="end" font-size="11" fill="{MUTED}">{}</text>"#,
             n(MARGIN_LEFT - 8.0),
@@ -424,7 +447,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
             data_label(value)
         );
     }
-    _ = write!(
+    svg!(
         svg,
         r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{INK}" stroke-width="1.5"/>"#,
         n(MARGIN_LEFT),
@@ -432,7 +455,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
         n(MARGIN_LEFT),
         n(MARGIN_TOP + plot_h)
     );
-    _ = write!(
+    svg!(
         svg,
         r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{INK}" stroke-width="1.5"/>"#,
         n(MARGIN_LEFT),
@@ -441,7 +464,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
         n(MARGIN_TOP + plot_h)
     );
     if !x_label.is_empty() {
-        _ = write!(
+        svg!(
             svg,
             r#"<text x="{}" y="{}" text-anchor="middle" font-size="12" fill="{MUTED}">{}</text>"#,
             n(MARGIN_LEFT + plot_w / 2.0),
@@ -450,7 +473,7 @@ fn axes(svg: &mut String, lo: f64, hi: f64, x_label: &str, y_label: &str) {
         );
     }
     if !y_label.is_empty() {
-        _ = write!(
+        svg!(
             svg,
             r#"<text transform="translate(16,{}) rotate(-90)" text-anchor="middle" font-size="12" fill="{MUTED}">{}</text>"#,
             n(MARGIN_TOP + plot_h / 2.0),
@@ -468,13 +491,13 @@ fn legend(svg: &mut String, series: &[Series]) {
     let y = HEIGHT - 34.0;
     for (i, s) in series.iter().enumerate() {
         let colour = PALETTE[i % PALETTE.len()];
-        _ = write!(
+        svg!(
             svg,
             r#"<rect x="{}" y="{}" width="10" height="10" fill="{colour}"/>"#,
             n(x),
             n(y - 9.0)
         );
-        _ = write!(
+        svg!(
             svg,
             r#"<text x="{}" y="{}" font-size="11" fill="{INK}">{}</text>"#,
             n(x + 15.0),
@@ -525,7 +548,7 @@ fn render_bar(
             } else {
                 (zero_y, y - zero_y)
             };
-            _ = write!(
+            svg!(
                 svg,
                 r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{colour}"><title>{}: {}</title></rect>"#,
                 n(x),
@@ -538,7 +561,7 @@ fn render_bar(
         }
     }
     for i in 0..slots {
-        _ = write!(
+        svg!(
             svg,
             r#"<text x="{}" y="{}" text-anchor="middle" font-size="11" fill="{MUTED}">{}</text>"#,
             n(MARGIN_LEFT + slot_w * (i as f64 + 0.5)),
@@ -598,14 +621,14 @@ fn render_line(
                 .iter()
                 .map(|(x, y)| format!("{},{}", n(*x), n(*y)))
                 .collect();
-            _ = write!(
+            svg!(
                 svg,
                 r#"<polyline points="{}" fill="none" stroke="{colour}" stroke-width="2" stroke-linejoin="round"/>"#,
                 path.join(" ")
             );
         }
         for ((x, y), v) in pts.iter().zip(&s.values) {
-            _ = write!(
+            svg!(
                 svg,
                 r#"<circle cx="{}" cy="{}" r="3.5" fill="{colour}"><title>{}: {}</title></circle>"#,
                 n(*x),
@@ -616,7 +639,7 @@ fn render_line(
         }
     }
     for i in 0..slots {
-        _ = write!(
+        svg!(
             svg,
             r#"<text x="{}" y="{}" text-anchor="middle" font-size="11" fill="{MUTED}">{}</text>"#,
             n(x_at(i)),
@@ -640,7 +663,7 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
     let r = 140.0_f64;
 
     if total <= 0.0 {
-        _ = write!(
+        svg!(
             svg,
             r#"<text x="{}" y="{}" text-anchor="middle" font-size="13" fill="{MUTED}">no positive values to plot</text>"#,
             n(WIDTH / 2.0),
@@ -669,7 +692,7 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
         // so a one-value pie drew nothing but its title. A circle has no start
         // and end to coincide.
         if sweep >= std::f64::consts::TAU - 1e-9 {
-            _ = write!(
+            svg!(
                 svg,
                 r#"<circle cx="{}" cy="{}" r="{r}" fill="{colour}"><title>{}: {} (100%)</title></circle>"#,
                 n(cx),
@@ -680,7 +703,7 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
             angle = end;
             continue;
         }
-        _ = write!(
+        svg!(
             svg,
             r#"<path d="M {} {} L {} {} A {r} {r} 0 {large} 1 {} {} Z" fill="{colour}"><title>{}: {} ({}%)</title></path>"#,
             n(cx),
@@ -704,13 +727,13 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
             continue;
         }
         let colour = PALETTE[i % PALETTE.len()];
-        _ = write!(
+        svg!(
             svg,
             r#"<rect x="{}" y="{}" width="11" height="11" fill="{colour}"/>"#,
             n(WIDTH - 190.0),
             n(ly - 9.0)
         );
-        _ = write!(
+        svg!(
             svg,
             r#"<text x="{}" y="{}" font-size="12" fill="{INK}">{} ({}%)</text>"#,
             n(WIDTH - 173.0),
@@ -1002,6 +1025,29 @@ mod tests {
         let err = exec_chart(&json!({"values": ["three"]}), dir.path())
             .expect_err("a word is still not a number");
         assert!(format!("{err}").contains("not a number"), "{err}");
+    }
+
+    /// NaN and the infinities are not data. They parse, they survive
+    /// `f64::min`/`max` (which ignore NaN), one `inf` collapses the range so
+    /// every honest bar is drawn off-plot, and the coordinate maths writes the
+    /// literal text `NaN` into an SVG attribute — a blank or mis-scaled
+    /// picture with no error anywhere.
+    #[test]
+    fn non_finite_values_are_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for bad in [
+            json!({"values": [1, "NaN", 3]}),
+            json!({"values": [1, "inf", 3]}),
+            json!({"values": [1, "infinity", 3]}),
+            json!({"values": [1, "1e999", 3]}),
+        ] {
+            let err = exec_chart(&bad, dir.path()).expect_err(&format!("{bad} should be refused"));
+            assert!(format!("{err}").contains("not a number"), "{err}");
+        }
+
+        // And a finite chart never emits those literals into a coordinate.
+        let svg = render(json!({"values": [1, 2, 3]}));
+        assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
     }
 
     /// Re-rendering to the same path used to report `…/chart.svg/`. The write
