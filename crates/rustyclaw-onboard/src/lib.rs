@@ -235,9 +235,11 @@ pub fn run_onboard_wizard(
         // Determine the real key source: if the vault exists but no key
         // file is present, the vault *must* be password-protected even
         // if config doesn't reflect it (e.g. a previous run crashed
-        // before saving the config).
-        let needs_password =
-            config.secrets_password_protected || (vault_path.exists() && !key_path.exists());
+        // before saving the config). The rule lives on `SecretsManager`
+        // rather than being spelled out here, because the gateway and the
+        // CLI ask the same question and a second copy is a copy that drifts.
+        let needs_password = config.secrets_password_protected
+            || SecretsManager::requires_password(config.credentials_dir());
 
         if needs_password {
             if !config.secrets_password_protected {

@@ -78,7 +78,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::Context;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{debug, error, info, warn};
 
 use std::path::Path;

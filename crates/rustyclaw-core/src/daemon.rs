@@ -46,10 +46,29 @@ pub fn read_pid(settings_dir: &Path) -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
-/// Remove the PID file.
-pub fn remove_pid(settings_dir: &Path) {
+/// Remove the PID file, but only while it still names `pid`.
+///
+/// The record says which process *is* the gateway, so only that process may
+/// retract it. Removing unconditionally meant a gateway that exited for any
+/// reason deleted whatever record it found — including a healthy gateway's.
+/// A second one started against an occupied port did exactly that: it
+/// overwrote the record on the way in and deleted it on the way out, and the
+/// gateway still serving connections became invisible to `gateway status`
+/// and unreachable by `gateway stop`.
+pub fn remove_pid(settings_dir: &Path, pid: u32) {
     let path = pid_path(settings_dir);
-    fs::remove_file(&path).ignore();
+    match read_pid(settings_dir) {
+        Some(recorded) if recorded == pid => fs::remove_file(&path).ignore(),
+        Some(recorded) => tracing::warn!(
+            path = %path.display(),
+            recorded,
+            ours = pid,
+            "Leaving the PID file alone: it names another process"
+        ),
+        // Already gone, or unreadable — either way there is nothing of ours
+        // to retract.
+        None => {}
+    }
 }
 
 /// Check whether a process with the given PID is alive.
@@ -109,8 +128,12 @@ pub fn start(
         anyhow::bail!("Gateway is already running (PID {})", pid);
     }
 
-    // Clean up stale PID file.
-    remove_pid(settings_dir);
+    // Clean up a stale PID file. Reached only when `status` said the
+    // recorded process is not running, so whatever is in the file is the
+    // stale record this is entitled to clear.
+    if let Some(stale) = read_pid(settings_dir) {
+        remove_pid(settings_dir, stale);
+    }
 
     // Resolve gateway binary path — look next to our own binary first.
     let gateway_bin = resolve_gateway_binary()?;
@@ -230,17 +253,17 @@ pub fn stop(settings_dir: &Path) -> Result<StopResult> {
             for _ in 0..20 {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 if !is_process_alive(pid) {
-                    remove_pid(settings_dir);
+                    remove_pid(settings_dir, pid);
                     return Ok(StopResult::Stopped { pid });
                 }
             }
             // Process still alive after 2s — it may be shutting down slowly.
             // Remove PID file anyway; the OS will finish cleanup.
-            remove_pid(settings_dir);
+            remove_pid(settings_dir, pid);
             Ok(StopResult::Stopped { pid })
         }
         DaemonStatus::Stale { pid } => {
-            remove_pid(settings_dir);
+            remove_pid(settings_dir, pid);
             Ok(StopResult::WasStale { pid })
         }
         DaemonStatus::Stopped => Ok(StopResult::WasNotRunning),
@@ -341,4 +364,49 @@ pub fn run_foreground_named(name: &str, args: &[String]) -> Result<std::process:
         .args(args)
         .status()
         .with_context(|| format!("Failed to run {}", bin.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The record is a claim to *be* the gateway, so only the process it
+    /// names may retract it. A gateway that exits for any reason used to
+    /// delete whatever record it found — and a second one started against an
+    /// occupied port overwrote the record on the way in and deleted it on the
+    /// way out, leaving the gateway still serving connections invisible to
+    /// `gateway status` and unreachable by `gateway stop`.
+    #[test]
+    fn remove_pid_leaves_another_process_record_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        write_pid(dir.path(), 4242).unwrap();
+
+        remove_pid(dir.path(), 9999);
+
+        assert_eq!(
+            read_pid(dir.path()),
+            Some(4242),
+            "a record we did not write is not ours to delete"
+        );
+    }
+
+    #[test]
+    fn remove_pid_retracts_our_own_record() {
+        let dir = tempfile::tempdir().unwrap();
+        write_pid(dir.path(), 4242).unwrap();
+
+        remove_pid(dir.path(), 4242);
+
+        assert_eq!(read_pid(dir.path()), None);
+        assert!(!pid_path(dir.path()).exists());
+    }
+
+    /// No file is not a failure: a run that bailed before claiming the record
+    /// still calls this on the way out.
+    #[test]
+    fn remove_pid_on_a_missing_file_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        remove_pid(dir.path(), 4242);
+        assert!(!pid_path(dir.path()).exists());
+    }
 }

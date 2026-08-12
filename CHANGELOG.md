@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows the default profile's model or asks an already-hatched agent to
   hatch again.
 
+- **`boot.toml` is now created automatically (#175, migration rungs 3–4).**
+  The boot/extended config split shipped with nothing that ever *wrote*
+  `boot.toml` — `BootConfig` had no `save`, onboarding did not create one, and
+  `Config::save` wrote only `config.toml`. Every install was therefore still
+  single-file, and the resilience the split exists for had never engaged for
+  anybody: a torn `config.toml` cost the user every setting they had, the
+  vault's `secrets_password_protected` flag among them, which is one way the
+  gateway ends up starting without asking for a passphrase. `Config::load`
+  now derives the boot slice from a config that loaded successfully and
+  writes it the first time it finds `boot.toml` missing, so existing installs
+  migrate themselves on next start. Deliberately *not* from a config that did
+  not load: the missing-file and quarantined-file paths leave `config` as
+  defaults, and writing those into the file that outranks `config.toml` would
+  turn one bad boot into a permanent one. A boot slice with nothing in it is
+  not written at all, `ssh_bind` is recorded only for a config that really has
+  an `[ssh]` section (rather than inventing the built-in default), and a write
+  that fails is a warning, never a failed start — a safety net that can stop
+  the gateway from starting is worse than no safety net.
+
 - **Message relevance filter — rule tier (`relevance_filter = "mentions"`).**
   In group chats, every message previously triggered a full agent response
   cycle, burning tokens on chatter that was never directed at the agent.
@@ -250,6 +269,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/engines load|unload|remove <engine> <model>`.
 
 ### Fixed
+
+- **Model tuning and the provider TLS pin were erased by `boot.toml`.**
+  `BootConfig::apply` rebuilt the whole `[model]` section from the boot slice,
+  hard-coding `tls_ca_cert`, `reasoning_effort`, `max_tokens`, `temperature`
+  and `token_budget` to `None`. That cost nothing while no install had a
+  `boot.toml`; creating one for every install would have made it universal —
+  a user's tuning silently gone on the next start, made permanent by the
+  following save, and the trust-anchor pin from #234 never installed, so
+  provider traffic fell back to the system trust store while the operator
+  believed it was pinned. `apply` now overrides only what the boot slice
+  actually owns. The tuning fields describe how requests should be shaped and
+  mean the same thing under any provider, so they always survive; `base_url`
+  and `tls_ca_cert` name one provider's endpoint, so they survive while the
+  provider is unchanged and are dropped on a switch — and dropping a pin now
+  says so on stderr rather than un-pinning in silence.
+
+- **Saving a provider, model, workspace or SSH bind change was silently
+  reverted on the next start once `boot.toml` existed.** `boot.toml` wins over
+  `config.toml` for the fields it carries, but nothing kept it in sync, so
+  `Config::save` wrote a change that the next `Config::load` overwrote from a
+  stale boot file. `rustyclaw config set model.provider anthropic` printed
+  `✓ Set model.provider = anthropic`, `config.toml` genuinely said
+  `anthropic`, and the next boot read `openai` — the same for `/model`, the
+  gateway's admin model switch, the workspace path and the SSH bind. `save`
+  now writes the boot slice through to `boot.toml`, anchored at
+  `settings_dir` so it lands where `load` looks for it — and *removes* it when
+  the config no longer has any boot-critical fields at all. Skipping an empty
+  slice (right when creating the file, wrong when maintaining it) left the old
+  mirror on disk after `config unset model`, so the next start quietly
+  reinstated the provider the user had just removed. The mirror is touched
+  only when the file being read or written *is* this install's own config,
+  in both directions. Anchoring on `settings_dir` alone let any config reach
+  into whatever state directory it happened to name: on the save side, since
+  `Config::default()` names `~/.rustyclaw`, `cargo test` deleted a
+  developer's real `boot.toml` — and passed; on the load side, one command
+  against a side file (`--config /tmp/experiment.toml` naming the real
+  settings dir) planted that file's provider and model in the install's
+  `boot.toml`, and because `boot.toml` outranks `config.toml`, every later
+  normal start read the planted values. Reading someone else's config file
+  does not reconfigure the machine.
+
+- **A failed gateway start deleted the running gateway's PID file, leaving it
+  unstoppable.** The PID file is written before anything is bound and was
+  removed unconditionally on the way out, so a second gateway started against
+  an occupied port overwrote the record on the way in and deleted it on the
+  way out: `gateway status` reported `stopped` while the real gateway kept
+  serving connections, and `gateway stop` could no longer reach it. Removal
+  now happens only while the file still names the exiting process, and the
+  gateway refuses to start at all when the record names another live process
+  — the same refusal `rustyclaw gateway start` has always made, now also made
+  by the binary run directly, and made *before* any managed service is
+  started. The PID file is not touched at all under `--ssh-stdio`, where one
+  instance runs per connection and the record belongs to the daemon.
+
+- **A gateway that could not bind its SSH port reported itself as listening
+  and then accepted nothing for the rest of its life.** The bind happened
+  inside a detached task, *after* `SshServer::listen` had already logged
+  "SSH server listening" and returned `Ok(())` — and `main` had printed
+  "Gateway listening on SSH …" before that, from its own second resolution
+  of the address. So a port already in use (a second gateway, or a stale one
+  the PID file had lost track of) produced a process that announced itself
+  as listening three times over, wrote a PID file, reported `running` from
+  `gateway status`, and refused every connection. The only trace was one
+  `ERROR` line from the detached task, logged beneath the three cheerful
+  ones. The socket is now bound before `listen` returns, so the failure is
+  the startup error it always was; the address announced is the one actually
+  bound (including the port the kernel picks for `:0`); and if the accept
+  loop later stops — russh returns from it on the first accept error —
+  `accept` reports that instead of parking forever on a queue nothing will
+  feed, so the gateway exits rather than lingering unreachable. The accept
+  loop used to log-and-continue on that error, spinning at full CPU. Listener
+  setup and the accept loop now share one exit path, so a failed bind runs the
+  same managed-service shutdown a cancelled one does: the `ServiceManager`
+  lives in a `'static` runtime context that is never dropped, so an early
+  return would have left every auto-started `[services.*]` process — a local
+  inference server, say — running with nobody managing it, and `kill_on_drop`
+  cannot fire on a child whose manager outlives the process. `--ssh-stdio` returns from
+  the middle of the function and skipped the shutdown too, so every SSH
+  connection left a full set of service processes behind; its early return now
+  runs the same shutdown. Auto-start still happens in that mode — the
+  documented OpenSSH-subsystem deployment has no standalone daemon, so the
+  per-connection instance is the only thing that can start them — and
+  `stop_all` only stops what its own manager started, so an instance cleans up
+  its own children without reaping another session's.
+
+- **The gateway never asked for the vault passphrase on an encrypted setup
+  whose config flag had gone false.** The decision to prompt read only
+  `config.secrets_password_protected`, which records what onboarding chose
+  rather than what is on disk. Whenever the config was replaced by defaults
+  — a hand-edited file, or `Config::load` quarantining a torn one — the flag
+  went false while `credentials/secrets.json` stayed encrypted, and the
+  gateway started with no prompt, no console line and no log event, every
+  secret in it unreachable. The rule now lives once, as
+  `SecretsManager::requires_password`: a vault file with no key file beside
+  it can only be opened with a password. The gateway, `rustyclaw gateway
+  start`/`restart`, and onboarding all ask it (still OR-ed with the config
+  flag, which alone means "password" for a vault not yet written). A prompt
+  that cannot be read, or is answered empty, now starts the vault *locked*
+  for a client to unlock rather than opening it with an empty password —
+  `.unwrap_or_default()` used to make those indistinguishable.
 
 - **The gateway installed no tracing subscriber, so every log line it
   emitted was discarded.** `tracing` is a no-op facade until something is

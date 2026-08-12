@@ -737,6 +737,23 @@ async fn download_dest_refuses_the_credentials_directory() {
         "expected this test to own the credentials dir; another test claimed it first"
     );
 
+    // The chart writer gets the same guard, and is checked here rather than in
+    // its own test: `CREDENTIALS_DIR` is a `OnceLock`, so a second test that
+    // sets it races this one and whichever runs first silently wins.
+    let chart_err = crate::tools::chart::exec_chart(
+        &serde_json::json!({"values": [1], "path": "credentials/chart.svg"}),
+        tmp.path(),
+    )
+    .expect_err("a chart aimed at the credentials dir must be refused");
+    assert!(
+        chart_err.to_string().contains("Access denied"),
+        "expected the vault-access-denied error, got: {chart_err}"
+    );
+    assert!(
+        !cred.join("chart.svg").exists(),
+        "the chart was written into the vault anyway"
+    );
+
     let err = crate::tools::web::open_download_dest(tmp.path(), "credentials/vault.json")
         .await
         .expect_err("a download aimed at the credentials dir must be refused");

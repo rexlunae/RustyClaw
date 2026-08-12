@@ -371,6 +371,7 @@ Everything an agent needs to be useful:
 | **Multi-Agent** | `sessions_spawn`, `sessions_send`, `sessions_steer` |
 | **Secrets** | `secrets_list`, `secrets_get`, `secrets_store` |
 | **Devices** | `canvas`, `nodes`, `tts` |
+| **Documents & charts** | `pdf`, `document`, `chart` |
 
 ### 📚 Skills System
 
