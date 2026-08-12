@@ -1200,6 +1200,25 @@ pub static PDF: ToolDef = ToolDef {
     execute: exec_pdf,
 };
 
+// ── Chart tool ──────────────────────────────────────────────────────────────
+
+/// `chart` — render data as a self-contained SVG chart in the workspace.
+pub static CHART: ToolDef = ToolDef {
+    name: "chart",
+    description: "Render data as an SVG chart when a picture answers better than a \
+                  table of numbers — trends, comparisons, proportions. Types: bar, \
+                  line, scatter, pie.\n\n\
+                  Pass one series as `values`, or several as \
+                  `series: [{name, values}]`. `categories` labels the x axis (or \
+                  the pie slices) and should be the same length as the values.\n\n\
+                  Writes an SVG into the workspace and returns its path; the file \
+                  is self-contained and needs no network or fonts to display. Use \
+                  plugin_create instead when the result needs to be interactive or \
+                  to update from live data.",
+    parameters: vec![],
+    execute: exec_chart,
+};
+
 // ── Office document tool ────────────────────────────────────────────────────
 
 #[cfg(feature = "office-docs")]
