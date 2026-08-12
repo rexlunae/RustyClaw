@@ -819,26 +819,6 @@ impl Config {
         Ok(config)
     }
 
-    /// Write `boot` to `boot_path`.
-    ///
-    /// Never fatal. This file is a safety net, and a safety net that can stop
-    /// the gateway from starting — a read-only settings directory, a full
-    /// disk — is worse than not having one. A failure is reported and the
-    /// caller carries on with the config it already has.
-    ///
-    /// stderr rather than `tracing`: this runs from `Config::load`, before
-    /// the gateway installs its subscriber, so a tracing event here would be
-    /// dropped (see STYLE_GUIDE §11's boot-time exception).
-    fn write_boot_config(boot: &crate::boot_config::BootConfig, boot_path: &Path) {
-        if let Err(e) = boot.save(boot_path) {
-            eprintln!(
-                "WARNING: Could not write boot config {}: {e}. Startup is unaffected, \
-                 but a corrupt config.toml will not be recoverable from boot.toml.",
-                boot_path.display()
-            );
-        }
-    }
-
     /// Create `boot_path` from a config that has just loaded, if there is
     /// anything boot-critical to put in it.
     ///
@@ -846,10 +826,28 @@ impl Config {
     /// apply nothing and only puzzle whoever finds it. Contrast
     /// [`sync_boot_config`](Self::sync_boot_config), which must handle the
     /// empty case by deleting.
+    ///
+    /// A failure is never fatal. This file is a safety net, and a safety net
+    /// that can stop the gateway from starting — a read-only settings
+    /// directory, a full disk — is worse than not having one.
     fn migrate_boot_config(config: &Config, boot_path: &Path) {
         let boot = crate::boot_config::BootConfig::from_config(config);
-        if !boot.is_empty() {
-            Self::write_boot_config(&boot, boot_path);
+        if boot.is_empty() {
+            return;
+        }
+        if let Err(e) = boot.save(boot_path) {
+            // stderr, not `tracing`: this runs from `Config::load`, before
+            // the gateway installs its subscriber, so a tracing event would
+            // be dropped and the user would never learn the mirror is
+            // missing (STYLE_GUIDE §11's boot-time exception). The identical
+            // write in `sync_boot_config` sits on the *other* side of that
+            // line and must not do this — which is why the two are separate
+            // rather than sharing one reporting helper.
+            eprintln!(
+                "WARNING: Could not write boot config {}: {e}. Startup is unaffected, \
+                 but a corrupt config.toml will not be recoverable from boot.toml.",
+                boot_path.display()
+            );
         }
     }
 
@@ -862,20 +860,34 @@ impl Config {
     /// silently reinstated the provider the user had just removed. Clearing
     /// the boot-critical settings is precisely where a stale mirror misleads
     /// most, so it is the one case that must not be a no-op.
+    ///
+    /// Reports through `tracing`, unlike
+    /// [`migrate_boot_config`](Self::migrate_boot_config): `Config::save`
+    /// runs at runtime, with the subscriber long since installed — and in the
+    /// TUI it runs while the client owns the terminal's alternate screen,
+    /// where a raw stderr write scribbles over the display and still never
+    /// reaches `gateway.log`.
     fn sync_boot_config(config: &Config, boot_path: &Path) {
         let boot = crate::boot_config::BootConfig::from_config(config);
         if !boot.is_empty() {
-            Self::write_boot_config(&boot, boot_path);
+            if let Err(e) = boot.save(boot_path) {
+                tracing::warn!(
+                    path = %boot_path.display(),
+                    error = %e,
+                    "Could not update the boot config; it may now disagree with config.toml \
+                     and override it on the next start"
+                );
+            }
             return;
         }
         if boot_path.exists()
             && let Err(e) = std::fs::remove_file(boot_path)
         {
-            eprintln!(
-                "WARNING: Could not remove the stale boot config {}: {e}. It no longer \
-                 matches config.toml and will override it on the next start — delete it \
-                 by hand.",
-                boot_path.display()
+            tracing::warn!(
+                path = %boot_path.display(),
+                error = %e,
+                "Could not remove the stale boot config; it no longer matches config.toml \
+                 and will override it on the next start — delete it by hand"
             );
         }
     }
