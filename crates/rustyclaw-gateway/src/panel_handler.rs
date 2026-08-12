@@ -1086,7 +1086,7 @@ fn tool_category(name: &str) -> &'static str {
         }
         "ollama_manage" | "exo_manage" | "agent_setup" => "engines",
         "ast_grep_manage" | "uv_manage" | "npm_manage" => "code",
-        "pdf" => "documents",
+        "pdf" | "chart" => "documents",
         n if n.starts_with("swarm_") => "swarm",
         n if n.starts_with("plugin_") => "plugins",
         "todo" => "planning",

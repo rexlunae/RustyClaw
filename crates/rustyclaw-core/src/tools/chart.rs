@@ -116,11 +116,37 @@ pub fn exec_chart(args: &Value, workspace_dir: &Path) -> ToolResult {
         .and_then(|v| v.as_str())
         .unwrap_or("chart.svg");
     let out = resolve_output(workspace_dir, rel)?;
+
+    // The same guard `write_file` applies, for the same reason. Workspace
+    // containment is not enough on its own: an installation whose workspace
+    // sits at or above the settings directory would let a model-supplied path
+    // reach the vault, and "it is only a chart" is not a category the
+    // filesystem recognises.
+    if super::helpers::is_protected_path(&out) {
+        return Err(ToolError::msg(super::helpers::VAULT_ACCESS_DENIED));
+    }
+
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| ToolError::context("Could not create the chart's directory", e))?;
     }
-    std::fs::write(&out, svg.as_bytes())
+
+    // Written through a verified descriptor rather than by path. Between
+    // resolving the path above and opening it, a directory component can be
+    // swapped for a symlink; `open_file_write_safe` re-resolves and hands back
+    // the file it actually opened, so the write lands where the check looked.
+    let (mut file, opened) = super::helpers::open_file_write_safe(&out)
+        .map_err(|e| ToolError::context("Could not open the chart for writing", e))?;
+    let root = workspace_dir
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_dir.to_path_buf());
+    if !opened.starts_with(&root) {
+        return Err(ToolError::msg(format!(
+            "chart path {} escapes the workspace",
+            opened.display()
+        )));
+    }
+    std::io::Write::write_all(&mut file, svg.as_bytes())
         .map_err(|e| ToolError::context("Could not write the chart", e))?;
 
     Ok(format!(
