@@ -319,7 +319,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lives in a `'static` runtime context that is never dropped, so an early
   return would have left every auto-started `[services.*]` process — a local
   inference server, say — running with nobody managing it, and `kill_on_drop`
-  cannot fire on a child whose manager outlives the process.
+  cannot fire on a child whose manager outlives the process. `--ssh-stdio` runs
+  one gateway per SSH connection, so it no longer auto-starts the configured
+  services at all — that meant a fresh copy of every service on every connect,
+  left behind on disconnect — and its own early return now runs the same
+  shutdown, for anything the services panel started during the session.
 
 - **The gateway never asked for the vault passphrase on an encrypted setup
   whose config flag had gone false.** The decision to prompt read only
