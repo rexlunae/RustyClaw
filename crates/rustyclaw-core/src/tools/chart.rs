@@ -77,9 +77,12 @@ pub fn exec_chart(args: &Value, workspace_dir: &Path) -> ToolResult {
              {name, values} objects, or `values` for a single unnamed series",
         ));
     }
-    if series.iter().all(|s| s.values.is_empty()) {
+    // Every series, not merely one of them: an empty series contributes
+    // nothing but still counts toward the "N series" in the success message,
+    // and for a pie it is the one that gets drawn.
+    if series.iter().any(|s| s.values.is_empty()) {
         return Err(ToolError::msg(
-            "every series is empty; a chart of nothing is not a chart",
+            "a series has no values; a chart of nothing is not a chart",
         ));
     }
 
@@ -87,7 +90,20 @@ pub fn exec_chart(args: &Value, workspace_dir: &Path) -> ToolResult {
         "bar" => render_bar(title, x_label, y_label, &categories, &series),
         "line" => render_line(title, x_label, y_label, &categories, &series, false),
         "scatter" => render_line(title, x_label, y_label, &categories, &series, true),
-        "pie" => render_pie(title, &categories, &series[0]),
+        "pie" => {
+            // A pie shows one set of proportions. Drawing `series[0]` and
+            // discarding the rest loses data with no error, and the success
+            // message would still have claimed every series was drawn.
+            if series.len() > 1 {
+                return Err(ToolError::msg(format!(
+                    "a pie chart shows one set of proportions, but {} series were \
+                     given; pass a single `values` list, or use type \"bar\" to \
+                     compare series",
+                    series.len()
+                )));
+            }
+            render_pie(title, &categories, &series[0])
+        }
         other => {
             return Err(ToolError::msg(format!(
                 "unknown chart type {other:?}; expected one of bar, line, scatter, pie"
@@ -125,25 +141,53 @@ fn resolve_output(workspace_dir: &Path, rel: &str) -> ToolResult<std::path::Path
     } else {
         workspace_dir.join(rel)
     };
-    // Resolved, not just normalised. Stripping `.`/`..` textually and then
-    // comparing prefixes misses the case that matters: `link/out.svg`, where
-    // `link` is a symlink inside the workspace pointing somewhere else, passes
-    // a lexical check and then `create_dir_all` and the write both follow it
-    // straight out. `resolve_path_no_race` canonicalises — via the parent when
-    // the file does not exist yet, which is always here — and double-checks
-    // for a symlink swapped in between the two resolutions.
-    let resolved = super::helpers::resolve_path_no_race(&candidate)
-        .map_err(|e| ToolError::context("Could not resolve the chart path", e))?;
+    // `..` is refused outright rather than normalised away. A chart filename
+    // has no legitimate use for it, and leaving it in is what makes the
+    // containment check foolable: `new/../../out.svg` has a parent that cannot
+    // be canonicalised (because `new` does not exist yet), so any
+    // resolve-then-compare falls back to the literal path, passes a prefix
+    // check, and then `create_dir_all` plus the write resolve the `..` at the
+    // filesystem level and land outside.
+    if candidate
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(ToolError::msg(
+            "chart path must not contain `..` — give a path inside the workspace",
+        ));
+    }
+
     let root = workspace_dir
         .canonicalize()
         .unwrap_or_else(|_| workspace_dir.to_path_buf());
-    if !resolved.starts_with(&root) {
+
+    // Canonicalise the deepest ancestor that already exists. Everything below
+    // it is about to be created *inside whatever that resolves to*, so that is
+    // the thing containment has to be judged on. Checking only the immediate
+    // parent misses `link/sub/out.svg`, where `link` is a symlink out of the
+    // workspace and `sub` does not exist yet — the parent cannot be resolved,
+    // and the symlink one level up never gets looked at.
+    let mut existing = candidate.as_path();
+    while !existing.exists() {
+        match existing.parent() {
+            Some(parent) if parent != existing => existing = parent,
+            _ => break,
+        }
+    }
+    let anchor = existing
+        .canonicalize()
+        .map_err(|e| ToolError::context("Could not resolve the chart path", e))?;
+    if !anchor.starts_with(&root) {
         return Err(ToolError::msg(format!(
             "chart path {} escapes the workspace",
-            resolved.display()
+            candidate.display()
         )));
     }
-    Ok(resolved)
+
+    // Rebuild from the resolved anchor so the path handed to the writer is the
+    // one that was actually checked.
+    let rest = candidate.strip_prefix(existing).unwrap_or(Path::new(""));
+    Ok(anchor.join(rest))
 }
 
 /// Category labels for the x axis, when the caller supplied them.
@@ -758,7 +802,99 @@ mod tests {
             dir.path(),
         )
         .expect_err("must be refused");
+        assert!(format!("{err}").contains("`..`"), "{err}");
+    }
+
+    /// `..` behind a directory that does not exist yet.
+    ///
+    /// The parent cannot be canonicalised, so a resolve-then-compare falls
+    /// back to the literal path, which passes a prefix check — and then
+    /// `create_dir_all` makes the missing directory and the write resolves the
+    /// `..` for real, outside the workspace.
+    #[test]
+    fn a_dotdot_behind_a_missing_directory_is_still_refused() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let err = exec_chart(
+            &json!({"values": [1], "path": "new/../../escaped.svg"}),
+            workspace.path(),
+        )
+        .expect_err("must be refused");
+        assert!(format!("{err}").contains("`..`"), "{err}");
+
+        let outside = workspace.path().parent().expect("a parent");
+        assert!(
+            !outside.join("escaped.svg").exists(),
+            "the chart was written outside the workspace anyway"
+        );
+    }
+
+    /// A symlink that is not the immediate parent.
+    ///
+    /// The first version checked only the parent directory, so `link/out.svg`
+    /// was caught but `link/sub/out.svg` was not: `sub` does not exist, the
+    /// parent will not resolve, and the symlink one level further up never got
+    /// looked at.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_above_a_missing_directory_is_refused() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        std::os::unix::fs::symlink(outside.path(), workspace.path().join("link")).expect("symlink");
+
+        let err = exec_chart(
+            &json!({"values": [1], "path": "link/sub/out.svg"}),
+            workspace.path(),
+        )
+        .expect_err("a symlink at any depth must be refused");
         assert!(format!("{err}").contains("escapes the workspace"), "{err}");
+        assert!(
+            !outside.path().join("sub").exists(),
+            "create_dir_all followed the symlink out"
+        );
+    }
+
+    /// A pie draws one set of proportions. Rendering the first series and
+    /// discarding the rest lost data silently, while the success message still
+    /// claimed every series had been drawn.
+    #[test]
+    fn a_pie_of_several_series_is_refused_rather_than_truncated() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let err = exec_chart(
+            &json!({
+                "type": "pie",
+                "series": [
+                    {"name": "a", "values": [1, 2]},
+                    {"name": "b", "values": [3, 4]},
+                ]
+            }),
+            dir.path(),
+        )
+        .expect_err("must be refused");
+        let msg = format!("{err}");
+        assert!(msg.contains("one set of proportions"), "{msg}");
+        assert!(
+            msg.contains("bar"),
+            "the message should offer the alternative: {msg}"
+        );
+    }
+
+    /// An empty series among full ones used to pass, because the check asked
+    /// whether *every* series was empty. For a pie the empty one is the one
+    /// that gets drawn.
+    #[test]
+    fn one_empty_series_among_others_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let err = exec_chart(
+            &json!({
+                "series": [
+                    {"name": "a", "values": []},
+                    {"name": "b", "values": [1, 2]},
+                ]
+            }),
+            dir.path(),
+        )
+        .expect_err("must be refused");
+        assert!(format!("{err}").contains("no values"), "{err}");
     }
 
     #[test]
