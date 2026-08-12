@@ -62,6 +62,12 @@ const GAP_AFTER_SWATCH: f64 = 5.0;
 const GAP_BETWEEN: f64 = 18.0;
 const CHAR_W: f64 = 6.6;
 
+/// The pie's legend is a vertical list rather than a wrapped row, so it has
+/// its own step and a narrower label budget: it starts at `WIDTH - 173` and
+/// has to fit the percentage after the name before the right edge.
+const PIE_ROW: f64 = 20.0;
+const PIE_LABEL_MAX: usize = 18;
+
 const INK: &str = "#1c1f24";
 const MUTED: &str = "#6b7280";
 const GRID: &str = "#d8dce2";
@@ -575,11 +581,15 @@ fn entry_width(text: &str) -> f64 {
 /// panics, and a label is exactly the sort of string that arrives with an
 /// accent or an emoji in it.
 fn elide(label: &str) -> String {
-    const MAX: usize = 22;
-    if label.chars().count() <= MAX {
+    elide_to(label, 22)
+}
+
+/// [`elide`] with an explicit budget, for callers with less room.
+fn elide_to(label: &str, max: usize) -> String {
+    if label.chars().count() <= max {
         return label.to_string();
     }
-    let kept: String = label.chars().take(MAX - 1).collect();
+    let kept: String = label.chars().take(max.saturating_sub(1)).collect();
     format!("{}…", kept.trim_end())
 }
 
@@ -738,7 +748,17 @@ fn render_line(
 }
 
 fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
-    let mut svg = open_svg(title, HEIGHT);
+    // Sized before drawing, the way bar and line are. The pie legend is a
+    // vertical list at a fixed x, so it overflows in both directions: past
+    // roughly twenty slices the entries fall below a fixed-height canvas, and
+    // a name longer than about twenty-six characters runs off the right edge.
+    // Either way the slice is drawn and its key is not, with nothing to say a
+    // key is missing. `elide` and a grown canvas already existed for the other
+    // chart types; the pie simply did not use them.
+    let positive = series.values.iter().filter(|v| **v > 0.0).count();
+    let legend_h = MARGIN_TOP + 10.0 + PIE_ROW * positive as f64;
+    let canvas_h = HEIGHT.max(legend_h + MARGIN_BOTTOM / 2.0);
+    let mut svg = open_svg(title, canvas_h);
     // Negative slices have no meaning in a pie — a share of a whole cannot be
     // below nothing — so they are dropped rather than drawn inside out.
     let values: Vec<f64> = series.values.iter().map(|v| v.max(0.0)).collect();
@@ -823,10 +843,10 @@ fn render_pie(title: &str, categories: &[String], series: &Series) -> String {
             r#"<text x="{}" y="{}" font-size="12" fill="{INK}">{} ({}%)</text>"#,
             n(WIDTH - 173.0),
             n(ly),
-            esc(&category(categories, i)),
+            esc(&elide_to(&category(categories, i), PIE_LABEL_MAX)),
             data_label(v / total * 100.0)
         );
-        ly += 20.0;
+        ly += PIE_ROW;
     }
     svg.push_str("</svg>");
     svg
@@ -1213,6 +1233,53 @@ mod tests {
         assert!(
             svg.contains("series number 7"),
             "last series missing: {svg}"
+        );
+    }
+
+    /// The pie legend is a vertical list on a canvas that used to be a fixed
+    /// height, so past roughly twenty slices the entries fell outside the
+    /// viewport and were not drawn — slice present, key absent, nothing
+    /// saying so. Bar and line already grew their canvas; the pie did not.
+    #[test]
+    fn a_pie_with_many_slices_keeps_every_key_entry_on_the_canvas() {
+        let categories: Vec<String> = (0..25).map(|i| format!("slice {i}")).collect();
+        let values: Vec<u32> = (0..25).map(|i| i + 1).collect();
+        let svg = render(json!({
+            "type": "pie",
+            "categories": categories,
+            "values": values,
+        }));
+
+        let declared: f64 = svg
+            .split("height=\"")
+            .nth(1)
+            .and_then(|f| f.split('"').next())
+            .expect("a canvas height")
+            .parse()
+            .expect("a number");
+
+        // Every legend row must sit inside the declared canvas.
+        let last_row = MARGIN_TOP + 10.0 + PIE_ROW * 24.0;
+        assert!(
+            declared > last_row,
+            "canvas {declared} is shorter than the last legend row at {last_row}"
+        );
+        assert!(svg.contains("slice 24"), "the last key entry is missing");
+    }
+
+    /// A long slice name runs past the right edge of a fixed-width canvas, so
+    /// it is shortened the way the bar and line legends already were.
+    #[test]
+    fn a_long_pie_slice_name_is_elided() {
+        let svg = render(json!({
+            "type": "pie",
+            "categories": ["an extremely long slice name that would overflow", "b"],
+            "values": [1, 1],
+        }));
+        assert!(svg.contains('…'), "no elision in the pie legend: {svg}");
+        assert!(
+            !svg.contains("fill=\"#1c1f24\">an extremely long slice name that would overflow"),
+            "the full name was drawn in the legend: {svg}"
         );
     }
 
