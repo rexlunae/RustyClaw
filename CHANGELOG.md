@@ -277,12 +277,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the config no longer has any boot-critical fields at all. Skipping an empty
   slice (right when creating the file, wrong when maintaining it) left the old
   mirror on disk after `config unset model`, so the next start quietly
-  reinstated the provider the user had just removed. The mirror is maintained
-  only when the file being saved *is* this install's config: anchoring on
-  `settings_dir` alone made a save to an unrelated path reach into whatever
-  state directory the config happened to name, and since `Config::default()`
-  names `~/.rustyclaw`, that meant `cargo test` deleting a developer's real
-  `boot.toml` — and passing.
+  reinstated the provider the user had just removed. The mirror is touched
+  only when the file being read or written *is* this install's own config,
+  in both directions. Anchoring on `settings_dir` alone let any config reach
+  into whatever state directory it happened to name: on the save side, since
+  `Config::default()` names `~/.rustyclaw`, `cargo test` deleted a
+  developer's real `boot.toml` — and passed; on the load side, one command
+  against a side file (`--config /tmp/experiment.toml` naming the real
+  settings dir) planted that file's provider and model in the install's
+  `boot.toml`, and because `boot.toml` outranks `config.toml`, every later
+  normal start read the planted values. Reading someone else's config file
+  does not reconfigure the machine.
 
 - **A failed gateway start deleted the running gateway's PID file, leaving it
   unstoppable.** The PID file is written before anything is bound and was

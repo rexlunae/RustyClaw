@@ -782,7 +782,18 @@ impl Config {
                 // is defaults. Writing boot.toml from those would carve the
                 // defaults into the file that outranks config.toml — turning
                 // one bad boot into a permanent one.
-                if !boot_existed && !skip_post {
+                //
+                // And only for the install's *own* config, the same test
+                // `save` applies for the same reason. `boot_path` is derived
+                // from the settings dir the loaded file names, which need not
+                // be the directory that file lives in: without this,
+                // `--config /tmp/experiment.toml` naming `~/.rustyclaw` wrote
+                // the experiment's provider and model into the real install's
+                // boot.toml — and since boot.toml outranks config.toml, every
+                // later normal start read the planted values instead of its
+                // own. Reading someone else's config file must not
+                // reconfigure this machine.
+                if !boot_existed && !skip_post && Self::owns_config_file(&config, &config_path) {
                     Self::migrate_boot_config(&config, &boot_path);
                 }
             }
@@ -817,6 +828,20 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    /// Whether `config_path` is the file this install keeps its config in,
+    /// rather than one that merely names the same settings directory.
+    ///
+    /// The boot mirror lives at `<settings_dir>/boot.toml` and outranks
+    /// config.toml, so writing it is a change to *that install*. A config
+    /// read from or written to somewhere else is an export or an experiment,
+    /// and neither is entitled to reconfigure the machine — in both
+    /// directions: `Config::load` must not plant a mirror in a settings dir a
+    /// side file happens to name, and `Config::save` must not delete or
+    /// rewrite one there.
+    fn owns_config_file(config: &Config, config_path: &Path) -> bool {
+        config_path.parent().unwrap_or(Path::new("")) == config.settings_dir
     }
 
     /// Create `boot_path` from a config that has just loaded, if there is
@@ -921,8 +946,7 @@ impl Config {
         // suite passing while destroying a live install, which is exactly the
         // failure #456 was about. A save to somewhere else is an export, and
         // an export writes one file.
-        let boot_dir = config_path.parent().unwrap_or(Path::new(""));
-        if boot_dir == self.settings_dir {
+        if Self::owns_config_file(self, &config_path) {
             Self::sync_boot_config(self, &self.settings_dir.join("boot.toml"));
         }
 
@@ -1210,6 +1234,49 @@ mod tests {
             "boot.toml must not revert a saved provider change"
         );
         assert_eq!(reloaded.model.as_deref(), Some("claude-sonnet-4-20250514"));
+    }
+
+    /// Reading someone else's config file must not reconfigure this machine.
+    ///
+    /// `boot_path` comes from the settings dir the loaded file *names*, which
+    /// need not be the directory that file lives in. Without the ownership
+    /// test, `--config /tmp/experiment.toml` naming the real settings dir
+    /// planted the experiment's provider and model in the install's
+    /// boot.toml — and since boot.toml outranks config.toml, every later
+    /// normal start read the planted values. The load-side twin of
+    /// `saving_to_an_unrelated_path_leaves_the_settings_dir_alone`.
+    #[test]
+    fn loading_a_side_config_plants_no_boot_file_in_the_install_it_names() {
+        let install = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+
+        // The install's own config, not yet migrated.
+        write_full_config(
+            install.path(),
+            "[model]\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        );
+
+        // A side file that merely names the same settings dir.
+        let side = elsewhere.path().join("experiment.toml");
+        std::fs::write(
+            &side,
+            format!(
+                "settings_dir = \"{}\"\nuse_secrets = true\n\
+                 [model]\nprovider = \"anthropic\"\nmodel = \"claude-experimental\"\n",
+                install.path().display()
+            ),
+        )
+        .unwrap();
+
+        Config::load(Some(side)).unwrap();
+
+        assert!(
+            !install.path().join("boot.toml").exists(),
+            "a side config must not plant a mirror in the install it names"
+        );
+        // And the install still starts as itself.
+        let own = Config::load(Some(install.path().join("config.toml"))).unwrap();
+        assert_eq!(own.model.unwrap().model.as_deref(), Some("gpt-4o"));
     }
 
     /// A save aimed somewhere else must not touch the install it names.
