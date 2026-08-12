@@ -273,7 +273,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `anthropic`, and the next boot read `openai` — the same for `/model`, the
   gateway's admin model switch, the workspace path and the SSH bind. `save`
   now writes the boot slice through to `boot.toml`, anchored at
-  `settings_dir` so it lands where `load` looks for it.
+  `settings_dir` so it lands where `load` looks for it — and *removes* it when
+  the config no longer has any boot-critical fields at all. Skipping an empty
+  slice (right when creating the file, wrong when maintaining it) left the old
+  mirror on disk after `config unset model`, so the next start quietly
+  reinstated the provider the user had just removed.
 
 - **A failed gateway start deleted the running gateway's PID file, leaving it
   unstoppable.** The PID file is written before anything is bound and was
