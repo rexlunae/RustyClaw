@@ -845,6 +845,70 @@ pub fn agent_setup_params() -> Vec<ToolParam> {
     }]
 }
 
+pub fn chart_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "type".into(),
+            description: "Chart type: 'bar' (default), 'line', 'scatter' or 'pie'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "values".into(),
+            description: "A single series, as a list of numbers. Use this for the \
+                          common case; use `series` instead when plotting more \
+                          than one line or bar group."
+                .into(),
+            param_type: "array".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "series".into(),
+            description: "Several series, as a list of {name, values} objects. \
+                          Each `values` is a list of numbers. Series are coloured \
+                          and listed in a legend in the order given."
+                .into(),
+            param_type: "array".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "categories".into(),
+            description: "Labels for the x axis, or for the pie slices. Should be \
+                          the same length as the values; slots without a label are \
+                          numbered instead."
+                .into(),
+            param_type: "array".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "title".into(),
+            description: "Chart title, drawn across the top.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "x_label".into(),
+            description: "Label for the x axis. Ignored by pie charts.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "y_label".into(),
+            description: "Label for the y axis. Ignored by pie charts.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "path".into(),
+            description: "Where to write the SVG, relative to the workspace \
+                          (default: chart.svg). Must stay inside the workspace."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
 pub fn document_params() -> Vec<ToolParam> {
     vec![
         ToolParam {

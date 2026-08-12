@@ -13,9 +13,10 @@ use tracing::{debug, instrument, warn};
 
 mod ast_grep;
 mod browser;
+#[cfg(feature = "office-docs")]
+pub mod chart;
 mod cron_tool;
 mod devices;
-#[cfg(feature = "office-docs")]
 pub mod document;
 pub mod exa;
 pub mod exo_ai;
@@ -201,6 +202,7 @@ use sysadmin::{
 
 // PDF tool
 #[cfg(feature = "office-docs")]
+use chart::exec_chart;
 use document::exec_document;
 use pdf::exec_pdf;
 
@@ -409,6 +411,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "agent_setup" => "Set up local model infrastructure",
         "pdf" => "Analyze PDF files (extract text, metadata, page counts)",
         #[cfg(feature = "office-docs")]
+        "chart" => "Render a bar, line, scatter or pie chart as an SVG",
         "document" => "Extract text from Office documents (.docx, .xlsx, .pptx)",
         "swarm_create" => "Create a swarm of persistent registered agents",
         "swarm_list" => "List all swarms and their health",
@@ -584,6 +587,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &ASK_USER,
         &CLIENT_DOM_QUERY,
         &PDF,
+        &CHART,
         #[cfg(feature = "office-docs")]
         &DOCUMENT,
         &SWARM_CREATE,
