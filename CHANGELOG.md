@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gateway controls in the desktop client (#414).** A new "Gateway…" entry
+  under Tools (Ctrl/Cmd+G) opens a panel split in two. The top half manages
+  the gateway daemon *on this machine* — start, stop and restart, backed by
+  the same `rustyclaw_core::daemon` calls `rustyclaw gateway start|stop|restart`
+  uses, with the daemon's status, SSH listen address and log path shown
+  alongside. The bottom half describes the gateway this client is connected
+  to and offers the one lifecycle command the wire protocol carries and that
+  needs no input from anyone: reload configuration, which works against a
+  remote gateway as well as a local one. The split is deliberate — the panel
+  states which of the two each control acts on, so "Stop" cannot read as
+  stopping a remote host. The panel never asks for the vault password, so a
+  daemon started from it comes up with the vault locked; the panel says so,
+  and the existing unlock dialog handles it over the session.
+
+  Also fixed while wiring it up: the desktop resolved several config-derived
+  values with `Config::load(None)`, which re-reads the default location and
+  discards `--config` / `--settings-dir` / `--profile`. Those now use the
+  config `main` actually resolved, so launching under `--profile` no longer
+  shows the default profile's model or asks an already-hatched agent to
+  hatch again.
+
 - **Message relevance filter — rule tier (`relevance_filter = "mentions"`).**
   In group chats, every message previously triggered a full agent response
   cycle, burning tokens on chatter that was never directed at the agent.

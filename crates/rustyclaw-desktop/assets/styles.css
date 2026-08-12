@@ -1341,6 +1341,21 @@ body,
     border-top: 1px solid var(--rc-border);
 }
 
+/* Gateway control panel. The two halves — the daemon on this machine and the
+   gateway this client is connected to — get a rule between them, because the
+   whole point of the panel is that the buttons in the first half do not act
+   on the host named in the second. */
+.gateway-control-section + .gateway-control-section {
+    padding-top: 16px;
+    border-top: 1px solid var(--rc-border);
+}
+
+/* A settings directory nested a few levels deep produces a log path longer
+   than the modal is wide; `code` does not wrap on its own. */
+.gateway-control-log {
+    overflow-wrap: anywhere;
+}
+
 .title.settings-section-title {
     margin-bottom: 0.75rem !important;
 }

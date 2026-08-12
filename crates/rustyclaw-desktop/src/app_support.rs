@@ -98,10 +98,7 @@ pub(crate) async fn connect_to_gateway_candidates(
     for url in urls {
         state.write().gateway_url = url.clone();
         connect_to_gateway(&url, state, gateway).await;
-        if matches!(
-            state.read().connection,
-            ConnectionStatus::Connected | ConnectionStatus::Authenticated
-        ) {
+        if state.read().is_connected() {
             crate::save_gateway_url(&url);
             return true;
         }
@@ -1439,6 +1436,219 @@ pub(crate) fn toggle_skill(name: &str) -> Vec<rustyclaw_view::SkillInfoData> {
         }
     }
     load_skills_list()
+}
+
+// ── Local gateway daemon ────────────────────────────────────────────────────
+
+/// The local-daemon half of the gateway panel, read from disk and the process
+/// table.
+///
+/// Every field here comes from somewhere that blocks — `daemon::status` walks
+/// the process table via `sysinfo`, `Config::load` reads a file — so this is
+/// built on a blocking thread and handed to the UI as a value. The connection
+/// half of [`rustyclaw_view::GatewayControlData`] is filled in by the caller
+/// from live signals; nothing about it needs a disk read.
+pub struct LocalGatewaySnapshot {
+    pub local: rustyclaw_view::LocalDaemonState,
+    pub ssh_listen: String,
+    pub log_path: String,
+    pub vault_password_protected: bool,
+}
+
+impl LocalGatewaySnapshot {
+    /// Copy the snapshot over the daemon half of the panel's data, leaving
+    /// `url`, `connected`, `pending` and `last_action` alone — those belong to
+    /// the caller, not to the disk.
+    ///
+    /// One method rather than two open-coded blocks: the panel is refreshed
+    /// from two places, and a field added to the snapshot but assigned in only
+    /// one of them shows the right value on open and a stale one after an
+    /// action, which is the harder of the two to notice.
+    fn apply(self, data: &mut rustyclaw_view::GatewayControlData) {
+        data.local = self.local;
+        data.ssh_listen = self.ssh_listen;
+        data.log_path = self.log_path;
+        data.vault_password_protected = self.vault_password_protected;
+    }
+}
+
+/// The address the local daemon listens on, matching what `gateway start`
+/// would use.
+///
+/// Duplicated from the CLI rather than shared because the CLI's copy is
+/// inline at two call sites in `main.rs`; if it moves somewhere callable this
+/// should call it instead.
+fn ssh_listen_addr(config: &rustyclaw_core::config::Config) -> String {
+    config
+        .ssh
+        .as_ref()
+        .map(|s| s.bind.clone())
+        .unwrap_or_else(|| "0.0.0.0:2222".to_string())
+}
+
+/// Read the current state of the gateway daemon on this machine. Blocking.
+pub fn probe_local_gateway() -> LocalGatewaySnapshot {
+    let config = crate::resolved_config();
+    LocalGatewaySnapshot {
+        local: rustyclaw_view::LocalDaemonState::probe(&config.settings_dir),
+        ssh_listen: ssh_listen_addr(&config),
+        log_path: rustyclaw_core::daemon::log_path(&config.settings_dir)
+            .display()
+            .to_string(),
+        vault_password_protected: config.secrets_password_protected,
+    }
+}
+
+/// Which lifecycle action to run against the local daemon.
+///
+/// Alias of the view crate's [`rustyclaw_view::PendingAction`] rather than a
+/// parallel enum, so "the action running" and "the action the panel is
+/// spinning a button for" cannot drift apart.
+pub type LocalGatewayAction = rustyclaw_view::PendingAction;
+
+/// Run a lifecycle action against the gateway daemon on this machine.
+/// Blocking — `daemon::stop` waits up to two seconds for the process to go.
+///
+/// The vault password is deliberately never passed. The CLI prompts for it on
+/// a terminal; the desktop has no equivalent that does not mean building a
+/// password prompt whose only job is to hand a secret to a subprocess. A
+/// gateway started from here therefore comes up with the vault locked, which
+/// the panel says out loud, and the existing unlock dialog handles it over the
+/// session once connected.
+pub fn run_local_gateway_action(action: LocalGatewayAction) -> rustyclaw_view::ActionOutcome {
+    use rustyclaw_core::daemon;
+    use rustyclaw_view::ActionOutcome;
+
+    let config = crate::resolved_config();
+    let dir = config.settings_dir.clone();
+    let listen = ssh_listen_addr(&config);
+
+    let start = |dir: &std::path::Path| {
+        daemon::start(
+            dir,
+            &listen,
+            &[],
+            None,
+            // See the doc comment: no password, vault comes up locked.
+            None,
+            config.tls_cert.as_deref(),
+            config.tls_key.as_deref(),
+            None,
+        )
+    };
+
+    match action {
+        LocalGatewayAction::Start => match start(&dir) {
+            Ok(pid) => ActionOutcome::ok(format!("Gateway started (PID {pid}, SSH {listen}).")),
+            Err(e) => ActionOutcome::failed(format!("Could not start the gateway: {e}")),
+        },
+        LocalGatewayAction::Stop => match daemon::stop(&dir) {
+            Ok(daemon::StopResult::Stopped { pid }) => {
+                ActionOutcome::ok(format!("Gateway stopped (was PID {pid})."))
+            }
+            Ok(daemon::StopResult::WasStale { pid }) => ActionOutcome::ok(format!(
+                "Cleaned up a stale PID file — PID {pid} was already gone."
+            )),
+            Ok(daemon::StopResult::WasNotRunning) => {
+                ActionOutcome::ok("Gateway was not running.".to_string())
+            }
+            Err(e) => ActionOutcome::failed(format!("Could not stop the gateway: {e}")),
+        },
+        LocalGatewayAction::Restart => {
+            // A failed stop is fatal to the restart: starting on top of a
+            // gateway that is still holding the listen port produces a second
+            // process that dies on bind, overwrites the PID file on its way
+            // in, and leaves the panel pointing at a corpse.
+            let stopped = match daemon::stop(&dir) {
+                Ok(result) => result,
+                Err(e) => {
+                    return ActionOutcome::failed(format!(
+                        "Could not stop the gateway, so it was not restarted: {e}"
+                    ));
+                }
+            };
+            // Same brief pause the CLI takes, for the same reason: the port
+            // is not free the instant the process is gone.
+            if matches!(stopped, daemon::StopResult::Stopped { .. }) {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            match start(&dir) {
+                Ok(pid) => {
+                    ActionOutcome::ok(format!("Gateway restarted (PID {pid}, SSH {listen})."))
+                }
+                Err(e) => ActionOutcome::failed(format!(
+                    "Stopped the gateway but could not start it again: {e}"
+                )),
+            }
+        }
+    }
+}
+
+/// Re-probe the local daemon and write the result into the panel's state.
+///
+/// The probe runs on a blocking thread: `sysinfo` walking the process table
+/// on the UI task is a visible stutter on a busy machine, and the same code
+/// path is reached right after `daemon::stop`, which has just spent up to two
+/// seconds waiting.
+pub fn refresh_gateway_control(mut state: Signal<AppState>) {
+    spawn(async move {
+        match rustyclaw_view::tokio::task::spawn_blocking(probe_local_gateway).await {
+            Ok(snapshot) => snapshot.apply(&mut state.write().gateway_control),
+            Err(e) => {
+                // A panic in the probe would otherwise leave the panel showing
+                // whatever it last read, with no hint that it is stale.
+                tracing::error!(error = ?e, "probing the local gateway failed");
+                state.write().gateway_control.last_action =
+                    Some(rustyclaw_view::ActionOutcome::failed(
+                        "Could not read the local gateway's status.",
+                    ));
+            }
+        }
+    });
+}
+
+/// Run a local daemon action, then re-probe so the panel shows the result.
+///
+/// `pending` is set before the blocking call and cleared after the re-probe,
+/// so the buttons stay disabled across the whole sequence rather than coming
+/// back to life in the window between the action landing and the status
+/// catching up — which is exactly the window in which the panel is wrong.
+pub fn run_gateway_action(mut state: Signal<AppState>, action: LocalGatewayAction) {
+    // The buttons are disabled while an action is pending, but a second click
+    // can land before the re-render that disables them. Two overlapping
+    // restarts race on one PID file: the second `stop` reads the PID the first
+    // `start` has not written yet, and the panel ends up naming a process that
+    // no longer exists.
+    if state.read().gateway_control.pending.is_some() {
+        return;
+    }
+    state.write().gateway_control.pending = Some(action);
+    spawn(async move {
+        let outcome = match rustyclaw_view::tokio::task::spawn_blocking(move || {
+            run_local_gateway_action(action)
+        })
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                tracing::error!(error = ?e, ?action, "gateway action panicked");
+                rustyclaw_view::ActionOutcome::failed(
+                    "The gateway action failed unexpectedly; see the desktop log.",
+                )
+            }
+        };
+        // Re-probe on the same task rather than delegating to
+        // `refresh_gateway_control`: that spawns, so `pending` would clear
+        // before the fresh status arrived.
+        let snapshot = rustyclaw_view::tokio::task::spawn_blocking(probe_local_gateway).await;
+        let mut s = state.write();
+        s.gateway_control.last_action = Some(outcome);
+        match snapshot {
+            Ok(snapshot) => snapshot.apply(&mut s.gateway_control),
+            Err(e) => tracing::error!(error = ?e, "re-probing the local gateway failed"),
+        }
+        s.gateway_control.pending = None;
+    });
 }
 
 // ── Task boundary ───────────────────────────────────────────────────────────

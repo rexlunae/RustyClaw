@@ -663,6 +663,51 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 }
             }
 
+            GatewayControlDialog {
+                visible: state.read().show_gateway_dialog,
+                data: {
+                    // The daemon half is a stored snapshot; the connection
+                    // half is live, so it is read here rather than mirrored
+                    // into the snapshot and left to go stale the moment the
+                    // session drops while the dialog is open.
+                    let s = state.read();
+                    rustyclaw_view::GatewayControlData {
+                        url: s.gateway_url.clone(),
+                        connected: s.is_connected(),
+                        ..s.gateway_control.clone()
+                    }
+                },
+                on_command: move |cmd| {
+                    use rustyclaw_view::PendingAction;
+                    let action = match cmd {
+                        GatewayControlCommand::Start => Some(PendingAction::Start),
+                        GatewayControlCommand::Stop => Some(PendingAction::Stop),
+                        GatewayControlCommand::Restart => Some(PendingAction::Restart),
+                        GatewayControlCommand::Reload => None,
+                    };
+                    match action {
+                        Some(action) => crate::app_support::run_gateway_action(state, action),
+                        None => {
+                            // Reload travels over the session. Its outcome
+                            // arrives as ModelReloaded or Error and lands in
+                            // the transcript, so there is nothing to write
+                            // into the panel here.
+                            let gw = gateway.read().clone();
+                            if let Some(client) = gw {
+                                spawn_reporting("reload gateway config", async move {
+                                    client
+                                        .send(GatewayCommand::Reload)
+                                        .await
+                                        .context("sending Reload")?;
+                                    Ok(())
+                                });
+                            }
+                        }
+                    }
+                },
+                on_close: move |_| state.write().show_gateway_dialog = false,
+            }
+
             SystemInfoDialog {
                 visible: state.read().show_system_info,
                 host: state.read().host_info.clone(),
