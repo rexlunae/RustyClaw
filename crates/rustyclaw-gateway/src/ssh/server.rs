@@ -494,7 +494,15 @@ impl Handler for SshHandler {
         }
 
         for client in clients.iter() {
-            if &client.key == public_key {
+            // Key material only — never the whole `PublicKey`. Its equality
+            // includes the comment, and the comment exists only on the disk
+            // side: a key parsed from `authorized_clients` carries one, while
+            // a key arriving in an SSH auth request never does (the wire blob
+            // has no comment field). Comparing whole structs therefore
+            // matched only against keys bootstrapped *this* process — every
+            // restart re-read the file and locked every paired client out
+            // with "Permission denied (publickey)".
+            if client.key.key_data() == public_key.key_data() {
                 info!(
                     user = user,
                     fingerprint = %fingerprint,
@@ -1094,6 +1102,80 @@ mod tests {
 
         sender.await.expect("sender task");
     }
+    /// A paired client must still authenticate after the gateway restarts.
+    ///
+    /// Pairing persists the key to `authorized_clients` with a comment, and
+    /// a restarted gateway re-reads it from there — while an SSH auth
+    /// request carries the bare key blob, which has no comment field.
+    /// `PublicKey`'s equality includes the comment, so comparing whole
+    /// structs matched only the in-memory copy bootstrapped by the current
+    /// process: the first restart after pairing locked every client out
+    /// with "Permission denied (publickey)", which the desktop then buried
+    /// under a generic "gateway is not responding".
+    #[tokio::test]
+    async fn a_paired_client_still_authenticates_after_a_gateway_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth_path = dir.path().join("authorized_clients");
+        let (connection_tx, _connection_rx) = mpsc::channel(16);
+
+        let client_key =
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .expect("client key");
+        // What actually arrives in an auth request: key material, no comment.
+        let wire_key = client_key.public_key().clone();
+        assert!(wire_key.comment().is_empty(), "wire keys carry no comment");
+
+        // First boot: no authorized clients yet, so the key bootstraps in
+        // and is persisted.
+        let mut first_boot = SshHandler {
+            authorized_clients: Arc::new(Mutex::new(Vec::new())),
+            authorized_clients_path: auth_path.clone(),
+            allow_unknown_keys_with_totp: false,
+            peer_addr: None,
+            authenticated_username: None,
+            connection_tx: connection_tx.clone(),
+            sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            rate_limiter: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        };
+        let bootstrapped = first_boot
+            .auth_publickey("test", &wire_key)
+            .await
+            .expect("bootstrap auth");
+        assert!(
+            matches!(bootstrapped, Auth::Accept),
+            "the first key to connect must bootstrap in"
+        );
+
+        // Restart: the list comes from the file now, not from memory. The
+        // persisted entry carries a comment — that is the case under test,
+        // so fail loudly if bootstrap ever stops writing one.
+        let reloaded = load_authorized_clients(&auth_path).expect("reload authorized_clients");
+        assert_eq!(reloaded.len(), 1, "bootstrap must have persisted the key");
+        assert!(
+            !reloaded[0].key.comment().is_empty(),
+            "the persisted key must carry a comment for this test to mean anything"
+        );
+
+        let mut restarted = SshHandler {
+            authorized_clients: Arc::new(Mutex::new(reloaded)),
+            authorized_clients_path: auth_path,
+            allow_unknown_keys_with_totp: false,
+            peer_addr: None,
+            authenticated_username: None,
+            connection_tx,
+            sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            rate_limiter: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        };
+        let after_restart = restarted
+            .auth_publickey("test", &wire_key)
+            .await
+            .expect("auth after restart");
+        assert!(
+            matches!(after_restart, Auth::Accept),
+            "a key authorized on disk must authenticate the same key from the wire"
+        );
+    }
+
     /// A host key that exists but does not parse used to stop the gateway
     /// booting at all, with a manual `rm` as the only cure. It must be
     /// quarantined and regenerated: clients get a changed-host-key warning
