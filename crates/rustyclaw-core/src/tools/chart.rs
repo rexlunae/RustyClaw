@@ -156,27 +156,17 @@ pub fn exec_chart(args: &Value, workspace_dir: &Path) -> ToolResult {
         return Err(ToolError::msg(super::helpers::VAULT_ACCESS_DENIED));
     }
 
-    if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| ToolError::context("Could not create the chart's directory", e))?;
-    }
-
-    // Written through a verified descriptor rather than by path. Between
-    // resolving the path above and opening it, a directory component can be
-    // swapped for a symlink; `open_file_write_safe` re-resolves and hands back
-    // the file it actually opened, so the write lands where the check looked.
-    let (mut file, opened) = super::helpers::open_file_write_safe(&out)
-        .map_err(|e| ToolError::context("Could not open the chart for writing", e))?;
-    let root = workspace_dir
-        .canonicalize()
-        .unwrap_or_else(|_| workspace_dir.to_path_buf());
-    if !opened.starts_with(&root) {
-        return Err(ToolError::msg(format!(
-            "chart path {} escapes the workspace",
-            opened.display()
-        )));
-    }
-    std::io::Write::write_all(&mut file, svg.as_bytes())
+    // Written to a temporary sibling and renamed into place.
+    //
+    // The previous version opened the destination and *then* checked where it
+    // had landed, but the open is `create(true).truncate(true)` — so a
+    // destination reached through a swapped symlink was already emptied by the
+    // time the check refused the write. Refusing afterwards does not un-empty
+    // it. Here the only file truncated is the temporary one, whose name this
+    // process chose, and `rename` replaces the destination entry itself rather
+    // than following it, so a symlink sitting there is overwritten instead of
+    // its target being clobbered.
+    crate::persist::write_atomically(&out, svg.as_bytes())
         .map_err(|e| ToolError::context("Could not write the chart", e))?;
 
     Ok(format!(
@@ -1352,6 +1342,35 @@ mod tests {
         assert!(
             std::fs::read_to_string(reported).is_ok(),
             "cannot open the path the tool reported: {reported}"
+        );
+    }
+
+    /// Refusing a write must not have already destroyed the thing it refused
+    /// to overwrite. The old path opened the destination with
+    /// `create(true).truncate(true)` and checked afterwards, so a target
+    /// reached through a symlink was emptied before the refusal — the bytes
+    /// never landed, but the file was gone either way.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_write_leaves_the_target_untouched() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let precious = outside.path().join("precious.txt");
+        std::fs::write(&precious, "keep me").expect("seed");
+
+        std::os::unix::fs::symlink(&precious, workspace.path().join("link.svg")).expect("symlink");
+
+        let err = exec_chart(
+            &json!({"values": [1], "path": "link.svg"}),
+            workspace.path(),
+        )
+        .expect_err("a symlink out of the workspace must be refused");
+        assert!(format!("{err}").contains("escapes the workspace"), "{err}");
+
+        assert_eq!(
+            std::fs::read_to_string(&precious).expect("the target still exists"),
+            "keep me",
+            "the refused write truncated its target anyway"
         );
     }
 
