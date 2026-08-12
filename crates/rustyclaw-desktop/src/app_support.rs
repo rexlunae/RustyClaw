@@ -120,8 +120,13 @@ pub(crate) async fn connect_to_gateway(
             state.write().connection = ConnectionStatus::Connected;
         }
         Err(e) => {
-            state.write().connection = ConnectionStatus::Error(e.to_string());
-            tracing::error!("Failed to connect to gateway: {}", e);
+            // The whole chain, not just the outermost context. `connect`
+            // wraps every failure in "Gateway at … is not responding", but
+            // the cause underneath is what's actionable — "Permission denied
+            // (publickey)", "Connection refused", a host-key mismatch — and
+            // `to_string` on an anyhow error prints only the top layer.
+            state.write().connection = ConnectionStatus::Error(format!("{:#}", e));
+            tracing::error!("Failed to connect to gateway: {:#}", e);
         }
     }
 }

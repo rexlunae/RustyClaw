@@ -270,6 +270,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every paired client was locked out after the gateway restarted.** The
+  SSH auth check compared whole `PublicKey` structs, and that equality
+  includes the key's comment — which exists only on the disk side. Pairing
+  persists the key to `authorized_clients` with a comment
+  (`user@rustyclaw`), while a key arriving in an SSH auth request never
+  carries one (the wire blob has no comment field). So the comparison
+  matched only the in-memory copy bootstrapped by the current process:
+  the first restart re-read the file and rejected every paired client with
+  `Permission denied (publickey)`, indefinitely, while the port still
+  answered probes. The check now compares key material only. Relatedly,
+  the desktop rendered only the outermost error layer — a generic
+  "Gateway at … is not responding" — hiding the `Permission denied`
+  underneath; it now shows the full error chain, so an auth rejection, a
+  refused connection and a host-key mismatch are all distinguishable from
+  a gateway that is actually down.
+
 - **Model tuning and the provider TLS pin were erased by `boot.toml`.**
   `BootConfig::apply` rebuilt the whole `[model]` section from the boot slice,
   hard-coding `tls_ca_cert`, `reasoning_effort`, `max_tokens`, `temperature`
