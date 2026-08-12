@@ -565,10 +565,19 @@ pub(crate) async fn dispatch_text_message(
     let mut original_api_key = resolved.api_key.clone();
 
     // ── Agentic tool loop ───────────────────────────────────────────
-    // No hard limit — the model will stop when it's done. The user can
-    // cancel by sending a {"type": "cancel"} message (e.g., pressing Esc).
-    // We use a very high limit as a safety net against infinite loops.
-    const MAX_TOOL_ROUNDS: usize = 500;
+    // No round limit — the model stops when it's done, and the user can
+    // cancel at any time (e.g., pressing Esc). There used to be an absolute
+    // cap of 500 rounds as an infinite-loop safety net, and it did exactly
+    // the wrong thing on both sides: a legitimate long-running task was
+    // killed mid-flight at an arbitrary count, while a runaway loop burned
+    // 500 model calls as fast as the provider answered before anything
+    // intervened. Runaway protection is rate-shaped now: the loop is
+    // *paced* to `tool_limits.max_rounds_per_minute` (see the check at the
+    // top of the loop), so a spinning turn is held to a bounded, visible
+    // burn rate the user can read and cancel, and a long task just keeps
+    // working. The loops that genuinely cannot run unbounded — rounds where
+    // every tool call fails, or the model narrating without acting — have
+    // their own detectors below.
     /// Maximum consecutive auto-continuations before giving up.
     /// Prevents infinite loops when the model keeps narrating intent
     /// but never actually makes tool calls.
@@ -600,12 +609,46 @@ pub(crate) async fn dispatch_text_message(
     };
     let mut memory_flush = MemoryFlush::new(flush_config);
 
-    for _round in 0..MAX_TOOL_ROUNDS {
+    // One pacer for this turn's loop; see `tool_limits::RoundPacer`.
+    let mut round_pacer = rustyclaw_core::tool_limits::RoundPacer::from_config();
+
+    loop {
         // ── Check for cancellation ──────────────────────────────────
         if tool_cancel.load(Ordering::Relaxed) {
             protocol::server::send_info(writer, "Tool loop cancelled by user.").await?;
             providers::send_response_done(writer).await?;
             return Ok(());
+        }
+
+        // ── Pace the loop by rate ───────────────────────────────────
+        //
+        // Over the configured rounds-per-minute, wait for the sliding
+        // window to open instead of starting the next round — a pace,
+        // never a stop. Waiting in short slices keeps cancellation
+        // responsive, since a paced loop is precisely the one a user is
+        // most likely to be watching with a finger on Esc.
+        let mut paced = false;
+        while let Some(wait) = round_pacer.admit(std::time::Instant::now()) {
+            if !paced {
+                paced = true;
+                protocol::server::send_info(
+                    writer,
+                    &format!(
+                        "Pacing the tool loop to {} rounds/minute \
+                         (tool_limits.max_rounds_per_minute) — continuing in {}s…",
+                        rustyclaw_core::tool_limits::config().max_rounds_per_minute,
+                        wait.as_secs().max(1),
+                    ),
+                )
+                .await
+                .ignore();
+            }
+            tokio::time::sleep(wait.min(std::time::Duration::from_millis(250))).await;
+            if tool_cancel.load(Ordering::Relaxed) {
+                protocol::server::send_info(writer, "Tool loop cancelled by user.").await?;
+                providers::send_response_done(writer).await?;
+                return Ok(());
+            }
         }
 
         // ── Take any direction added since the last round ───────────
@@ -1418,28 +1461,6 @@ pub(crate) async fn dispatch_text_message(
             return Ok(());
         }
     }
-
-    // If we exhausted all rounds, send what we have and stop.
-    #[allow(clippy::let_underscore_must_use)]
-    // reason: the value here is a `ControlFlow`, not a `Result` — the error is
-    // already propagated by `?` above. It answers "keep looping or stop", and
-    // the loop it refers to has just run out of rounds either way, so there is
-    // no decision left for it to inform. `.ignore()` is for `Result` alone and
-    // does not apply.
-    let _ = errors::handle(
-        errors::GatewayError::ToolLoopExhausted {
-            rounds: MAX_TOOL_ROUNDS,
-        },
-        None,
-        writer,
-        &mut resolved,
-        &mut original_api_key,
-        vault,
-        credentials,
-        tool_cancel,
-    )
-    .await?;
-    Ok(())
 }
 
 /// Detect tool call IDs that are likely non-unique across turns.

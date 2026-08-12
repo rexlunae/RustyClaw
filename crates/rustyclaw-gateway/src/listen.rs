@@ -137,6 +137,7 @@ pub async fn run_gateway(
         max_background_processes = tool_limits.max_background_processes,
         max_subagents = tool_limits.max_subagents,
         max_background_sessions = tool_limits.max_background_sessions,
+        max_rounds_per_minute = tool_limits.max_rounds_per_minute,
         "Tool budgets installed"
     );
     rustyclaw_core::tool_limits::install(tool_limits);

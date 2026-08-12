@@ -46,6 +46,10 @@ fn default_max_background_sessions() -> usize {
     32
 }
 
+fn default_max_rounds_per_minute() -> usize {
+    60
+}
+
 /// Per-tool call ceilings applied on top of [`ToolLimitsConfig::default_max_calls`].
 ///
 /// Only tools whose cost lands somewhere other than this process are listed:
@@ -92,6 +96,20 @@ pub struct ToolLimitsConfig {
     /// each start eight. This ceiling is what actually bounds the total.
     #[serde(default = "default_max_background_sessions")]
     pub max_background_sessions: usize,
+
+    /// Model-call rounds per minute one turn's tool loop may sustain.
+    ///
+    /// This is a *pace*, not a ceiling: a turn over the rate is delayed
+    /// until the sliding window has room, never stopped. It replaces the
+    /// old absolute round cap, which killed legitimate long-running tasks
+    /// at an arbitrary count while doing nothing to bound how *fast* a
+    /// runaway loop burned until it got there. A genuine round includes a
+    /// full model round-trip, so real work rarely sustains even one round
+    /// per second; a degenerate loop spinning on instant responses is held
+    /// to this rate, visibly, where the user can read what it is doing and
+    /// cancel. 0 disables pacing.
+    #[serde(default = "default_max_rounds_per_minute")]
+    pub max_rounds_per_minute: usize,
 }
 
 impl Default for ToolLimitsConfig {
@@ -103,6 +121,7 @@ impl Default for ToolLimitsConfig {
             max_background_processes: default_max_background_processes(),
             max_subagents: default_max_subagents(),
             max_background_sessions: default_max_background_sessions(),
+            max_rounds_per_minute: default_max_rounds_per_minute(),
         }
     }
 }
@@ -274,6 +293,73 @@ pub fn check_background_session(running: usize) -> Result<(), LimitError> {
     Err(LimitError::TooManyBackgroundSessions { running, limit })
 }
 
+// ── Round pacing ────────────────────────────────────────────────────────────
+
+/// The sliding window [`RoundPacer`] paces over.
+const ROUND_WINDOW: Duration = Duration::from_secs(60);
+
+/// Paces one turn's agentic tool loop by rate instead of stopping it at a
+/// count.
+///
+/// The loop used to end at an absolute round cap, which cut off legitimate
+/// long-running tasks at an arbitrary number while doing nothing to bound
+/// how fast a runaway loop burned on the way there. This inverts that: any
+/// number of rounds is allowed, but a turn that exceeds
+/// [`ToolLimitsConfig::max_rounds_per_minute`] waits for the window to open
+/// rather than starting the next round. A runaway loop is thereby held to a
+/// bounded, visible burn rate — slow enough to read and cancel — and a long
+/// task simply keeps going.
+///
+/// One pacer per turn: the rate describes a single loop, and two concurrent
+/// turns sharing a window would throttle each other for working at all.
+pub struct RoundPacer {
+    max_per_minute: usize,
+    rounds: VecDeque<Instant>,
+}
+
+impl RoundPacer {
+    /// A pacer honouring the installed [`ToolLimitsConfig`].
+    pub fn from_config() -> Self {
+        Self::new(config().max_rounds_per_minute)
+    }
+
+    /// A pacer allowing `max_per_minute` rounds per sliding minute.
+    /// 0 disables pacing.
+    pub fn new(max_per_minute: usize) -> Self {
+        Self {
+            max_per_minute,
+            rounds: VecDeque::new(),
+        }
+    }
+
+    /// Ask to start a round at `now`.
+    ///
+    /// `None` admits the round and records it. `Some(wait)` means the window
+    /// is full: the caller should wait roughly that long and ask again —
+    /// nothing is recorded for a refused ask, so waiting never extends the
+    /// wait. Callers should re-ask in a loop rather than trusting one wait
+    /// to be exact.
+    pub fn admit(&mut self, now: Instant) -> Option<Duration> {
+        if self.max_per_minute == 0 {
+            return None;
+        }
+        while self
+            .rounds
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= ROUND_WINDOW)
+        {
+            self.rounds.pop_front();
+        }
+        if self.rounds.len() >= self.max_per_minute {
+            // Room opens when the oldest recorded round ages out.
+            let oldest = *self.rounds.front().expect("len >= max >= 1");
+            return Some(ROUND_WINDOW.saturating_sub(now.duration_since(oldest)));
+        }
+        self.rounds.push_back(now);
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +514,72 @@ mod tests {
         ));
 
         install(ToolLimitsConfig::default());
+    }
+
+    /// Under the rate, rounds are admitted immediately — pacing must be
+    /// invisible to a loop doing ordinary work.
+    #[test]
+    fn rounds_under_the_rate_are_never_delayed() {
+        let mut pacer = RoundPacer::new(10);
+        let start = Instant::now();
+        for i in 0..10 {
+            assert_eq!(
+                pacer.admit(start + Duration::from_secs(i)),
+                None,
+                "round {i} is within the rate and must not wait"
+            );
+        }
+    }
+
+    /// Over the rate, the pacer asks for a wait — and the wait is until the
+    /// oldest round leaves the window, not forever: this is a pace, not a
+    /// stop. That distinction is the whole point of replacing the absolute
+    /// round cap that killed long-running tasks.
+    #[test]
+    fn a_full_window_waits_for_room_and_then_admits() {
+        let mut pacer = RoundPacer::new(3);
+        let start = Instant::now();
+        for i in 0..3 {
+            assert_eq!(pacer.admit(start + Duration::from_millis(i)), None);
+        }
+
+        let asked_at = start + Duration::from_secs(1);
+        let wait = pacer
+            .admit(asked_at)
+            .expect("a full window must ask for a wait");
+        // The oldest round was at `start`; it ages out at start + 60s.
+        assert_eq!(wait, Duration::from_secs(59));
+
+        // Asking again after the wait must admit — a caller that keeps
+        // waiting and re-asking always eventually proceeds.
+        assert_eq!(pacer.admit(asked_at + wait), None);
+    }
+
+    /// A refused ask must not be recorded: a loop that politely waits and
+    /// re-asks would otherwise push its own admission further away each
+    /// time it asked.
+    #[test]
+    fn waiting_does_not_extend_the_wait() {
+        let mut pacer = RoundPacer::new(1);
+        let start = Instant::now();
+        assert_eq!(pacer.admit(start), None);
+
+        let first = pacer.admit(start + Duration::from_secs(1)).expect("full");
+        let second = pacer.admit(start + Duration::from_secs(2)).expect("full");
+        assert!(
+            second < first,
+            "the wait must shrink while the caller waits: {first:?} then {second:?}"
+        );
+    }
+
+    /// Zero disables pacing entirely, matching every other limit here.
+    #[test]
+    fn a_zero_rate_disables_pacing() {
+        let mut pacer = RoundPacer::new(0);
+        let now = Instant::now();
+        for _ in 0..1000 {
+            assert_eq!(pacer.admit(now), None);
+        }
     }
 
     #[test]

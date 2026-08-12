@@ -533,6 +533,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The interactive tool loop is paced by rate, not stopped at a count.**
+  Long-running agent tasks were dying at an arbitrary ceiling: after 500
+  tool rounds the turn was killed with "Safety limit reached (500 tool
+  rounds) — stopping to prevent infinite loop", regardless of whether it
+  was looping or three hours into legitimate work — while a genuinely
+  runaway loop was free to burn all 500 rounds as fast as the provider
+  answered before the cap ever engaged. The absolute cap is gone. In its
+  place the loop is paced to `tool_limits.max_rounds_per_minute` (default
+  60, `0` disables): a turn over the rate *waits* for the sliding
+  one-minute window to open — with an info notice so the client can see
+  the pacing — and then continues; it is never stopped. Cancellation stays
+  responsive while paced. The detectors for loops that really are stuck
+  are unchanged: three consecutive rounds of all-failed tool calls, the
+  auto-continue cap, and user cancel. Headless loops (cron, triggers,
+  messengers, spawned subagents) keep their small round caps — they run
+  unattended, with nobody watching to cancel.
+
 - **Structured-error follow-up: restored ~100 context sites lost to the
   revert probe, dropped redundant conversions.** The pass that introduced
   `ToolError::Context` had collaterally reverted convertible call sites

@@ -43,7 +43,6 @@ pub enum ErrorKind {
     Auth,
     Provider,
     TokenLimit,
-    ToolLoopExhausted,
     ContextCompaction,
     Cancelled,
     Vault,
@@ -65,7 +64,6 @@ impl ErrorKind {
             Self::Auth => "auth",
             Self::Provider => "provider",
             Self::TokenLimit => "token_limit",
-            Self::ToolLoopExhausted => "tool_loop_exhausted",
             Self::ContextCompaction => "context_compaction",
             Self::Cancelled => "cancelled",
             Self::Vault => "vault",
@@ -92,9 +90,6 @@ pub enum GatewayError {
 
     /// The response was truncated because the model hit its token limit.
     TokenLimit,
-
-    /// The agentic tool loop hit the safety ceiling.
-    ToolLoopExhausted { rounds: usize },
 
     /// Context compaction failed (non-fatal — the call can proceed).
     ContextCompaction,
@@ -130,11 +125,6 @@ impl fmt::Display for GatewayError {
             }
             Self::Provider => write!(f, "Provider error"),
             Self::TokenLimit => write!(f, "Response truncated due to token limit."),
-            Self::ToolLoopExhausted { rounds } => write!(
-                f,
-                "Safety limit reached ({} tool rounds) — stopping to prevent infinite loop.",
-                rounds
-            ),
             Self::ContextCompaction => write!(f, "Context compaction failed"),
             Self::Cancelled => write!(f, "Run cancelled by user."),
             Self::Vault => write!(f, "Vault error"),
@@ -163,7 +153,6 @@ impl GatewayError {
             Self::Auth { .. } => ErrorKind::Auth,
             Self::Provider => ErrorKind::Provider,
             Self::TokenLimit => ErrorKind::TokenLimit,
-            Self::ToolLoopExhausted { .. } => ErrorKind::ToolLoopExhausted,
             Self::ContextCompaction => ErrorKind::ContextCompaction,
             Self::Cancelled => ErrorKind::Cancelled,
             Self::Vault => ErrorKind::Vault,
@@ -364,19 +353,6 @@ pub async fn handle(
         // ── Token limit ─────────────────────────────────────────────
         GatewayError::TokenLimit => {
             protocol::server::send_info(writer, "Response truncated due to token limit.").await?;
-            providers::send_response_done(writer).await?;
-            Ok(ControlFlow::Break(()))
-        }
-
-        // ── Tool loop exhausted ─────────────────────────────────────
-        GatewayError::ToolLoopExhausted { rounds } => {
-            protocol::server::send_error(
-                writer,
-                &format!(
-                    "Safety limit reached ({rounds} tool rounds) — stopping to prevent infinite loop.",
-                ),
-            )
-            .await?;
             providers::send_response_done(writer).await?;
             Ok(ControlFlow::Break(()))
         }
@@ -683,7 +659,6 @@ mod tests {
         assert_eq!(ErrorKind::Auth.as_str(), "auth");
         assert_eq!(ErrorKind::Provider.as_str(), "provider");
         assert_eq!(ErrorKind::TokenLimit.as_str(), "token_limit");
-        assert_eq!(ErrorKind::ToolLoopExhausted.as_str(), "tool_loop_exhausted");
         assert_eq!(ErrorKind::ContextCompaction.as_str(), "context_compaction");
         assert_eq!(ErrorKind::Cancelled.as_str(), "cancelled");
         assert_eq!(ErrorKind::Vault.as_str(), "vault");
@@ -702,9 +677,6 @@ mod tests {
 
         let token_limit = GatewayError::TokenLimit;
         assert!(token_limit.to_string().contains("truncated"));
-
-        let tool_loop = GatewayError::ToolLoopExhausted { rounds: 500 };
-        assert!(tool_loop.to_string().contains("500"));
 
         let cancelled = GatewayError::Cancelled;
         assert!(cancelled.to_string().contains("cancelled"));
