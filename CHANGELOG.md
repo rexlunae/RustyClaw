@@ -230,6 +230,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A gateway that could not bind its SSH port reported itself as listening
+  and then accepted nothing for the rest of its life.** The bind happened
+  inside a detached task, *after* `SshServer::listen` had already logged
+  "SSH server listening" and returned `Ok(())` — and `main` had printed
+  "Gateway listening on SSH …" before that, from its own second resolution
+  of the address. So a port already in use (a second gateway, or a stale one
+  the PID file had lost track of) produced a process that announced itself
+  as listening three times over, wrote a PID file, reported `running` from
+  `gateway status`, and refused every connection. The only trace was one
+  `ERROR` line from the detached task, logged beneath the three cheerful
+  ones. The socket is now bound before `listen` returns, so the failure is
+  the startup error it always was; the address announced is the one actually
+  bound (including the port the kernel picks for `:0`); and if the accept
+  loop later stops — russh returns from it on the first accept error —
+  `accept` reports that instead of parking forever on a queue nothing will
+  feed, so the gateway exits rather than lingering unreachable. The accept
+  loop used to log-and-continue on that error, spinning at full CPU.
+
+- **The gateway never asked for the vault passphrase on an encrypted setup
+  whose config flag had gone false.** The decision to prompt read only
+  `config.secrets_password_protected`, which records what onboarding chose
+  rather than what is on disk. Whenever the config was replaced by defaults
+  — a hand-edited file, or `Config::load` quarantining a torn one — the flag
+  went false while `credentials/secrets.json` stayed encrypted, and the
+  gateway started with no prompt, no console line and no log event, every
+  secret in it unreachable. The rule now lives once, as
+  `SecretsManager::requires_password`: a vault file with no key file beside
+  it can only be opened with a password. The gateway, `rustyclaw gateway
+  start`/`restart`, and onboarding all ask it (still OR-ed with the config
+  flag, which alone means "password" for a vault not yet written). A prompt
+  that cannot be read, or is answered empty, now starts the vault *locked*
+  for a client to unlock rather than opening it with an empty password —
+  `.unwrap_or_default()` used to make those indistinguishable.
+
 - **The gateway installed no tracing subscriber, so every log line it
   emitted was discarded.** `tracing` is a no-op facade until something is
   listening, and nothing ever was: the daemon's `error!`, `warn!`, `info!`

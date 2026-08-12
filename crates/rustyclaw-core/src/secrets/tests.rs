@@ -1082,3 +1082,46 @@ fn change_password_leaves_a_recoverable_backup() {
     // No staging leftovers.
     assert!(!dir.join("secrets.json.rekey").exists());
 }
+
+// ── `requires_password` ─────────────────────────────────────────────────
+//
+// The gateway asks this before deciding whether to prompt on startup, so a
+// wrong answer here is a gateway that never asks for the passphrase to a
+// vault it then cannot open.
+
+#[test]
+fn a_vault_with_no_key_file_requires_a_password() {
+    let dir = temp_dir();
+    std::fs::write(dir.join("secrets.json"), "{}").unwrap();
+    assert!(SecretsManager::requires_password(&dir));
+}
+
+#[test]
+fn a_vault_with_a_key_file_does_not_require_a_password() {
+    let dir = temp_dir();
+    std::fs::write(dir.join("secrets.json"), "{}").unwrap();
+    std::fs::write(dir.join("secrets.key"), "key").unwrap();
+    assert!(!SecretsManager::requires_password(&dir));
+}
+
+/// No vault yet is not "no password": nothing has chosen a key source, so
+/// the caller's config decides. Answering `true` here would prompt every
+/// first run before onboarding had created anything.
+#[test]
+fn no_vault_on_disk_does_not_require_a_password() {
+    let dir = temp_dir();
+    assert!(!SecretsManager::requires_password(&dir));
+}
+
+/// The rule `is_locked` applies to a live manager and the one
+/// `requires_password` applies to a directory are the same rule, and must
+/// not drift: a password vault opened with no password is locked.
+#[test]
+fn requires_password_agrees_with_is_locked() {
+    let dir = temp_dir();
+    std::fs::write(dir.join("secrets.json"), "{}").unwrap();
+
+    assert!(SecretsManager::requires_password(&dir));
+    assert!(SecretsManager::new(&dir).is_locked());
+    assert!(!SecretsManager::with_password(&dir, "pw".to_string()).is_locked());
+}

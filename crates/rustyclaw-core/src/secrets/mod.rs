@@ -107,6 +107,27 @@ impl SecretsManager {
         }
     }
 
+    /// Whether the vault in `credentials_dir` can only be opened with a
+    /// user-supplied password.
+    ///
+    /// A vault is encrypted by exactly one of two key sources — a generated
+    /// key file or a password — so `secrets.json` present with no
+    /// `secrets.key` beside it means a password is the only way in. The
+    /// question is answered from the files themselves rather than from
+    /// `Config::secrets_password_protected`, which merely records what
+    /// onboarding chose: that flag is lost whenever the config is replaced
+    /// by defaults (a hand-edited file, or the recovery path in
+    /// `Config::load` quarantining a torn one), and a caller trusting it
+    /// then opens a password vault with no password and no prompt.
+    ///
+    /// Callers that also have a config should treat the two as an `||`:
+    /// the flag alone still means "password" for a vault not yet written to
+    /// disk.
+    pub fn requires_password(credentials_dir: impl AsRef<std::path::Path>) -> bool {
+        let dir = credentials_dir.as_ref();
+        dir.join("secrets.json").exists() && !dir.join("secrets.key").exists()
+    }
+
     /// Check whether the vault is in a locked state (password-protected
     /// vault with no password provided yet).
     ///

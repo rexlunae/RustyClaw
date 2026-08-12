@@ -5,13 +5,24 @@ use anyhow::{Context, Result};
 use rustyclaw_core::config::Config;
 use rustyclaw_core::secrets::SecretsManager;
 
+/// Whether opening this installation's vault needs a password.
+///
+/// The config flag records what onboarding chose; the vault on disk is the
+/// authority, and the two disagree whenever the config has been replaced by
+/// defaults (a hand-edited file, or `Config::load` quarantining a torn one).
+/// Asking the flag alone left an encrypted vault with no prompt anywhere —
+/// not here, and not in the gateway, which applies the same rule.
+fn needs_vault_password(config: &Config) -> bool {
+    config.secrets_password_protected || SecretsManager::requires_password(config.credentials_dir())
+}
+
 /// Extract the vault password for the gateway daemon.
 ///
 /// If the vault is password-protected, prompt the user for it.  The
 /// password will be passed to the daemon via an environment variable
 /// so it can open the secrets vault on startup.
 pub(crate) fn extract_vault_password(config: &Config) -> Option<String> {
-    if !config.secrets_password_protected {
+    if !needs_vault_password(config) {
         return None;
     }
     match prompt_password(&format!(
@@ -29,7 +40,7 @@ pub(crate) fn extract_vault_password(config: &Config) -> Option<String> {
 /// gateway at WebSocket connect time.  The CLI `open_secrets` is only
 /// used during onboarding and ad-hoc CLI vault access.
 pub(crate) fn open_secrets(config: &Config) -> Result<SecretsManager> {
-    let mut manager = if config.secrets_password_protected {
+    let mut manager = if needs_vault_password(config) {
         let pw = prompt_password("Enter secrets vault password: ")?;
         SecretsManager::with_password(config.credentials_dir(), pw)
     } else {

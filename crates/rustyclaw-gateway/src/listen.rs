@@ -13,12 +13,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
     CopilotSession, GatewayOptions, ModelContext, Transport, TransportAcceptor,
 };
+use rustyclaw_core::theme as t;
 use rustyclaw_core::tools;
 
 use crate::messenger_handler::SharedMessengerManager;
@@ -203,7 +204,7 @@ pub async fn run_gateway(
             tokio::spawn(async move {
                 let mgr = mcp_mgr.lock().await;
                 if let Err(e) = mgr.connect_all().await {
-                    warn!(error = %e, "Failed to connect MCP servers");
+                    tracing::warn!(error = %e, "Failed to connect MCP servers");
                 } else {
                     info!(count = server_count, "MCP servers connected");
                 }
@@ -485,12 +486,33 @@ pub async fn run_gateway(
     };
 
     let mut ssh_server = SshServer::new(ssh_cfg).await?;
+    // Binds before returning, so a failure here is reported instead of
+    // becoming a gateway that runs and answers nothing — see `SshServer::listen`.
     ssh_server.listen(bind_addr).await?;
+    let bound_addr = ssh_server.local_addr().unwrap_or(bind_addr);
 
-    info!(address = %bind_addr, "Gateway listening (SSH-only)");
+    info!(address = %bound_addr, "Gateway listening (SSH-only)");
+    // The one line an operator watching a foreground run needs, and it is
+    // printed only now that a socket is actually bound. It used to be
+    // printed from `main` before any of this ran, against the address the
+    // config asked for rather than the one in use.
+    if !options.ssh_stdio {
+        println!(
+            "{}",
+            t::icon_ok(&format!(
+                "Gateway listening on SSH {}",
+                t::info(&bound_addr.to_string())
+            ))
+        );
+    }
     if messenger_mgr.is_some() {
         info!("Messenger polling enabled");
     }
+
+    // Set when the acceptor stops for a reason that is not our own shutdown,
+    // so it can be returned after the shutdown sequence below rather than
+    // exiting `Ok` from a gateway that failed.
+    let mut acceptor_failure: Option<anyhow::Error> = None;
 
     loop {
         tokio::select! {
@@ -535,7 +557,19 @@ pub async fn run_gateway(
                             }
                         });
                     }
-                    Err(e) => warn!(error = %e, "SSH accept error"),
+                    // Not a per-connection hiccup: the acceptor only fails
+                    // once the server behind it is gone, and every later
+                    // call fails the same way. Logging and looping turned
+                    // that into a spin at full CPU on a gateway nobody could
+                    // reach; stop instead, and say why.
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "SSH acceptor stopped; the gateway can no longer accept connections"
+                        );
+                        acceptor_failure = Some(e);
+                        break;
+                    }
                 }
             }
         }
@@ -548,7 +582,10 @@ pub async fn run_gateway(
         mgr.stop_all().await;
     }
 
-    Ok(())
+    match acceptor_failure {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Handle a connection using the Transport trait.

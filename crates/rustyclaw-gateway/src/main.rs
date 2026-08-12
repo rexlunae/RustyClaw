@@ -211,27 +211,12 @@ async fn main() -> Result<()> {
     let tls_key = args.tls_key.or(config.tls_key.clone());
     let scheme = if tls_cert.is_some() { "wss" } else { "ws" };
 
-    // Determine the actual SSH listen address (CLI arg > config > default)
-    let ssh_addr = args
-        .ssh_listen
-        .clone()
-        .or_else(|| {
-            config.ssh.as_ref().and_then(|s| {
-                if s.enabled && s.mode == rustyclaw_core::config::SshMode::Standalone {
-                    Some(s.bind.clone())
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_else(|| "0.0.0.0:2222".to_string());
+    // The SSH listen address is resolved once, in `run_gateway`, and
+    // announced there once the socket is bound. This function used to
+    // resolve it a second time and print "Gateway listening on SSH …" before
+    // anything was bound — a claim that was false on every failed bind, and
+    // one the second resolution could disagree with.
 
-    if !protocol_stdio {
-        println!(
-            "{}",
-            t::icon_ok(&format!("Gateway listening on SSH {}", t::info(&ssh_addr)))
-        );
-    }
     // Keep the ws:// listen var for run_gateway options but don't surface it.
     let _ = scheme;
 
@@ -258,18 +243,54 @@ async fn main() -> Result<()> {
             }
         }
 
-        if config.secrets_password_protected {
+        // The config flag records what onboarding chose; the vault on disk is
+        // the authority. Gating on the flag alone meant an encrypted vault
+        // whose flag had gone false — a hand-edited config, or one the
+        // recovery path in `Config::load` replaced with defaults after
+        // quarantining a torn file — started with no prompt, no console line
+        // and no log event, leaving every secret in it unreachable and the
+        // gateway looking perfectly healthy. `requires_password` reads the
+        // key material itself; the flag still counts on its own, for a vault
+        // that onboarding configured but nothing has written yet.
+        let needs_password =
+            config.secrets_password_protected || SecretsManager::requires_password(&creds_dir);
+
+        if needs_password {
             if let Some(pw) = env_password {
                 if !protocol_stdio {
                     println!("  {} Vault password provided by launcher", t::icon_ok(""));
                 }
                 SecretsManager::with_password(&creds_dir, pw)
             } else if std::io::stdin().is_terminal() {
-                // Interactive foreground mode — prompt for password.
-                let password =
-                    rpassword::prompt_password(format!("{} Vault password: ", t::info("🔑")))
-                        .unwrap_or_default();
-                SecretsManager::with_password(&creds_dir, password)
+                // Interactive foreground mode — prompt for password. A read
+                // that fails, or an empty answer, starts locked rather than
+                // opening the vault with an empty password: the two are not
+                // the same, and `.unwrap_or_default()` used to turn the
+                // first into the second silently, so a terminal that could
+                // not be read looked like a successful unlock until the
+                // first secret came back missing.
+                match rpassword::prompt_password(format!("{} Vault password: ", t::info("🔑"))) {
+                    Ok(password) if !password.is_empty() => {
+                        SecretsManager::with_password(&creds_dir, password)
+                    }
+                    Ok(_) => {
+                        if !protocol_stdio {
+                            println!(
+                                "  {} No password entered — vault locked (clients can unlock it)",
+                                t::muted("🔒")
+                            );
+                        }
+                        SecretsManager::locked(&creds_dir)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "Could not read the vault password from the terminal; \
+                             starting with the vault locked"
+                        );
+                        SecretsManager::locked(&creds_dir)
+                    }
+                }
             } else {
                 // Daemon mode with no password — start locked.
                 if !protocol_stdio {
