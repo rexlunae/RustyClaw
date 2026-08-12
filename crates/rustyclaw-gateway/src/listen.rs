@@ -174,8 +174,16 @@ pub async fn run_gateway(
             };
             let svc_mgr = rustyclaw_core::services::create_service_manager(svc_config);
             info!(count = svc_count, "Managed services configured");
-            // Auto-start services
-            {
+            // Auto-start services — standalone only, for the same reason the
+            // trigger manager and cron scheduler below are: under
+            // `--ssh-stdio` one gateway runs per SSH connection, so
+            // auto-starting here would start a fresh copy of every service on
+            // every connect — several local inference servers contending for
+            // one port — and leave them behind on disconnect. The manager
+            // itself is still registered, so the services panel can list and
+            // control them from a stdio session; only the automatic
+            // duplication is skipped.
+            if !options.ssh_stdio {
                 let mut mgr = svc_mgr.write().await;
                 mgr.auto_start_all().await;
             }
@@ -277,7 +285,7 @@ pub async fn run_gateway(
         let transport = Box::new(StdioTransport::new(username));
 
         info!("Gateway running in SSH stdio mode");
-        return handle_transport_connection(
+        let served = handle_transport_connection(
             transport,
             shared_config,
             shared_model_ctx,
@@ -291,6 +299,15 @@ pub async fn run_gateway(
             cancel,
         )
         .await;
+        // The other early return from this function, and it needs the same
+        // shutdown the listener path gets. Nothing is auto-started in this
+        // mode, but the services panel can start something during the
+        // session, and the `ServiceManager` that owns it lives in a `'static`
+        // runtime context that is never dropped — so without this, a service
+        // started from a stdio session outlives the connection with nobody
+        // managing it.
+        stop_managed_services().await;
+        return served;
     }
 
     // ── Initialize and start messenger loop ─────────────────────────
@@ -583,14 +600,24 @@ pub async fn run_gateway(
     }
     .await;
 
-    // Graceful shutdown: stop all managed services.
+    stop_managed_services().await;
+
+    serve_result
+}
+
+/// Stop every managed service this process started.
+///
+/// `run_gateway` has exactly two ways out — the stdio branch and the
+/// listener block — and both must come through here. The `ServiceManager`
+/// lives in a `'static` runtime context that is never dropped, so
+/// `kill_on_drop` cannot collect its children: a return that skips this
+/// leaves them running with nobody managing them.
+async fn stop_managed_services() {
     if let Some(svc_mgr) = rustyclaw_core::runtime_ctx::get_service_manager() {
         info!("Stopping managed services…");
         let mut mgr = svc_mgr.write().await;
         mgr.stop_all().await;
     }
-
-    serve_result
 }
 
 /// Handle a connection using the Transport trait.
