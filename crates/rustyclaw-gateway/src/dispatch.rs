@@ -611,6 +611,12 @@ pub(crate) async fn dispatch_text_message(
 
     // One pacer for this turn's loop; see `tool_limits::RoundPacer`.
     let mut round_pacer = rustyclaw_core::tool_limits::RoundPacer::from_config();
+    // Whether the current pacing episode has been announced. Lives outside
+    // the round loop deliberately: a saturated window makes *every* round
+    // wait, and a flag reset per round would re-announce roughly once a
+    // second for as long as the turn runs, burying the model's actual
+    // output under the very notice meant to explain the quiet.
+    let mut pacing_announced = false;
 
     loop {
         // ── Check for cancellation ──────────────────────────────────
@@ -627,10 +633,11 @@ pub(crate) async fn dispatch_text_message(
         // never a stop. Waiting in short slices keeps cancellation
         // responsive, since a paced loop is precisely the one a user is
         // most likely to be watching with a finger on Esc.
-        let mut paced = false;
+        let mut waited = false;
         while let Some(wait) = round_pacer.admit(std::time::Instant::now()) {
-            if !paced {
-                paced = true;
+            waited = true;
+            if !pacing_announced {
+                pacing_announced = true;
                 protocol::server::send_info(
                     writer,
                     &format!(
@@ -649,6 +656,12 @@ pub(crate) async fn dispatch_text_message(
                 providers::send_response_done(writer).await?;
                 return Ok(());
             }
+        }
+        // A round admitted without waiting ends the episode: the loop is
+        // back under the rate, so if it saturates again later — minutes or
+        // hours on — that is a fresh episode and gets its own notice.
+        if !waited {
+            pacing_announced = false;
         }
 
         // ── Take any direction added since the last round ───────────
