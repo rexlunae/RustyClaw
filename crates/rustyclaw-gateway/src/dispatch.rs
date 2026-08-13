@@ -670,9 +670,7 @@ pub(crate) async fn dispatch_text_message(
         // boundary does not re-announce on every dip.
         if waited {
             last_paced_at = Some(std::time::Instant::now());
-        } else if last_paced_at
-            .is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(60))
-        {
+        } else if last_paced_at.is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(60)) {
             pacing_announced = false;
             last_paced_at = None;
         }
