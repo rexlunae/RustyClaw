@@ -761,6 +761,7 @@ pub fn run_onboard_wizard(
         reasoning_effort: None,
         max_tokens: None,
         temperature: None,
+        top_p: None,
         token_budget: None,
     });
     config.messengers = configured_messengers;

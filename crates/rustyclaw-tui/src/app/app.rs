@@ -800,6 +800,7 @@ impl App {
                                     reasoning_effort: None,
                                     max_tokens: None,
                                     temperature: None,
+                                    top_p: None,
                                     token_budget: None,
                                 });
                                 crate::app::events::persist_config(config, &gw_tx);
@@ -883,6 +884,7 @@ impl App {
                                         reasoning_effort: None,
                                         max_tokens: None,
                                         temperature: None,
+                                        top_p: None,
                                         token_budget: None,
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
@@ -971,6 +973,7 @@ impl App {
                                         reasoning_effort: None,
                                         max_tokens: None,
                                         temperature: None,
+                                        top_p: None,
                                         token_budget: None,
                                     });
                                     crate::app::events::persist_config(config, &gw_tx);
@@ -1159,6 +1162,7 @@ impl App {
                         reasoning_effort: None,
                         max_tokens: None,
                         temperature: None,
+                        top_p: None,
                         token_budget: None,
                     });
                     crate::app::events::persist_config(config, &gw_tx);
@@ -1220,6 +1224,7 @@ impl App {
                         reasoning_effort: None,
                         max_tokens: None,
                         temperature: None,
+                        top_p: None,
                         token_budget: None,
                     });
                     if let Err(e) = config.save(None) {

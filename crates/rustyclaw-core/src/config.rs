@@ -44,6 +44,10 @@ pub struct ModelProvider {
     #[serde(default)]
     pub temperature: Option<f64>,
 
+    /// Nucleus-sampling cutoff. Unset lets the provider use its default.
+    #[serde(default)]
+    pub top_p: Option<f64>,
+
     /// Total token budget (input + output) for this model across the
     /// gateway's lifetime. Displayed in the analytics panel as usage vs.
     /// budget; purely informational, does not gate requests.
@@ -1229,6 +1233,7 @@ mod tests {
             reasoning_effort: None,
             max_tokens: None,
             temperature: None,
+            top_p: None,
             token_budget: None,
         });
         config.save(Some(path.clone())).unwrap();

@@ -187,6 +187,7 @@ pub(super) async fn handle_command_action(
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
                 token_budget: None,
             });
 
@@ -226,6 +227,7 @@ pub(super) async fn handle_command_action(
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
                 token_budget: None,
             });
 

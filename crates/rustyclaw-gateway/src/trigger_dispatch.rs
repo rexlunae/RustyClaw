@@ -170,6 +170,7 @@ async fn run_inner(
         reasoning_effort: model_ctx.reasoning_effort.clone(),
         max_tokens: model_ctx.max_tokens,
         temperature: model_ctx.temperature,
+        top_p: model_ctx.top_p,
     };
 
     let session_key = format!("trigger:{}", fire.trigger_id);

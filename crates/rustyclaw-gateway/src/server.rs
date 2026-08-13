@@ -5014,6 +5014,7 @@ mod tests {
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
             },
         ))))
     }
@@ -5360,6 +5361,7 @@ mod tests {
             reasoning_effort: None,
             max_tokens: None,
             temperature: None,
+            top_p: None,
         }));
 
         // Back to `stale`, then away from it again — the switch that should
@@ -5964,6 +5966,7 @@ mod tests {
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
             },
         ))));
 
@@ -6081,6 +6084,7 @@ mod tests {
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
             },
         ))));
 

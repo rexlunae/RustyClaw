@@ -294,6 +294,7 @@ async fn provider_context(
         reasoning_effort: configured.as_ref().and_then(|m| m.reasoning_effort.clone()),
         max_tokens: configured.as_ref().and_then(|m| m.max_tokens),
         temperature: configured.as_ref().and_then(|m| m.temperature),
+        top_p: configured.as_ref().and_then(|m| m.top_p),
     })
 }
 
@@ -466,6 +467,7 @@ async fn run_agent_turn(
             reasoning_effort: model_ctx.reasoning_effort.clone(),
             max_tokens: model_ctx.max_tokens,
             temperature: model_ctx.temperature,
+            top_p: model_ctx.top_p,
         };
 
         let http = rustyclaw_core::providers::http_client();

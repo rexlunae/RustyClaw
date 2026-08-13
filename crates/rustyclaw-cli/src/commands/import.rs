@@ -148,6 +148,7 @@ pub(crate) fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                             reasoning_effort: None,
                             max_tokens: None,
                             temperature: None,
+                            top_p: None,
                             token_budget: None,
                         });
                         println!("  {} Model: {}", "✓".green(), model_str.cyan());

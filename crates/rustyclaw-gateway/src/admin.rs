@@ -137,7 +137,7 @@ pub(crate) async fn handle_model_switch(
         }
     };
 
-    let new_ctx = Arc::new(ModelContext {
+    let mut new_ctx = ModelContext {
         provider: provider.clone(),
         model: model.clone(),
         base_url,
@@ -145,7 +145,16 @@ pub(crate) async fn handle_model_switch(
         reasoning_effort: cfg_model.as_ref().and_then(|m| m.reasoning_effort.clone()),
         max_tokens: cfg_model.as_ref().and_then(|m| m.max_tokens),
         temperature: cfg_model.as_ref().and_then(|m| m.temperature),
-    });
+        top_p: cfg_model.as_ref().and_then(|m| m.top_p),
+    };
+    // A runtime model switch honours the curated defaults exactly like a
+    // boot-time resolve — switching to a Qwen model mid-session should not
+    // silently lose the sampling settings it needs.
+    {
+        let cfg = shared_config.read().await;
+        new_ctx.apply_curated_defaults(&cfg.settings_dir);
+    }
+    let new_ctx = Arc::new(new_ctx);
 
     // Reinitialize Copilot session if needed
     let new_session = init_copilot_session(&provider, api_key.as_deref(), vault).await;
@@ -170,6 +179,7 @@ pub(crate) async fn handle_model_switch(
             reasoning_effort: None,
             max_tokens: None,
             temperature: None,
+            top_p: None,
             token_budget: None,
         });
         crate::helpers::persist_config(&cfg);

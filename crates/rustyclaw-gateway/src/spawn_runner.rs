@@ -350,6 +350,7 @@ async fn run_session(
         reasoning_effort: ctx.model_ctx.reasoning_effort.clone(),
         max_tokens: ctx.model_ctx.max_tokens,
         temperature: ctx.model_ctx.temperature,
+        top_p: ctx.model_ctx.top_p,
     };
 
     let mut last_text = String::new();
@@ -528,6 +529,7 @@ mod tests {
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
             }),
             vault: Arc::new(tokio::sync::Mutex::new(
                 rustyclaw_core::secrets::SecretsManager::new(tmp),

@@ -288,6 +288,7 @@ pub(crate) async fn handle_thread_switch(
                 reasoning_effort: ctx.reasoning_effort.clone(),
                 max_tokens: ctx.max_tokens,
                 temperature: ctx.temperature,
+                top_p: ctx.top_p,
             };
 
             // Summarising is housekeeping on the thread being *left*, and

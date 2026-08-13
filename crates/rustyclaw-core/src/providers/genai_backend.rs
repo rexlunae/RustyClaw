@@ -159,6 +159,9 @@ async fn genai_chat(
     if let Some(temp) = req.temperature {
         options = options.with_temperature(temp);
     }
+    if let Some(top_p) = req.top_p {
+        options = options.with_top_p(top_p);
+    }
 
     match writer {
         Some(w) => {
@@ -862,6 +865,7 @@ mod tests {
             reasoning_effort: None,
             max_tokens: None,
             temperature: None,
+            top_p: None,
         };
         // Avoid pulling the full tool registry into the assertion.
         unsafe { std::env::set_var("RUSTYCLAW_SKIP_TOOLS", "1") };
