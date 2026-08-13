@@ -23,6 +23,7 @@ pub mod exo_ai;
 mod file;
 pub mod freenet;
 mod gateway_tools;
+pub mod guard_override;
 pub(crate) mod helpers;
 pub mod http;
 #[cfg(feature = "image-gen")]
@@ -71,8 +72,9 @@ use swarm_tools::{
 // Re-export helpers for external use
 pub use helpers::{
     SharedVault, VAULT_ACCESS_DENIED, command_references_credentials, expand_tilde, init_sandbox,
-    is_protected_path, process_manager, run_sandboxed_command, sandbox_wrap_interpreter,
-    sanitize_tool_output, set_credentials_dir, set_vault, validate_command_safe, vault,
+    is_guard_block, is_protected_path, process_manager, run_sandboxed_command,
+    sandbox_wrap_interpreter, sanitize_tool_output, set_credentials_dir, set_vault,
+    validate_command_safe, vault,
 };
 
 // File operations
@@ -833,8 +835,16 @@ pub async fn execute_tool_streaming(
     // blocking thread, and without it every sync tool would run unidentified
     // and see every other caller's resources as unowned.
     let caller = crate::tool_caller::current();
+    // The guard-override grant rides the same hand-off as the caller
+    // identity: without it, a user-approved retry of a synchronous tool
+    // would hit the guards again on the blocking thread and fail twice.
+    let guard_granted = crate::tools::guard_override::is_granted();
     let result = tokio::task::spawn_blocking(move || {
-        crate::tool_caller::with_caller_blocking(caller, || execute_fn(&args, &workspace_dir))
+        crate::tool_caller::with_caller_blocking(caller, || {
+            crate::tools::guard_override::with_granted_blocking(guard_granted, || {
+                execute_fn(&args, &workspace_dir)
+            })
+        })
     })
     .await
     .map_err(|e| ToolError::context("Task join error", e))?;

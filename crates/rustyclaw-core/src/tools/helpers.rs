@@ -130,6 +130,11 @@ pub fn set_credentials_dir(path: PathBuf) {
 
 /// Returns `true` when a command string references the credentials directory.
 pub fn command_references_credentials(command: &str) -> bool {
+    // A user-granted override (see `tools::guard_override`) stands down the
+    // heuristic for the one retried call.
+    if crate::tools::guard_override::is_granted() {
+        return false;
+    }
     if let Some(cred_dir) = CREDENTIALS_DIR.get() {
         let cred_str = cred_dir.to_string_lossy();
         command.contains(cred_str.as_ref())
@@ -142,6 +147,11 @@ pub fn command_references_credentials(command: &str) -> bool {
 ///
 /// Uses double-canonicalize to detect symlink races (TOCTOU).
 pub fn is_protected_path(path: &Path) -> bool {
+    // A user-granted override (see `tools::guard_override`) stands down the
+    // guard for the one retried call the user has seen and approved.
+    if crate::tools::guard_override::is_granted() {
+        return false;
+    }
     if let Some(cred_dir) = CREDENTIALS_DIR.get() {
         let canon_cred = match cred_dir.canonicalize() {
             Ok(p) => p,
@@ -484,12 +494,27 @@ pub fn validate_command_safe(command: &str) -> Result<(), SandboxError> {
         return Err(SandboxError::CommandTooLong);
     }
 
-    // Check for credential exfiltration patterns.
-    if command_has_exfiltration_patterns(command) {
+    // Check for credential exfiltration patterns. A user-granted override
+    // (see `tools::guard_override`) stands this heuristic down for the one
+    // retried call; the null-byte and length checks above are correctness,
+    // not policy, and hold regardless.
+    if !crate::tools::guard_override::is_granted() && command_has_exfiltration_patterns(command) {
         return Err(SandboxError::CommandExfiltration);
     }
 
     Ok(())
+}
+
+/// Whether a tool-result message is one of the exfiltration-guard blocks
+/// that a user may override (see `tools::guard_override` and issue #418).
+///
+/// Matched against the guards' own message constants, so it cannot drift
+/// from what the guards actually say. Deliberately narrow: sandbox path
+/// denials and vault access policy refusals are different mechanisms with
+/// different override stories, and are not included.
+pub fn is_guard_block(message: &str) -> bool {
+    message.starts_with(VAULT_ACCESS_DENIED)
+        || message.contains(&SandboxError::CommandExfiltration.to_string())
 }
 
 /// Redact sensitive HTTP header values from web fetch results.

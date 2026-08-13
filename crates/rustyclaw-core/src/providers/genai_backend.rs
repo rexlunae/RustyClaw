@@ -159,6 +159,9 @@ async fn genai_chat(
     if let Some(temp) = req.temperature {
         options = options.with_temperature(temp);
     }
+    if let Some(top_p) = req.top_p {
+        options = options.with_top_p(top_p);
+    }
 
     match writer {
         Some(w) => {
@@ -193,6 +196,10 @@ async fn consume_stream(
     let mut result = ModelResponse::default();
     let mut stream_started = false;
     let mut thinking_started = false;
+    // Removes tool-call markup some models leak into their text channel.
+    // Stateful because chunk boundaries split tags arbitrarily; text it
+    // holds back is flushed at `End`.
+    let mut sanitizer = crate::tool_healing::StreamSanitizer::new();
 
     while let Some(event) = stream.next().await {
         match event? {
@@ -214,8 +221,11 @@ async fn consume_stream(
                     server::send_thinking_end(writer).await.ignore();
                     thinking_started = false;
                 }
-                result.text.push_str(&chunk.content);
-                server::send_chunk(writer, &chunk.content).await?;
+                let clean = sanitizer.feed(&chunk.content);
+                if !clean.is_empty() {
+                    result.text.push_str(&clean);
+                    server::send_chunk(writer, &clean).await?;
+                }
             }
             ChatStreamEvent::ReasoningChunk(chunk) => {
                 if !thinking_started {
@@ -234,11 +244,20 @@ async fn consume_stream(
                 if thinking_started {
                     server::send_thinking_end(writer).await.ignore();
                 }
+                // Text the sanitizer held back as a possible tag start that
+                // never completed is ordinary text — deliver it.
+                let tail = sanitizer.finish();
+                if !tail.is_empty() {
+                    result.text.push_str(&tail);
+                    server::send_chunk(writer, &tail).await?;
+                }
                 if let Some(content) = end.captured_content {
                     for part in content.into_parts() {
                         match part {
                             ContentPart::ToolCall(tc) => result.tool_calls.push(tc.into()),
-                            ContentPart::Text(t) if result.text.is_empty() => result.text = t,
+                            ContentPart::Text(t) if result.text.is_empty() => {
+                                result.text = crate::tool_healing::strip_leaked_tool_markup(&t)
+                            }
                             _ => {}
                         }
                     }
@@ -251,6 +270,8 @@ async fn consume_stream(
         }
     }
 
+    result.tool_calls =
+        crate::tool_healing::dedupe_tool_calls(std::mem::take(&mut result.tool_calls));
     result.finish_reason = Some(finish_reason_for(&result).to_string());
     Ok(result)
 }
@@ -277,6 +298,9 @@ impl From<genai::chat::ChatResponse> for ModelResponse {
             }
         }
 
+        result.text = crate::tool_healing::strip_leaked_tool_markup(&result.text);
+        result.tool_calls =
+            crate::tool_healing::dedupe_tool_calls(std::mem::take(&mut result.tool_calls));
         result.finish_reason = Some(finish_reason_for(&result).to_string());
         result
     }
@@ -567,10 +591,14 @@ fn tools_for_genai(allowed: Option<&[String]>) -> Vec<Tool> {
 /// Convert a genai [`ToolCall`] into RustyClaw's [`ParsedToolCall`].
 impl From<ToolCall> for ParsedToolCall {
     fn from(tc: ToolCall) -> Self {
+        let arguments = crate::tool_healing::coerce_arguments(
+            &tc.fn_name,
+            normalize_tool_arguments(tc.fn_arguments),
+        );
         Self {
             id: tc.call_id,
             name: tc.fn_name,
-            arguments: normalize_tool_arguments(tc.fn_arguments),
+            arguments,
         }
     }
 }
@@ -591,6 +619,18 @@ fn normalize_tool_arguments(value: serde_json::Value) -> serde_json::Value {
         serde_json::Value::String(s) => match serde_json::from_str::<serde_json::Value>(s) {
             Ok(v @ serde_json::Value::Object(_)) => v,
             _ => {
+                // Flattening to `{}` guarantees a "missing parameter" error
+                // downstream, so a repairable string — truncated, fenced,
+                // trailing-comma'd — is worth one repair attempt first.
+                if crate::tool_healing::enabled() {
+                    if let Some(repaired) = crate::tool_healing::repair_json(s) {
+                        tracing::info!(
+                            arguments_preview = %s.chars().take(100).collect::<String>(),
+                            "Healing: repaired malformed tool call arguments"
+                        );
+                        return repaired;
+                    }
+                }
                 warn!(
                     arguments_preview = %s.chars().take(100).collect::<String>(),
                     "Tool call arguments string did not parse to a JSON object, using empty object"
@@ -825,6 +865,7 @@ mod tests {
             reasoning_effort: None,
             max_tokens: None,
             temperature: None,
+            top_p: None,
         };
         // Avoid pulling the full tool registry into the assertion.
         unsafe { std::env::set_var("RUSTYCLAW_SKIP_TOOLS", "1") };

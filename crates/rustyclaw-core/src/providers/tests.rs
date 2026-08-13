@@ -624,6 +624,7 @@ fn model_provider_options_round_trip_through_config() {
         reasoning_effort: Some("high".to_string()),
         max_tokens: Some(8192),
         temperature: Some(0.7),
+        top_p: None,
         token_budget: Some(5_000_000),
     };
 
@@ -668,6 +669,7 @@ fn model_context_resolve_carries_options() {
             reasoning_effort: Some("low".to_string()),
             max_tokens: Some(4096),
             temperature: Some(0.2),
+            top_p: None,
             token_budget: None,
         }),
         ..Config::default()

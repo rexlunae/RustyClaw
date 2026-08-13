@@ -90,6 +90,7 @@ pub struct ProviderRequest {
     pub reasoning_effort: Option<String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
 }
 
 // ── Model context (resolved once at startup) ────────────────────────────────
@@ -110,6 +111,7 @@ pub struct ModelContext {
     pub reasoning_effort: Option<String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
 }
 
 impl ModelContext {
@@ -150,7 +152,7 @@ impl ModelContext {
             );
         }
 
-        Ok(Self {
+        let mut ctx = Self {
             provider,
             model,
             base_url,
@@ -158,7 +160,10 @@ impl ModelContext {
             reasoning_effort: mp.reasoning_effort.clone(),
             max_tokens: mp.max_tokens,
             temperature: mp.temperature,
-        })
+            top_p: mp.top_p,
+        };
+        ctx.apply_curated_defaults(&config.settings_dir);
+        Ok(ctx)
     }
 
     /// Build a model context from configuration and a pre-resolved API key.
@@ -190,7 +195,7 @@ impl ModelContext {
             );
         }
 
-        Ok(Self {
+        let mut ctx = Self {
             provider,
             model,
             base_url,
@@ -198,13 +203,47 @@ impl ModelContext {
             reasoning_effort: mp.reasoning_effort.clone(),
             max_tokens: mp.max_tokens,
             temperature: mp.temperature,
-        })
+            top_p: mp.top_p,
+        };
+        ctx.apply_curated_defaults(&config.settings_dir);
+        Ok(ctx)
+    }
+
+    /// Fill sampling settings the user left unset from the curated
+    /// per-model defaults table (#464).
+    ///
+    /// Field by field, explicit config always wins: setting only
+    /// `temperature` in `[model]` still lets a curated `top_p` land. The
+    /// table itself resolves user file over built-ins — see
+    /// [`crate::models::defaults`].
+    pub fn apply_curated_defaults(&mut self, settings_dir: &std::path::Path) {
+        if self.temperature.is_some() && self.top_p.is_some() && self.max_tokens.is_some() {
+            return;
+        }
+        let Some(hit) = crate::models::defaults::defaults_for(&self.model, Some(settings_dir))
+        else {
+            return;
+        };
+        tracing::info!(
+            model = %self.model,
+            pattern = %hit.pattern,
+            source = hit.source,
+            temperature = ?hit.defaults.temperature,
+            top_p = ?hit.defaults.top_p,
+            "Applying curated inference defaults for unset [model] fields"
+        );
+        self.temperature = self.temperature.or(hit.defaults.temperature);
+        self.top_p = self.top_p.or(hit.defaults.top_p);
+        self.max_tokens = self.max_tokens.or(hit.defaults.max_tokens);
     }
 
     /// Whether this context carries model options beyond the default
     /// (reasoning effort, max tokens, temperature).
     pub fn has_model_options(&self) -> bool {
-        self.reasoning_effort.is_some() || self.max_tokens.is_some() || self.temperature.is_some()
+        self.reasoning_effort.is_some()
+            || self.max_tokens.is_some()
+            || self.temperature.is_some()
+            || self.top_p.is_some()
     }
 
     /// One-shot text completion for internal classification and utility
@@ -235,6 +274,7 @@ impl ModelContext {
             reasoning_effort: None,
             max_tokens: Some(64),
             temperature: Some(0.0),
+            top_p: None,
         };
         let resp = providers::call_with_tools(http, &req, None).await?;
         Ok(resp.text)

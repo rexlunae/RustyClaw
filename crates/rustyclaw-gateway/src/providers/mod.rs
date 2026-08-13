@@ -156,6 +156,7 @@ pub fn resolve_request(
         reasoning_effort: ctx.and_then(|c| c.reasoning_effort.clone()),
         max_tokens: ctx.and_then(|c| c.max_tokens),
         temperature: ctx.and_then(|c| c.temperature),
+        top_p: ctx.and_then(|c| c.top_p),
     })
 }
 
@@ -517,6 +518,7 @@ pub async fn compact_conversation(
         reasoning_effort: resolved.reasoning_effort.clone(),
         max_tokens: resolved.max_tokens,
         temperature: resolved.temperature,
+        top_p: resolved.top_p,
     };
 
     let summary_result = tokio::time::timeout(

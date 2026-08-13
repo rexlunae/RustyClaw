@@ -44,6 +44,10 @@ pub struct ModelProvider {
     #[serde(default)]
     pub temperature: Option<f64>,
 
+    /// Nucleus-sampling cutoff. Unset lets the provider use its default.
+    #[serde(default)]
+    pub top_p: Option<f64>,
+
     /// Total token budget (input + output) for this model across the
     /// gateway's lifetime. Displayed in the analytics panel as usage vs.
     /// budget; purely informational, does not gate requests.
@@ -193,6 +197,14 @@ pub struct Config {
     /// Whether the agent is allowed to access secrets on behalf of the user.
     #[serde(default)]
     pub agent_access: bool,
+    /// Whether an exfiltration-guard block may be put to the user for a
+    /// one-time override (issue #418). When a guard blocks a tool call on an
+    /// interactive connection, the user is shown what was blocked and why
+    /// and may approve that one call; denial (or a headless caller, which
+    /// has nobody to ask) keeps the block. `false` makes every guard
+    /// absolute again.
+    #[serde(default = "default_true")]
+    pub guard_override_prompts: bool,
     /// User-chosen name for this agent instance (shown in TUI title,
     /// authenticator app labels, etc.).  Defaults to "RustyClaw".
     #[serde(default = "Config::default_agent_name")]
@@ -245,6 +257,10 @@ pub struct Config {
     /// Rate and concurrency budgets applied to tool use, per caller.
     #[serde(default)]
     pub tool_limits: crate::tool_limits::ToolLimitsConfig,
+    /// Self-healing of model tool calls (JSON repair, duplicate removal,
+    /// leaked-markup cleanup).
+    #[serde(default)]
+    pub tool_healing: crate::tool_healing::ToolHealingConfig,
     /// Path to TLS certificate file (PEM) for WSS gateway connections.
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,
@@ -488,6 +504,7 @@ impl Default for Config {
             secrets_password_protected: false,
             totp_enabled: false,
             agent_access: false,
+            guard_override_prompts: true,
             agent_name: Self::default_agent_name(),
             relevance_filter: RelevanceFilter::Always,
             relevance_model: None,
@@ -501,6 +518,7 @@ impl Default for Config {
             messenger_max_concurrent: None,
             tool_permissions: HashMap::new(),
             tool_limits: crate::tool_limits::ToolLimitsConfig::default(),
+            tool_healing: crate::tool_healing::ToolHealingConfig::default(),
             tls_cert: None,
             tls_key: None,
             ssh: None,
@@ -1224,6 +1242,7 @@ mod tests {
             reasoning_effort: None,
             max_tokens: None,
             temperature: None,
+            top_p: None,
             token_budget: None,
         });
         config.save(Some(path.clone())).unwrap();

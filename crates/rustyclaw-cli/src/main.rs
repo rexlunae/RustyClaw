@@ -85,6 +85,10 @@ enum Commands {
     #[command(subcommand)]
     Gateway(GatewayCommands),
 
+    /// Model information (curated inference defaults, …)
+    #[command(subcommand)]
+    Model(ModelCommands),
+
     /// List / manage skills
     #[command(subcommand)]
     Skills(SkillsCommands),
@@ -327,6 +331,15 @@ struct CommandArgs {
 // ── Ask (headless mode) ─────────────────────────────────────────────────────
 
 // ── Gateway subcommands ─────────────────────────────────────────────────────
+
+#[derive(Debug, Subcommand)]
+enum ModelCommands {
+    /// Show the curated inference defaults that apply to a model
+    Defaults {
+        /// Model id (defaults to the configured model)
+        model: Option<String>,
+    },
+}
 
 #[derive(Debug, Subcommand)]
 enum GatewayCommands {
@@ -700,6 +713,58 @@ async fn main() -> Result<()> {
         Commands::Status(args) => {
             commands::status::run(&config, &args);
         }
+
+        // ── Model info ──────────────────────────────────────────
+        Commands::Model(sub) => match sub {
+            ModelCommands::Defaults { model } => {
+                use rustyclaw_core::theme as t;
+                let model = model
+                    .or_else(|| config.model.as_ref().and_then(|m| m.model.clone()))
+                    .unwrap_or_default();
+                if model.is_empty() {
+                    println!(
+                        "No model given and none configured — usage: rustyclaw model defaults <model>"
+                    );
+                } else {
+                    match rustyclaw_core::models::defaults::defaults_for(
+                        &model,
+                        Some(&config.settings_dir),
+                    ) {
+                        Some(hit) => {
+                            println!("{}", t::label_value("Curated defaults for", &model));
+                            println!(
+                                "  matched pattern: {} ({})",
+                                t::info(&hit.pattern),
+                                hit.source
+                            );
+                            if let Some(v) = hit.defaults.temperature {
+                                println!("  temperature: {v}");
+                            }
+                            if let Some(v) = hit.defaults.top_p {
+                                println!("  top_p: {v}");
+                            }
+                            if let Some(v) = hit.defaults.max_tokens {
+                                println!("  max_tokens: {v}");
+                            }
+                            if let Some(note) = &hit.defaults.note {
+                                println!("  {}", t::muted(note));
+                            }
+                            println!(
+                                "  {}",
+                                t::muted(
+                                    "Applied only to [model] fields you have not set; \
+                                     override in config.toml or <settings>/model_defaults.toml."
+                                )
+                            );
+                        }
+                        None => println!(
+                            "No curated defaults for '{}' — the provider's own defaults apply.",
+                            model
+                        ),
+                    }
+                }
+            }
+        },
 
         // ── Gateway sub-commands ────────────────────────────────
         Commands::Gateway(sub) => match sub {

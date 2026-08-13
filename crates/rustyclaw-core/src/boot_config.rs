@@ -326,6 +326,7 @@ impl BootConfig {
                 reasoning_effort: existing.and_then(|m| m.reasoning_effort.clone()),
                 max_tokens: existing.and_then(|m| m.max_tokens),
                 temperature: existing.and_then(|m| m.temperature),
+                top_p: existing.and_then(|m| m.top_p),
                 token_budget: existing.and_then(|m| m.token_budget),
             });
         } else if let Some(model) = &self.model {
@@ -501,6 +502,7 @@ ssh_bind = "0.0.0.0:2222"
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
                 token_budget: None,
             }),
             workspace_dir: Some(PathBuf::from("/old")),
@@ -552,6 +554,7 @@ ssh_bind = "0.0.0.0:2222"
                 reasoning_effort: Some("high".into()),
                 max_tokens: Some(9001),
                 temperature: Some(0.25),
+                top_p: None,
                 token_budget: Some(5_000_000),
             }),
             ..Config::default()
@@ -586,6 +589,7 @@ ssh_bind = "0.0.0.0:2222"
                 reasoning_effort: Some("high".into()),
                 max_tokens: Some(9001),
                 temperature: Some(0.25),
+                top_p: None,
                 token_budget: Some(5_000_000),
             }),
             ..Config::default()
@@ -620,6 +624,7 @@ ssh_bind = "0.0.0.0:2222"
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
                 token_budget: None,
             }),
             ..Config::default()
@@ -656,6 +661,7 @@ ssh_bind = "0.0.0.0:2222"
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
                 token_budget: None,
             }),
             ..Config::default()
@@ -693,6 +699,7 @@ ssh_bind = "0.0.0.0:2222"
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
                 token_budget: None,
             }),
             ..Config::default()
@@ -721,6 +728,7 @@ ssh_bind = "0.0.0.0:2222"
                 reasoning_effort: None,
                 max_tokens: None,
                 temperature: None,
+                top_p: None,
                 token_budget: None,
             }),
             ..Config::default()

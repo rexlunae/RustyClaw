@@ -81,6 +81,7 @@ pub(crate) fn config_set(config: &mut Config, path: &str, value: &str) -> Result
                     reasoning_effort: None,
                     max_tokens: None,
                     temperature: None,
+                    top_p: None,
                     token_budget: None,
                 });
             m.provider = value.to_string();
@@ -96,6 +97,7 @@ pub(crate) fn config_set(config: &mut Config, path: &str, value: &str) -> Result
                     reasoning_effort: None,
                     max_tokens: None,
                     temperature: None,
+                    top_p: None,
                     token_budget: None,
                 });
             m.model = Some(value.to_string());

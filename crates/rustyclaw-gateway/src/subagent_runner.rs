@@ -250,6 +250,7 @@ async fn drive_tool_loop(
         reasoning_effort: parent.reasoning_effort.clone(),
         max_tokens: parent.max_tokens,
         temperature: parent.temperature,
+        top_p: parent.top_p,
     };
 
     let max_rounds = profile.effective_max_rounds();

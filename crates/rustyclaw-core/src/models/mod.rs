@@ -5,6 +5,7 @@
 //! - Cost tiers for intelligent model selection
 //! - Sub-agent model recommendations
 
+pub mod defaults;
 pub mod failover;
 mod registry;
 

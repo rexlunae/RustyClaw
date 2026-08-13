@@ -74,6 +74,7 @@ pub mod text;
 pub mod theme;
 pub mod threads;
 pub mod tool_caller;
+pub mod tool_healing;
 pub mod tool_limits;
 pub mod tool_pipeline;
 pub mod tools;
