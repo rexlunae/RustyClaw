@@ -173,10 +173,8 @@ fn complete_truncated_json(input: &str) -> String {
             '"' => in_string = true,
             '{' => stack.push('}'),
             '[' => stack.push(']'),
-            '}' | ']' => {
-                if stack.last() == Some(&c) {
-                    stack.pop();
-                }
+            '}' | ']' if stack.last() == Some(&c) => {
+                stack.pop();
             }
             _ => {}
         }

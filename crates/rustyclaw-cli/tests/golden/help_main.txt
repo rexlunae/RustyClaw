@@ -17,6 +17,7 @@ Commands:
   ask            Send a prompt to the model and print the response (headless mode)
   status         Show system status (gateway, model, workspace)
   gateway        Gateway management (start / stop / restart / status)
+  model          Model information (curated inference defaults, …)
   skills         List / manage skills
   refresh-token  Refresh the GitHub Copilot session token from OpenClaw
   clawhub        ClawHub skill registry commands (search, install, publish, …)
