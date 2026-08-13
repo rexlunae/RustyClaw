@@ -142,6 +142,15 @@ pub async fn run_gateway(
     );
     rustyclaw_core::tool_limits::install(tool_limits);
 
+    // Tool-call healing (JSON repair, duplicate removal, leaked-markup
+    // cleanup) — installed process-wide for the same reason as the budgets:
+    // the hooks run inside provider code that has no Config handle.
+    info!(
+        enabled = config.tool_healing.enabled,
+        "Tool healing configured"
+    );
+    rustyclaw_core::tool_healing::install(config.tool_healing.clone());
+
     let load_tracker = rustyclaw_core::load::create_load_tracker();
     let _load_sampler_handle = rustyclaw_core::load::spawn_load_sampler(
         load_tracker.clone(),

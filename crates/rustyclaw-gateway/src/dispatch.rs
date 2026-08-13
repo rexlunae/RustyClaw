@@ -611,6 +611,9 @@ pub(crate) async fn dispatch_text_message(
 
     // One pacer for this turn's loop; see `tool_limits::RoundPacer`.
     let mut round_pacer = rustyclaw_core::tool_limits::RoundPacer::from_config();
+    // Counts identical calls repeated round after round, so the model can
+    // be told it is looping — see `tool_healing::RepeatCallTracker`.
+    let mut repeat_tracker = rustyclaw_core::tool_healing::RepeatCallTracker::new();
     // Whether the current pacing episode has been announced. Lives outside
     // the round loop deliberately: a saturated window makes *every* round
     // wait, and a flag reset per round would re-announce roughly once a
@@ -1277,6 +1280,18 @@ pub(crate) async fn dispatch_text_message(
 
             // Sanitize the output (truncate large outputs, warn about garbage).
             let mut output = tools::sanitize_tool_output(output);
+
+            // Healing: a call the model keeps repeating verbatim gets a note
+            // appended to its result. The malformed-call suppressor already
+            // covers identical *failing* calls; this covers the identical
+            // call that keeps succeeding while the model waits for a
+            // different answer. Warn, never block — polling loops repeat
+            // legitimately.
+            if let Some(count) = repeat_tracker.observe(&tc.name, &tc.arguments) {
+                output.push_str(&rustyclaw_core::tool_healing::repeat_warning(
+                    &tc.name, count,
+                ));
+            }
 
             // Intercept thread update markers and apply them
             if output.starts_with(tools::THREAD_UPDATE_MARKER) {

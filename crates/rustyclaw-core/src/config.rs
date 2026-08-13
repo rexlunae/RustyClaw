@@ -245,6 +245,10 @@ pub struct Config {
     /// Rate and concurrency budgets applied to tool use, per caller.
     #[serde(default)]
     pub tool_limits: crate::tool_limits::ToolLimitsConfig,
+    /// Self-healing of model tool calls (JSON repair, duplicate removal,
+    /// leaked-markup cleanup).
+    #[serde(default)]
+    pub tool_healing: crate::tool_healing::ToolHealingConfig,
     /// Path to TLS certificate file (PEM) for WSS gateway connections.
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,
@@ -501,6 +505,7 @@ impl Default for Config {
             messenger_max_concurrent: None,
             tool_permissions: HashMap::new(),
             tool_limits: crate::tool_limits::ToolLimitsConfig::default(),
+            tool_healing: crate::tool_healing::ToolHealingConfig::default(),
             tls_cert: None,
             tls_key: None,
             ssh: None,
