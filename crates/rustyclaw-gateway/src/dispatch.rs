@@ -617,6 +617,13 @@ pub(crate) async fn dispatch_text_message(
     // second for as long as the turn runs, burying the model's actual
     // output under the very notice meant to explain the quiet.
     let mut pacing_announced = false;
+    // When this turn last had to wait. A single unpaced round must not end
+    // the episode: a turn hovering at the rate boundary alternates between
+    // waiting and not (one slow model call drains the window, the next
+    // fast round refills it), and re-arming on each dip would re-announce
+    // every few seconds — the same noise, thinner. The episode ends only
+    // after a full window's worth of quiet.
+    let mut last_paced_at: Option<std::time::Instant> = None;
 
     loop {
         // ── Check for cancellation ──────────────────────────────────
@@ -657,11 +664,17 @@ pub(crate) async fn dispatch_text_message(
                 return Ok(());
             }
         }
-        // A round admitted without waiting ends the episode: the loop is
-        // back under the rate, so if it saturates again later — minutes or
-        // hours on — that is a fresh episode and gets its own notice.
-        if !waited {
+        // The episode ends only after a sustained stretch under the rate —
+        // one pacer window with no waiting — so a fresh saturation minutes
+        // or hours later gets its own notice, while hovering at the
+        // boundary does not re-announce on every dip.
+        if waited {
+            last_paced_at = Some(std::time::Instant::now());
+        } else if last_paced_at
+            .is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(60))
+        {
             pacing_announced = false;
+            last_paced_at = None;
         }
 
         // ── Take any direction added since the last round ───────────
