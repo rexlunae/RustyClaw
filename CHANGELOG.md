@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Self-healing tool calls (#462).** Models damage their own tool calls in
+  recurring, mechanical ways, and each used to be handled by failing. A new
+  `tool_healing` layer at the provider choke points now repairs what is
+  unambiguous: malformed argument JSON is unwrapped (markdown fences,
+  surrounding prose), de-comma'd and completed (truncation cuts mid-string
+  or mid-object) before the old `{}` fallback; argument values are coerced
+  toward the tool's declared parameter type when lossless (number ↔ numeric
+  string, bool ↔ `"true"`/`"false"`); exact duplicate calls within one
+  response collapse to one; tool-call XML leaked into the text channel is
+  stripped, including tags split across streaming chunks; and a call
+  repeated verbatim 5+ rounds in a row gets a note telling the model it is
+  looping (warn, never block — polling is legitimate). All behind
+  `[tool_healing] enabled` (default on).
+
+- **Curated per-model inference defaults (#464).** Model families that
+  publish recommended sampling settings (Qwen, QwQ, DeepSeek-R1, GLM, Kimi,
+  Llama 3, Gemma) now get them applied automatically when served through
+  endpoints that don't do it themselves (Ollama, LM Studio, OpenRouter, any
+  OpenAI-compatible proxy). Explicit `[model]` config wins field by field;
+  `<settings_dir>/model_defaults.toml` overrides the built-in table without
+  a rebuild; `rustyclaw model defaults [model]` shows what applies and why
+  (each built-in entry names its source). Claude/GPT/Gemini are deliberately
+  absent — their providers already default correctly. `top_p` is now a
+  first-class `[model]` option alongside `temperature`.
+
+- **User override for exfiltration-guard blocks (#418).** The
+  credential-exfiltration guards were absolute, and the command-pattern
+  guard is a heuristic with false positives (`cat ~/.rustyclaw/config.toml`
+  while debugging blocked the same as a key grab). A guard block on an
+  interactive connection is now put to the user — which tool, the exact
+  arguments, the guard's reason, default deny — and approval re-runs that
+  one call inside an override scope that dies with it. Headless callers
+  (cron, triggers, messengers, subagents) have nobody to ask and keep the
+  absolute guards; `guard_override_prompts = false` restores the old
+  behaviour everywhere. Null-byte/length command checks are not
+  overridable, nor are sandbox path denials or vault access policies.
+
 - **Gateway controls in the desktop client (#414).** A new "Gateway…" entry
   under Tools (Ctrl/Cmd+G) opens a panel split in two. The top half manages
   the gateway daemon *on this machine* — start, stop and restart, backed by
