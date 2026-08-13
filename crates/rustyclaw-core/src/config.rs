@@ -197,6 +197,14 @@ pub struct Config {
     /// Whether the agent is allowed to access secrets on behalf of the user.
     #[serde(default)]
     pub agent_access: bool,
+    /// Whether an exfiltration-guard block may be put to the user for a
+    /// one-time override (issue #418). When a guard blocks a tool call on an
+    /// interactive connection, the user is shown what was blocked and why
+    /// and may approve that one call; denial (or a headless caller, which
+    /// has nobody to ask) keeps the block. `false` makes every guard
+    /// absolute again.
+    #[serde(default = "default_true")]
+    pub guard_override_prompts: bool,
     /// User-chosen name for this agent instance (shown in TUI title,
     /// authenticator app labels, etc.).  Defaults to "RustyClaw".
     #[serde(default = "Config::default_agent_name")]
@@ -496,6 +504,7 @@ impl Default for Config {
             secrets_password_protected: false,
             totp_enabled: false,
             agent_access: false,
+            guard_override_prompts: true,
             agent_name: Self::default_agent_name(),
             relevance_filter: RelevanceFilter::Always,
             relevance_model: None,

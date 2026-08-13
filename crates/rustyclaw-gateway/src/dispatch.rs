@@ -8,7 +8,7 @@ use rustyclaw_core::ignore::Ignore;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use rustyclaw_core::gateway::{
     ChatMessage, ChatRequest, CopilotSession, ModelContext, ModelResponse, ServerFrame,
@@ -1276,6 +1276,77 @@ pub(crate) async fn dispatch_text_message(
                         .await?
                     }
                 }
+            };
+
+            // ── Exfiltration-guard override (#418) ──────────────────────
+            //
+            // A guard block on an interactive connection is put to the
+            // user: what was blocked, by which call, with which arguments.
+            // Approval re-runs the call once inside an override scope that
+            // dies with it (`tools::guard_override`); denial — or a prompt
+            // that times out, or the config switch being off — keeps the
+            // block. Headless dispatch paths never reach this code, so for
+            // them the guards stay absolute.
+            let (output, is_error) = if is_error
+                && tools::is_guard_block(&output)
+                && shared_config.read().await.guard_override_prompts
+            {
+                let args_pretty = {
+                    let mut s = serde_json::to_string_pretty(&tc.arguments)
+                        .unwrap_or_else(|_| tc.arguments.to_string());
+                    if s.len() > 800 {
+                        s.truncate(800);
+                        s.push_str("\n… (truncated)");
+                    }
+                    s
+                };
+                let question = serde_json::json!({
+                    "prompt_type": "confirm",
+                    "title": format!("Security block: {}", tc.name),
+                    "description": format!(
+                        "{output}\n\nThe agent asked to run `{}` with these arguments:\n\
+                         {args_pretty}\n\nAllow this call once? The block protects \
+                         credentials from exfiltration — approve only if you \
+                         understand why the agent needs this.",
+                        tc.name,
+                    ),
+                    "default_value": false,
+                });
+                // A fresh id: the prompt is about the tool call but is not
+                // the tool call, and the pending-response registry must not
+                // conflate the two.
+                let override_id = format!("{}:guard-override", tc.id);
+                let (answer, prompt_err) =
+                    execute_user_prompt(writer, &override_id, &question, user_prompts, tool_cancel)
+                        .await;
+                if !prompt_err && answer.trim() == "yes" {
+                    info!(tool = %tc.name, "User approved a one-time guard override");
+                    rustyclaw_core::tools::guard_override::with_granted(
+                        execute_tool_with_live_output(
+                            writer,
+                            &tc.id,
+                            &tc.name,
+                            &tc.arguments,
+                            workspace_dir,
+                            vault,
+                            skill_mgr,
+                            tool_start,
+                            turn_caller.clone(),
+                        ),
+                    )
+                    .await?
+                } else {
+                    (
+                        format!(
+                            "{output}\n\n[The user was asked to override this security \
+                             block and declined. Do not retry the same call; take a \
+                             different approach or ask the user what they want.]"
+                        ),
+                        is_error,
+                    )
+                }
+            } else {
+                (output, is_error)
             };
 
             // Sanitize the output (truncate large outputs, warn about garbage).
