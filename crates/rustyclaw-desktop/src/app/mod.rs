@@ -775,8 +775,7 @@ pub fn App() -> Element {
                     // a stream's tail must not be stranded in the buffer.
                     if !pending_chunks.is_empty()
                         && (worker_finished
-                            || last_chunk_flush
-                                .is_none_or(|t| t.elapsed() >= chunk_flush_interval))
+                            || last_chunk_flush.is_none_or(|t| t.elapsed() >= chunk_flush_interval))
                     {
                         let mut s = state.write();
                         flush_pending_chunks(&mut pending_chunks, &mut s, &mut last_chunk_flush);
