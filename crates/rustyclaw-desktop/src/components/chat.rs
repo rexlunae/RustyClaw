@@ -58,6 +58,10 @@ pub fn Chat(props: ChatProps) -> Element {
     // through a wider reactive scope triggers large re-renders while the
     // user is typing, and a stale render patch applied to the controlled
     // textarea eats the most recent character.
+    //
+    // Writing it still re-renders *this* component, and this component builds
+    // the transcript below — so everything `to_transcript` does is paid once
+    // per character typed. Keep it cheap; see `docs/input-latency.md`.
     let mut input_ref = use_signal(String::new);
 
     // Auto-scroll: keep the transcript pinned to the bottom as content streams

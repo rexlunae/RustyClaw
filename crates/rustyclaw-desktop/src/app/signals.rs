@@ -8,17 +8,26 @@ use dioxus::prelude::*;
 use crate::app_support::connect_to_gateway;
 use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
-use rustyclaw_view::{ConnectionDialogData, HatchingDialogData};
+use rustyclaw_view::ConnectionDialogData;
 
-#[derive(Clone, Copy)]
+/// `PartialEq` compares `Signal` handles by identity, not by the values they
+/// hold, so two `AppSignals` built from the same `App` scope always compare
+/// equal. That is what keeps `Dialogs` — which takes this as its props — from
+/// re-rendering every time `App` does; it re-renders when a signal it actually
+/// reads changes.
+///
+/// **Draft text does not belong here.** A signal declared in `App` and written
+/// on every keystroke re-renders `App` — and therefore re-clones the whole
+/// message list into `Chat`'s props and rebuilds the sidebar tree — once per
+/// character. Text a user types lives in a `use_signal` inside the component
+/// that renders the field. See `docs/input-latency.md`.
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct AppSignals {
     pub state: Signal<AppState>,
     pub gateway: Signal<Option<Arc<GatewayClient>>>,
     pub did_auto_connect: Signal<bool>,
     pub active_event_client: Signal<Option<Arc<GatewayClient>>>,
-    pub auth_code: Signal<String>,
     pub show_pairing: Signal<bool>,
-    pub hatching_dialog: Signal<HatchingDialogData>,
     pub show_settings: Signal<bool>,
     pub show_swarm: Signal<bool>,
     pub swarm_creating: Signal<bool>,

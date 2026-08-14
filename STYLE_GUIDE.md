@@ -676,6 +676,25 @@ let msg = "error";
 The release profile (`Cargo.toml`) already sets `lto = true`, `codegen-units = 1`,
 `strip = true`. Do not remove or weaken these settings.
 
+### Desktop: the typing path is a hot path
+
+Every text field in the Dioxus client is a controlled input, so **one keystroke
+triggers a render whose output is written back onto the field**. A slow render
+is felt as lag; a render that started before the last keystroke carries a stale
+value and eats the character typed in the meantime. This has regressed several
+times. Two rules:
+
+- Draft text lives in a `use_signal` inside the smallest component that renders
+  the field — never in `App`, whose scope re-clones the message list into
+  `Chat`'s props and rebuilds the sidebar tree.
+- Work triggered by a keystroke must not scale with the length of the
+  conversation. Markdown sanitising and attachment reads are cached for exactly
+  this reason.
+
+Guards live in `crates/rustyclaw-desktop/src/input_latency.rs`, which also
+lists every keyboard handler in the client and why it exists; the reasoning is
+in [`docs/input-latency.md`](docs/input-latency.md).
+
 ---
 
 ## 17. Clippy Lints — Baseline

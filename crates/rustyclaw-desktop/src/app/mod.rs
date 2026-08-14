@@ -19,15 +19,14 @@ use rustyclaw_core::ui::ConnectionStatus;
 use rustyclaw_core::user_prompt_types::PromptResponseValue;
 
 use rustyclaw_view::{
-    BannerActionKind, HatchingDialogData, PromptAttachment, PromptAttachmentKind,
-    build_prompt_with_attachments,
+    BannerActionKind, PromptAttachment, PromptAttachmentKind, build_prompt_with_attachments,
 };
 
 mod dialogs;
 mod signals;
 
 use anyhow::Context;
-use dialogs::render_dialogs;
+use dialogs::Dialogs;
 use signals::do_reconnect;
 
 const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
@@ -154,11 +153,12 @@ pub fn App() -> Element {
     let gateway: Signal<Option<Arc<GatewayClient>>> = use_signal(|| None);
     let mut did_auto_connect = use_signal(|| false);
     let mut active_event_client: Signal<Option<Arc<GatewayClient>>> = use_signal(|| None);
-    let auth_code = use_signal(String::new);
 
-    // Dialog visibility
+    // Dialog visibility. Draft text (the TOTP code, the agent name) is
+    // deliberately *not* declared here — a signal written per keystroke in
+    // this scope re-renders the whole window on every character. It lives in
+    // `Dialogs` instead; see `docs/input-latency.md`.
     let mut show_pairing = use_signal(|| false);
-    let hatching_dialog = use_signal(|| HatchingDialogData::new(state.read().needs_hatching));
     let mut show_settings = use_signal(|| false);
     let mut show_swarm = use_signal(|| false);
     let swarm_creating = use_signal(|| false);
@@ -234,9 +234,7 @@ pub fn App() -> Element {
         gateway,
         did_auto_connect,
         active_event_client,
-        auth_code,
         show_pairing,
-        hatching_dialog,
         show_settings,
         show_swarm,
         swarm_creating,
@@ -1965,8 +1963,9 @@ pub fn App() -> Element {
                     })
             }
 
-            // Modals
-            {render_dialogs(sig)}
+            // Modals. A component, so a keystroke in a dialog re-renders the
+            // dialogs and not this scope — see `dialogs`' module docs.
+            Dialogs { sig }
         }
     }
 }
