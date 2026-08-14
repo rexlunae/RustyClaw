@@ -1198,7 +1198,7 @@ mod tests {
         config.workspace_dir = Some(dir.join("workspace"));
         config.messengers = vec![rustyclaw_core::config::MessengerConfig {
             name: "acct".to_string(),
-            messenger_type: messenger_type.to_string(),
+            messenger_type: messenger_type.into(),
             enabled: true,
             ..Default::default()
         }];
@@ -1371,7 +1371,7 @@ mod tests {
             .messengers
             .push(rustyclaw_core::config::MessengerConfig {
                 name: "second".to_string(),
-                messenger_type: "telegram".to_string(),
+                messenger_type: "telegram".into(),
                 enabled: true,
                 ..Default::default()
             });

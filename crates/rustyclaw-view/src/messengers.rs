@@ -92,7 +92,7 @@ impl From<&MessengerAccountDto> for MessengerAccountData {
                 .filter(|f| !f.is_secret())
                 .filter_map(|f| {
                     dto.fields
-                        .get(f.name)
+                        .get(f.name.as_ref())
                         .map(|v| (f.name.to_string(), v.clone()))
                 })
                 .collect(),
@@ -128,7 +128,7 @@ impl MessengerAccountData {
 
     /// Icon for the backend.
     pub fn icon(&self) -> &'static str {
-        self.spec().map_or("💬", |s| s.icon)
+        self.spec().map_or("💬", |s| s.icon.as_ref())
     }
 
     /// Human-readable backend name.
@@ -471,15 +471,15 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
     }];
 
     if let Some(spec) = setup::kind_spec(messenger_type) {
-        for field in spec.fields {
+        for field in spec.fields.iter() {
             // A credential still sitting in plaintext config counts as stored
             // for the purpose of this form. It is not where it should be —
             // that is what the migrate action is for — but demanding the user
             // retype a working token before they can edit a channel list
             // would make the un-migrated account the harder one to look after.
             let stored = account.is_some_and(|a| {
-                a.vaulted.iter().any(|v| v == field.name)
-                    || a.plaintext.iter().any(|(f, _)| f == field.name)
+                a.vaulted.iter().any(|v| *v == field.name)
+                    || a.plaintext.iter().any(|(f, _)| *f == field.name)
             });
             let value = match field.is_secret() {
                 // Never pre-fill a secret: the client was not sent the value,
@@ -490,7 +490,7 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
                     .and_then(|a| {
                         a.fields
                             .iter()
-                            .find(|(name, _)| name == field.name)
+                            .find(|(name, _)| *name == field.name)
                             .map(|(_, v)| v.clone())
                     })
                     .unwrap_or_default(),
@@ -501,7 +501,7 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
                 kind: field.kind,
                 value,
                 required: matches!(field.requirement, Requirement::Required),
-                one_of: match field.requirement {
+                one_of: match &field.requirement {
                     Requirement::OneOf(group) => Some(group.to_string()),
                     _ => None,
                 },
@@ -830,7 +830,7 @@ impl MessengersPanelData {
     pub fn selectable_kinds(&self) -> Vec<&'static KindSpec> {
         setup::KINDS
             .iter()
-            .filter(|k| self.available_kinds.iter().any(|id| id == k.id))
+            .filter(|k| self.available_kinds.iter().any(|id| *id == k.id))
             .collect()
     }
 
@@ -1289,7 +1289,11 @@ mod tests {
             available_kinds: vec!["telegram".into(), "irc".into()],
             ..Default::default()
         };
-        let ids: Vec<&str> = panel.selectable_kinds().iter().map(|k| k.id).collect();
+        let ids: Vec<&str> = panel
+            .selectable_kinds()
+            .iter()
+            .map(|k| k.id.as_ref())
+            .collect();
         assert_eq!(ids, vec!["telegram", "irc"]);
         assert!(!ids.contains(&"matrix"), "matrix is not compiled in here");
     }

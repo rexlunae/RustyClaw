@@ -1190,7 +1190,7 @@ pub(crate) async fn tool_group_set_enabled(
 
 fn messenger_display_name(m: &rustyclaw_core::config::MessengerConfig) -> String {
     if m.name.is_empty() {
-        m.messenger_type.clone()
+        m.messenger_type.to_string()
     } else {
         m.name.clone()
     }
@@ -1215,7 +1215,7 @@ fn messenger_has_credentials(m: &rustyclaw_core::config::MessengerConfig) -> boo
 fn messenger_to_dto(m: &rustyclaw_core::config::MessengerConfig) -> ChannelStatusDto {
     ChannelStatusDto {
         name: messenger_display_name(m),
-        channel_type: m.messenger_type.clone(),
+        channel_type: m.messenger_type.to_string(),
         paired: messenger_has_credentials(m),
         // Config-level state: the messenger loop runs in the gateway
         // process; per-connection liveness isn't tracked here yet.
@@ -1247,7 +1247,7 @@ async fn channel_pair(
         let target = shared
             .messengers
             .iter_mut()
-            .find(|m| messenger_display_name(m) == channel || m.messenger_type == channel)
+            .find(|m| messenger_display_name(m) == channel || m.messenger_type == channel.as_str())
             .ok_or_else(|| format!("Unknown channel: '{}'", channel))?;
         target.enabled = matches!(action, ChannelPairActionKind::Pair);
         let dto = messenger_to_dto(target);

@@ -455,3 +455,103 @@ only be believable with a real consumer.
    bundled plugins once the platform exists (messengers? engines? freenet
    tools?) — the original modularization goal. Candidate for a follow-up
    plan once Phase 2 is real.
+
+## 14. Messenger backends as plugins
+
+Messengers had the same shape the tool system had before §5: a static schema
+table (`messengers::setup::KINDS`) beside a hardcoded factory `match` in the
+gateway (`messenger_handler/builders.rs`), plus a `cfg!`-based feature filter
+deciding what `available_kinds` reports. A plugin cannot add an arm to a
+`match`. The same cure applies, and the groundwork is in-tree:
+
+### 14.1 The kind registry (landed)
+
+`messengers::registry::MessengerRegistry` — process-global via
+`messenger_registry()`, mirroring `tools::catalog()`:
+
+```rust
+impl MessengerRegistry {
+    pub fn kinds(&self) -> Vec<KindSpec>;            // registered = constructible
+    pub fn spec(&self, id: &str) -> Option<KindSpec>;
+    pub fn field(&self, kind: &str, field: &str) -> Option<FieldSpec>;
+    pub fn create(&self, config: &MessengerConfig) -> anyhow::Result<Box<dyn Messenger>>;
+    pub fn register_plugin_kind(&self, plugin: &str, spec: KindSpec, factory: MessengerFactory)
+        -> Result<(), String>;
+    pub fn unregister_source(&self, plugin: &str) -> usize;
+    pub fn generation(&self) -> u64;
+}
+```
+
+- `KindSpec`/`FieldSpec` moved to `Cow<'static, str>` innards so one
+  vocabulary serves both worlds: the static `KINDS` table stays
+  const-constructible, plugin kinds own their strings.
+- In-tree kinds register on first access — the compiled-feature subset of
+  `KINDS` — and construct through the factory code moved from the gateway
+  into `messengers::factory`. The old `feature_available` filter is gone:
+  a feature-gated kind in a build without the feature simply never
+  registers, and `create()` explains the missing `--features` flag by
+  consulting the static table.
+- The static `KINDS` table keeps its role as the *vocabulary*: complete
+  regardless of build, so clients can say "this build cannot do Matrix"
+  and validation still works on accounts whose backend is unavailable.
+- Collisions: a plugin kind may not shadow any id in `KINDS` (even
+  feature-off — the id would change meaning when the feature returns) nor
+  any other plugin's kind. First registration wins; there is no override.
+- **Field storage** (landed): a plugin kind's schema is not decorative —
+  its field values live in `MessengerConfig.extra`, a `field name → value`
+  map that `field_value`/`set_field` fall through to for any name without
+  a struct slot. Storage is deliberately permissive; the schema (registry)
+  is the authority on which names are valid, enforced where fields enter
+  (the gateway save path). Secret fields never land there: they vault
+  behind `secret_refs` exactly like a builtin's, and `resolve_credentials`
+  delivers them back through `set_field` at connect time, so a plugin
+  factory reads everything — plain and secret — via `field_value`. The
+  `messenger_type` id itself is `MessengerKind`: unit variants for the
+  in-tree vocabulary, `Other(String)` carrying plugin ids; serialized as
+  the bare string either way.
+
+### 14.2 The ABI surface (rides §3/§12 phase 1)
+
+The plugin API crate gains a messenger capability next to tools:
+
+```rust
+#[repr(C)]
+pub struct RMessengerKind {
+    pub spec: RKindSpec,                       // id, label, icon, summary, fields
+    pub construct: extern "C" fn(&RMessengerConfig) -> RResult<RMessengerHandle, RString>,
+    pub vtable: RMessengerVtable,              // send / poll / initialize / shutdown
+}
+```
+
+- `Messenger` is an async trait in the external `chat-system` crate and
+  cannot cross the C ABI as-is. The SDK ships the adapter both ways: on the
+  plugin side a blanket impl wraps any `chat_system::Messenger` into the
+  vtable (futures driven via `ffi_futures`-style poll shims, §13 Q1); on
+  the host side a `VtableMessenger: Messenger` adapter makes the handle a
+  first-class `Box<dyn Messenger>` for `MessengerManager`.
+- Registration happens in the plugin's `on_load` (`register_messenger_kinds`
+  in the host vtable); `unregister_source` runs in the same quiesce path as
+  tool teardown (§8). An account whose kind just unregistered transitions
+  to the same "unavailable" state a feature-off builtin shows today —
+  connections drain, config stays.
+- Trusted tier only at first, like everything dylib. A messenger backend
+  holds credentials and speaks to the network; the §11 trust model applies
+  unchanged.
+
+### 14.3 Client forms for plugin kinds (rides §10)
+
+Clients currently render account forms from their *compiled-in* static
+`KINDS` (`rustyclaw-view/src/messengers.rs`) — fine for in-tree kinds, blind
+to plugin ones. The fix is the same shape as §6: `MessengerConfigResult`
+grows an appended `kind_specs` field carrying the registry's schemas over
+the wire, and the view renders from that, falling back to its static table
+against older gateways. This lands with the management UI work (§10), which
+needs kind schemas client-side anyway.
+
+### 14.4 What this buys
+
+The registry is the seam. Everything above it — account save/validate,
+credential vaulting, routing, profile resolution, the connection manager —
+already speaks `MessengerConfig` + `KindSpec` and now resolves both through
+registry-aware lookups, so a plugin messenger inherits vault storage,
+routes, and the config panel for free the moment its kind registers.

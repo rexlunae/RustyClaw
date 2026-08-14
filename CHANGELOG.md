@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Messenger-kind registry (plugin architecture, `docs/PLUGIN_ARCHITECTURE.md`
+  §14).** Messenger backends had the pre-phase-0 tool shape: a static schema
+  table beside a hardcoded factory `match` in the gateway, plus a `cfg!`
+  feature filter deciding what `available_kinds` reports — nothing a plugin
+  could add to. `messengers::registry::MessengerRegistry` (process-global
+  `messenger_registry()`, mirroring `tools::catalog()`) now owns which kinds
+  are constructible: in-tree kinds register on first access from the
+  compiled-feature subset of `KINDS`, and construct through the factory code
+  moved from the gateway into `messengers::factory`. Plugins get the same
+  surface tools got: `register_plugin_kind` (collision-rejecting — no
+  shadowing in-tree ids, even feature-off ones, nor another plugin's),
+  `unregister_source`, and a `generation()` counter. `KindSpec`/`FieldSpec`
+  moved to `Cow<'static, str>` innards so the static table stays
+  const-constructible while plugin kinds own their strings. The gateway's
+  account save/validate, credential vaulting, and panel paths now resolve
+  schemas registry-first (static table as fallback vocabulary), so a plugin
+  messenger inherits vault storage, routing, and the config panel the moment
+  its kind registers. A registered kind's account also gets the right
+  "unavailable" story: unknown kinds, feature-off builtins, and the retired
+  `matrix-cli` id each fail with their own explanation.
+
+### Added
+
 - **Plugin UI events and tool groups on the wire (plugin architecture phase 0,
   continued).** Clicking a plugin action button used to do exactly one thing:
   put a chat message in front of the model asking it to please run the action

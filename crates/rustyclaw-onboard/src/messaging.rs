@@ -151,7 +151,7 @@ pub(crate) fn setup_messaging(
                     } else {
                         let mut mc = MessengerConfig {
                             name: "matrix".to_string(),
-                            messenger_type: "matrix".to_string(),
+                            messenger_type: "matrix".into(),
                             enabled: true,
                             homeserver: Some(homeserver),
                             user_id: Some(user_id),
@@ -187,7 +187,7 @@ pub(crate) fn setup_messaging(
                     } else {
                         let mut mc = MessengerConfig {
                             name: def.id.to_string(),
-                            messenger_type: def.id.to_string(),
+                            messenger_type: def.id.into(),
                             enabled: true,
                             ..Default::default()
                         };

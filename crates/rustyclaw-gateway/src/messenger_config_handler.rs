@@ -172,25 +172,33 @@ pub async fn handle_messenger_config(
 /// run one depends on the features it was compiled with. Reporting the gap
 /// explicitly lets a client say "rebuild with `--features matrix`" instead of
 /// hiding Matrix and leaving the user to wonder where it went.
-fn feature_available(feature: Option<&str>) -> bool {
-    match feature {
-        None => true,
-        Some("matrix") => cfg!(feature = "matrix"),
-        Some("whatsapp") => cfg!(feature = "whatsapp"),
-        Some("signal-cli") => cfg!(feature = "signal-cli"),
-        // An unrecognised feature name is a schema entry this build was never
-        // taught about; call it unavailable rather than promising it works.
-        Some(_) => false,
-    }
+/// A kind's schema from the whole vocabulary this process knows: the
+/// registry first (in-tree kinds this build can run, plus anything plugins
+/// registered), falling back to the static table so a feature-off builtin
+/// still validates and renders instead of becoming "unknown".
+fn known_spec(kind: &str) -> Option<rustyclaw_core::messengers::setup::KindSpec> {
+    rustyclaw_core::messengers::messenger_registry()
+        .spec(kind)
+        .or_else(|| kind_spec(kind).cloned())
+}
+
+/// Whether this gateway can actually construct the kind — i.e. it is in the
+/// registry. The old cfg!-based feature filter lives inside the registry now:
+/// a feature-gated builtin simply never registers in a build without it.
+fn kind_available(kind: &str) -> bool {
+    rustyclaw_core::messengers::messenger_registry()
+        .spec(kind)
+        .is_some()
+}
+
+/// One field of a known kind, plugin kinds included.
+fn known_field(kind: &str, field: &str) -> Option<rustyclaw_core::messengers::setup::FieldSpec> {
+    known_spec(kind).and_then(|s| s.fields.iter().find(|f| f.name == field).cloned())
 }
 
 /// Messenger types this gateway can actually connect.
 fn available_kinds() -> Vec<String> {
-    setup::KINDS
-        .iter()
-        .filter(|k| feature_available(k.feature))
-        .map(|k| k.id.to_string())
-        .collect()
+    rustyclaw_core::messengers::messenger_registry().kind_ids()
 }
 
 /// Every thread a route may point at, across all agents.
@@ -229,19 +237,20 @@ async fn account_dto(
     stored: &[String],
     vault_locked: bool,
 ) -> MessengerAccountDto {
-    let spec = kind_spec(&messenger.messenger_type);
+    let spec = known_spec(messenger.messenger_type.as_str());
 
     // Non-secret fields only. A secret's value is in the vault (or, for a
     // not-yet-migrated account, in plaintext config) and either way it is not
     // this frame's business.
     let fields: BTreeMap<String, String> = spec
+        .as_ref()
         .map(|s| {
             s.fields
                 .iter()
                 .filter(|f| !f.is_secret())
                 .filter_map(|f| {
                     messenger
-                        .field_value(f.name)
+                        .field_value(&f.name)
                         .map(|v| (f.name.to_string(), v))
                 })
                 .collect()
@@ -279,9 +288,9 @@ async fn account_dto(
                 messenger.messenger_type
             )),
         ),
-        Some(s) if !feature_available(s.feature) => (
+        Some(s) if !kind_available(messenger.messenger_type.as_str()) => (
             false,
-            s.feature.map(|f| {
+            s.feature.as_deref().map(|f| {
                 format!(
                     "This gateway was built without the '{f}' feature; rebuild with --features {f}"
                 )
@@ -294,7 +303,7 @@ async fn account_dto(
 
     MessengerAccountDto {
         name: messenger.name.clone(),
-        messenger_type: messenger.messenger_type.clone(),
+        messenger_type: messenger.messenger_type.to_string(),
         enabled: messenger.enabled,
         fields,
         vaulted,
@@ -398,7 +407,7 @@ async fn save_account(
     let name = name.trim().to_string();
     validate_account_name(&name).map_err(|e| vec![e])?;
 
-    let Some(spec) = kind_spec(&messenger_type) else {
+    let Some(spec) = known_spec(&messenger_type) else {
         return Err(vec![format!("Unknown messenger type: '{messenger_type}'")]);
     };
     // Only an *enabled* account needs a runnable backend. Both clients
@@ -406,7 +415,7 @@ async fn save_account(
     // refusing here made the one account the panel flags as unsupported —
     // the one failing at every startup — the one account that could not be
     // switched off without deleting it.
-    if enabled && !feature_available(spec.feature) {
+    if enabled && !kind_available(&messenger_type) {
         return Err(vec![format!(
             "This gateway was built without support for {}",
             spec.label
@@ -464,7 +473,7 @@ async fn save_account(
     // forever. The entries themselves are deleted only after this save
     // persists, so a failure further down does not cost a working login.
     let mut obsolete: Vec<String> = Vec::new();
-    if !entry.messenger_type.is_empty() && entry.messenger_type != messenger_type {
+    if !entry.messenger_type.is_unset() && entry.messenger_type != messenger_type.as_str() {
         obsolete.extend(entry.secret_refs.values().cloned());
         entry.secret_refs.clear();
         // The plaintext twins go too. A never-migrated credential otherwise
@@ -473,20 +482,20 @@ async fn save_account(
         // "move to vault" affordance never sees it — while the value sits
         // re-serialised in config.toml and can even satisfy a same-named
         // required field on the new backend during validation.
-        if let Some(old_spec) = kind_spec(&entry.messenger_type) {
+        if let Some(old_spec) = known_spec(entry.messenger_type.as_str()) {
             for field in old_spec.fields.iter().filter(|f| f.is_secret()) {
-                entry.set_field(field.name, "").ignore();
+                entry.set_field(&field.name, "").ignore();
             }
         }
     }
 
     entry.name = name.clone();
-    entry.messenger_type = messenger_type.clone();
+    entry.messenger_type = messenger_type.as_str().into();
     entry.enabled = enabled;
 
     let mut errors = Vec::new();
     for (field, value) in &fields {
-        match setup::field_spec(&messenger_type, field) {
+        match known_field(&messenger_type, field) {
             Some(f) if f.is_secret() => {
                 // A secret arriving through the non-secret channel would be
                 // written to config.toml. Refuse rather than silently persist.
@@ -511,7 +520,7 @@ async fn save_account(
     // not leave config pointing at a credential that was never stored.
     let mut staged: Vec<(String, String, String)> = Vec::new();
     for (field, value) in secrets {
-        let Some(f) = setup::field_spec(&messenger_type, &field) else {
+        let Some(f) = known_field(&messenger_type, &field) else {
             return Err(vec![format!("'{field}' is not a field on {}", spec.label)]);
         };
         if !f.is_secret() {
@@ -882,7 +891,8 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
         return Ok(Some(format!("'{name}' has no plaintext credentials")));
     }
 
-    let label = kind_spec(&entry.messenger_type).map_or("Messenger", |s| s.label);
+    let label = known_spec(entry.messenger_type.as_str())
+        .map_or_else(|| "Messenger".to_string(), |s| s.label.to_string());
     let mut moved = Vec::new();
     let mut created: Vec<String> = Vec::new();
     let mut failure: Option<Vec<String>> = None;
@@ -890,10 +900,10 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
         let mut mgr = vault.lock().await;
         let existing = mgr.list_secrets();
         for field in &pending {
-            let Some(value) = entry.field_value(field.field) else {
+            let Some(value) = entry.field_value(&field.field) else {
                 continue;
             };
-            let cred = secret_name(name, field.field);
+            let cred = secret_name(name, &field.field);
             let secret_entry = SecretEntry {
                 label: format!("{name} — {}", field.label),
                 kind: SecretKind::Token,
@@ -914,8 +924,8 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
             entry.secret_refs.insert(field.field.to_string(), cred);
             // Clear only after the vault write succeeded — the ordering is the
             // difference between migrating a credential and losing one.
-            entry.set_field(field.field, "").ignore();
-            moved.push(field.label);
+            entry.set_field(&field.field, "").ignore();
+            moved.push(field.label.clone());
         }
     }
     if let Some(errors) = failure {
@@ -1210,6 +1220,94 @@ mod tests {
             None,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn a_plugin_kind_account_saves_like_a_builtin() {
+        use rustyclaw_core::messengers::setup::{FieldKind, FieldSpec, KindSpec, Requirement};
+        use std::borrow::Cow;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+
+        // A kind this gateway was never compiled with: schema from the
+        // registry, plain field with no MessengerConfig slot, one secret.
+        let spec = KindSpec {
+            id: Cow::Borrowed("cfg_plugin_chat"),
+            label: Cow::Borrowed("Acme Chat"),
+            icon: Cow::Borrowed("🔌"),
+            summary: Cow::Borrowed("Plugin-registered test kind"),
+            feature: None,
+            fields: Cow::Owned(vec![
+                FieldSpec {
+                    name: Cow::Borrowed("workspace"),
+                    label: Cow::Borrowed("Workspace"),
+                    kind: FieldKind::Text,
+                    requirement: Requirement::Required,
+                    help: Cow::Borrowed("Which workspace to join"),
+                },
+                FieldSpec {
+                    name: Cow::Borrowed("api_key"),
+                    label: Cow::Borrowed("API key"),
+                    kind: FieldKind::Secret,
+                    requirement: Requirement::Required,
+                    help: Cow::Borrowed("Acme API key"),
+                },
+            ]),
+        };
+        rustyclaw_core::messengers::messenger_registry()
+            .register_plugin_kind(
+                "cfg-test-plugin",
+                spec,
+                Arc::new(|config: &MessengerConfig| {
+                    Ok(Box::new(rustyclaw_core::messengers::ConsoleMessenger::new(
+                        config.name.clone(),
+                    ))
+                        as Box<dyn rustyclaw_core::messengers::Messenger>)
+                }),
+            )
+            .expect("plugin kind registers");
+
+        save_account(
+            &mut config,
+            &vault,
+            None,
+            "acme-1".to_string(),
+            "cfg_plugin_chat".to_string(),
+            true,
+            vec![("workspace".to_string(), "myteam".to_string())],
+            vec![("api_key".to_string(), "sekrit".to_string())],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("plugin-kind account saves");
+
+        let account = &config.messengers[0];
+        assert_eq!(account.messenger_type.as_str(), "cfg_plugin_chat");
+        assert_eq!(
+            account.extra.get("workspace").map(String::as_str),
+            Some("myteam"),
+            "plain plugin field persists in `extra`"
+        );
+        assert_eq!(
+            account.secret_ref("api_key"),
+            Some("messenger/acme-1/api_key"),
+            "plugin secret is vault-referenced, not in config"
+        );
+        assert!(!account.extra.contains_key("api_key"));
+        assert_eq!(
+            vault
+                .lock()
+                .await
+                .read_service_credential("messenger/acme-1/api_key")
+                .unwrap()
+                .map(String::from)
+                .as_deref(),
+            Some("sekrit")
+        );
     }
 
     #[tokio::test]
@@ -1609,7 +1707,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unsupported_account_can_still_be_disabled() {
-        if feature_available(Some("matrix")) {
+        if kind_available("matrix") {
             return; // This build can run it, so the scenario doesn't exist.
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1619,7 +1717,7 @@ mod tests {
         // that could. The panel flags it unsupported and offers Disable.
         config.messengers.push(MessengerConfig {
             name: "mx".to_string(),
-            messenger_type: "matrix".to_string(),
+            messenger_type: "matrix".into(),
             enabled: true,
             ..Default::default()
         });
@@ -1774,7 +1872,7 @@ mod tests {
         // and never migrated.
         let mut legacy = MessengerConfig {
             name: "acct".to_string(),
-            messenger_type: "telegram".to_string(),
+            messenger_type: "telegram".into(),
             enabled: true,
             ..Default::default()
         };
@@ -1817,7 +1915,7 @@ mod tests {
 
         let mut legacy = MessengerConfig {
             name: "acct".to_string(),
-            messenger_type: "telegram".to_string(),
+            messenger_type: "telegram".into(),
             enabled: true,
             ..Default::default()
         };
@@ -2050,7 +2148,7 @@ mod tests {
             ClientPayload::MessengerAccountSave {
                 original_name: None,
                 name: "tg".to_string(),
-                messenger_type: "telegram".to_string(),
+                messenger_type: "telegram".into(),
                 enabled: true,
                 fields: Vec::new(),
                 secrets: vec![("token".to_string(), "123:secret".to_string().into())],
@@ -2605,8 +2703,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_feature_name_reads_as_unavailable_rather_than_supported() {
-        assert!(feature_available(None));
-        assert!(!feature_available(Some("time-travel")));
+    fn availability_is_registry_membership() {
+        // Ungated builtins always register; a kind nobody registered is
+        // unavailable no matter what the static table thinks of it.
+        assert!(kind_available("console"));
+        assert!(!kind_available("time-travel"));
     }
 }

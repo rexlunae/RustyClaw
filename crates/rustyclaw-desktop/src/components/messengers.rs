@@ -193,7 +193,7 @@ pub fn MessengersDialog(props: MessengersDialogProps) -> Element {
                         div { class: "box is-clickable mb-2",
                             key: "{kind.id}",
                             onclick: move |_| {
-                                editor.set(Some(MessengerEditorData::new(kind.id)));
+                                editor.set(Some(MessengerEditorData::new(&kind.id)));
                                 picking_kind.set(false);
                             },
                             strong { "{kind.icon} {kind.label}" }
