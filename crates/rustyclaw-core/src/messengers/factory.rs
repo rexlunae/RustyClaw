@@ -10,7 +10,7 @@
 use crate::config::MessengerConfig;
 #[cfg(feature = "matrix")]
 use crate::messengers::MatrixMessenger;
-use crate::messengers::{GenericMessenger, Messenger};
+use crate::messengers::{GenericMessenger, Messenger, MessengerKind};
 use anyhow::{Context, Result};
 use chat_system::config as chat_system_config;
 
@@ -25,18 +25,18 @@ pub(super) fn construct(config: &MessengerConfig) -> Result<Box<dyn Messenger>> 
     }
 
     let name = config.name.clone();
-    let messenger: Box<dyn Messenger> = match config.messenger_type.as_str() {
-        "irc" => build_irc_messenger(config, name)?,
-        "slack" => build_slack_messenger(config, name)?,
-        "google_chat" => build_google_chat_messenger(config, name)?,
-        "teams" => build_teams_messenger(config, name)?,
-        "imessage" => build_imessage_messenger(config, name)?,
+    let messenger: Box<dyn Messenger> = match &config.messenger_type {
+        MessengerKind::Irc => build_irc_messenger(config, name)?,
+        MessengerKind::Slack => build_slack_messenger(config, name)?,
+        MessengerKind::GoogleChat => build_google_chat_messenger(config, name)?,
+        MessengerKind::Teams => build_teams_messenger(config, name)?,
+        MessengerKind::IMessage => build_imessage_messenger(config, name)?,
         #[cfg(feature = "matrix")]
-        "matrix" => build_matrix_messenger(config, name)?,
+        MessengerKind::Matrix => build_matrix_messenger(config, name)?,
         // Registered kinds always take one of the arms above or the generic
         // path; reaching here means a factory was registered for a kind this
         // function was never taught. A bug, reported as one.
-        other => anyhow::bail!("No builder for messenger type: {}", other),
+        other => anyhow::bail!("No builder for messenger type: {other}"),
     };
     Ok(messenger)
 }
@@ -46,23 +46,23 @@ fn generic_messenger_config(
 ) -> Result<Option<chat_system_config::MessengerConfig>> {
     let name = config.name.clone();
 
-    let messenger = match config.messenger_type.as_str() {
-        "console" => Some(chat_system_config::MessengerConfig::Console(
+    let messenger = match &config.messenger_type {
+        MessengerKind::Console => Some(chat_system_config::MessengerConfig::Console(
             chat_system_config::ConsoleConfig { name },
         )),
-        "discord" => Some(chat_system_config::MessengerConfig::Discord(
+        MessengerKind::Discord => Some(chat_system_config::MessengerConfig::Discord(
             chat_system_config::DiscordConfig {
                 name,
                 token: config.token.clone().context("Discord requires 'token'")?,
             },
         )),
-        "telegram" => Some(chat_system_config::MessengerConfig::Telegram(
+        MessengerKind::Telegram => Some(chat_system_config::MessengerConfig::Telegram(
             chat_system_config::TelegramConfig {
                 name,
                 token: config.token.clone().context("Telegram requires 'token'")?,
             },
         )),
-        "webhook" => Some(chat_system_config::MessengerConfig::Webhook(
+        MessengerKind::Webhook => Some(chat_system_config::MessengerConfig::Webhook(
             chat_system_config::WebhookConfig {
                 name,
                 url: config
@@ -71,14 +71,16 @@ fn generic_messenger_config(
                     .context("Webhook requires 'webhook_url'")?,
             },
         )),
-        "slack" if config.app_token.is_none() && config.default_channel.is_none() => Some(
-            chat_system_config::MessengerConfig::Slack(chat_system_config::SlackConfig {
-                name,
-                token: config.token.clone().context("Slack requires 'token'")?,
-            }),
-        ),
-        "irc" if config.password.is_none() => Some(chat_system_config::MessengerConfig::Irc(
-            chat_system_config::IrcConfig {
+        MessengerKind::Slack if config.app_token.is_none() && config.default_channel.is_none() => {
+            Some(chat_system_config::MessengerConfig::Slack(
+                chat_system_config::SlackConfig {
+                    name,
+                    token: config.token.clone().context("Slack requires 'token'")?,
+                },
+            ))
+        }
+        MessengerKind::Irc if config.password.is_none() => Some(
+            chat_system_config::MessengerConfig::Irc(chat_system_config::IrcConfig {
                 name,
                 server: config.server.clone().context("IRC requires 'server'")?,
                 port: config.port.unwrap_or(6697),
@@ -88,9 +90,9 @@ fn generic_messenger_config(
                     .unwrap_or_else(|| "RustyClaw".to_string()),
                 channels: config.irc_channels.clone(),
                 tls: config.use_tls.unwrap_or(false),
-            },
-        )),
-        "google_chat"
+            }),
+        ),
+        MessengerKind::GoogleChat
             if config.credentials_path.is_none()
                 && (config.webhook_url.is_some()
                     || (config.token.is_some() && config.spaces.len() == 1)) =>
@@ -104,7 +106,7 @@ fn generic_messenger_config(
                 },
             ))
         }
-        "teams" if config.app_id.is_none() && config.app_password.is_none() => Some(
+        MessengerKind::Teams if config.app_id.is_none() && config.app_password.is_none() => Some(
             chat_system_config::MessengerConfig::Teams(chat_system_config::TeamsConfig {
                 name,
                 webhook_url: Some(
@@ -118,7 +120,7 @@ fn generic_messenger_config(
                 channel_id: None,
             }),
         ),
-        "imessage" if config.server.is_none() && config.password.is_none() => {
+        MessengerKind::IMessage if config.server.is_none() && config.password.is_none() => {
             Some(chat_system_config::MessengerConfig::IMessage(
                 chat_system_config::IMessageConfig { name },
             ))
@@ -126,15 +128,15 @@ fn generic_messenger_config(
         // Matrix is handled entirely by build_matrix_messenger to ensure
         // state_dir, allowed_chats, and dm_config are always applied.
         #[cfg(feature = "signal-cli")]
-        "signal" | "signal-cli" => Some(chat_system_config::MessengerConfig::SignalCli(
-            chat_system_config::SignalCliConfig {
+        MessengerKind::Signal | MessengerKind::SignalCli => Some(
+            chat_system_config::MessengerConfig::SignalCli(chat_system_config::SignalCliConfig {
                 name,
                 phone_number: config.phone.clone().context("Signal requires 'phone'")?,
                 cli_path: "signal-cli".to_string(),
-            },
-        )),
+            }),
+        ),
         #[cfg(feature = "whatsapp")]
-        "whatsapp" => {
+        MessengerKind::WhatsApp => {
             let db_path = whatsapp_state_dir(&name)?
                 .join(format!("{name}.db"))
                 .to_string_lossy()

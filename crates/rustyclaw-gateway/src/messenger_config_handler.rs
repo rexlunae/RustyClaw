@@ -237,7 +237,7 @@ async fn account_dto(
     stored: &[String],
     vault_locked: bool,
 ) -> MessengerAccountDto {
-    let spec = known_spec(&messenger.messenger_type);
+    let spec = known_spec(messenger.messenger_type.as_str());
 
     // Non-secret fields only. A secret's value is in the vault (or, for a
     // not-yet-migrated account, in plaintext config) and either way it is not
@@ -288,7 +288,7 @@ async fn account_dto(
                 messenger.messenger_type
             )),
         ),
-        Some(s) if !kind_available(&messenger.messenger_type) => (
+        Some(s) if !kind_available(messenger.messenger_type.as_str()) => (
             false,
             s.feature.as_deref().map(|f| {
                 format!(
@@ -303,7 +303,7 @@ async fn account_dto(
 
     MessengerAccountDto {
         name: messenger.name.clone(),
-        messenger_type: messenger.messenger_type.clone(),
+        messenger_type: messenger.messenger_type.to_string(),
         enabled: messenger.enabled,
         fields,
         vaulted,
@@ -473,7 +473,7 @@ async fn save_account(
     // forever. The entries themselves are deleted only after this save
     // persists, so a failure further down does not cost a working login.
     let mut obsolete: Vec<String> = Vec::new();
-    if !entry.messenger_type.is_empty() && entry.messenger_type != messenger_type {
+    if !entry.messenger_type.is_unset() && entry.messenger_type != messenger_type.as_str() {
         obsolete.extend(entry.secret_refs.values().cloned());
         entry.secret_refs.clear();
         // The plaintext twins go too. A never-migrated credential otherwise
@@ -482,7 +482,7 @@ async fn save_account(
         // "move to vault" affordance never sees it — while the value sits
         // re-serialised in config.toml and can even satisfy a same-named
         // required field on the new backend during validation.
-        if let Some(old_spec) = known_spec(&entry.messenger_type) {
+        if let Some(old_spec) = known_spec(entry.messenger_type.as_str()) {
             for field in old_spec.fields.iter().filter(|f| f.is_secret()) {
                 entry.set_field(&field.name, "").ignore();
             }
@@ -490,7 +490,7 @@ async fn save_account(
     }
 
     entry.name = name.clone();
-    entry.messenger_type = messenger_type.clone();
+    entry.messenger_type = messenger_type.as_str().into();
     entry.enabled = enabled;
 
     let mut errors = Vec::new();
@@ -891,7 +891,7 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
         return Ok(Some(format!("'{name}' has no plaintext credentials")));
     }
 
-    let label = known_spec(&entry.messenger_type)
+    let label = known_spec(entry.messenger_type.as_str())
         .map_or_else(|| "Messenger".to_string(), |s| s.label.to_string());
     let mut moved = Vec::new();
     let mut created: Vec<String> = Vec::new();
@@ -1629,7 +1629,7 @@ mod tests {
         // that could. The panel flags it unsupported and offers Disable.
         config.messengers.push(MessengerConfig {
             name: "mx".to_string(),
-            messenger_type: "matrix".to_string(),
+            messenger_type: "matrix".into(),
             enabled: true,
             ..Default::default()
         });
@@ -1784,7 +1784,7 @@ mod tests {
         // and never migrated.
         let mut legacy = MessengerConfig {
             name: "acct".to_string(),
-            messenger_type: "telegram".to_string(),
+            messenger_type: "telegram".into(),
             enabled: true,
             ..Default::default()
         };
@@ -1827,7 +1827,7 @@ mod tests {
 
         let mut legacy = MessengerConfig {
             name: "acct".to_string(),
-            messenger_type: "telegram".to_string(),
+            messenger_type: "telegram".into(),
             enabled: true,
             ..Default::default()
         };
@@ -2060,7 +2060,7 @@ mod tests {
             ClientPayload::MessengerAccountSave {
                 original_name: None,
                 name: "tg".to_string(),
-                messenger_type: "telegram".to_string(),
+                messenger_type: "telegram".into(),
                 enabled: true,
                 fields: Vec::new(),
                 secrets: vec![("token".to_string(), "123:secret".to_string().into())],

@@ -144,6 +144,14 @@ Verdicts from the audit of the ~16 largest files:
   fixes `Default` yielding an empty string instead of "standalone").
 - **[fixed]** `AccessPolicy` gained `from_badge`/`cycled` so UI layers can
   stop hand-rolling `"OPEN" → "ASK" → "AUTH" → "SKILL"` rotation tables.
+- **[fixed]** `MessengerConfig.messenger_type: String` → `MessengerKind`
+  (`messengers/kind.rs`): unit variants for the in-tree vocabulary,
+  `Other(String)` for plugin-registered/unknown ids — the kind space is
+  genuinely open, so the enum closes what is closed and names what isn't.
+  Serde keeps the bare-string form, so config files and wire frames are
+  unchanged; the legacy `signal-cli` spelling is its own variant so files
+  round-trip verbatim. The two factory matches (`messengers/factory.rs`)
+  now match on variants.
 
 ### Follow-ups (prioritized)
 
@@ -161,16 +169,14 @@ Verdicts from the audit of the ~16 largest files:
 3. **`SandboxConfig.mode: String`** — `SandboxMode` exists with alias-aware
    `FromStr`; the config field should be typed (custom `Deserialize` via
    `FromStr` to keep aliases like `"bubblewrap"`).
-4. **`messenger_type`** — two big matches in `messenger_handler/builders.rs`
-   over a closed set of ~10 messenger names.
-5. **Status DTOs** — `McpServerDto.status`, `ServiceInfoDto.status`,
+4. **Status DTOs** — `McpServerDto.status`, `ServiceInfoDto.status`,
    swarm agent status/role in `rustyclaw-view` (each matched in 2–3 places,
    capitalization-sensitive).
-6. **`provider: String`** — the value set is open (`custom` + arbitrary
+5. **`provider: String`** — the value set is open (`custom` + arbitrary
    base URLs) so the field stays a string, but the scattered
    `provider == "anthropic"` special-cases should route through one place
    (partially addressed by `providers::call_with_tools`, see §5).
-7. Smaller closed sets: `UsageStatsRequest.period` (`day|week|month|all`),
+6. Smaller closed sets: `UsageStatsRequest.period` (`day|week|month|all`),
    observability `direction` (`inbound|outbound`), view `auth_hint`
    (`apikey|deviceflow|none`), `LogsRequest.source` (closed prefix + open
    service-name tail → enum with a `Service(String)` variant).

@@ -4,9 +4,11 @@
 //! This module re-exports them for backwards compatibility.
 
 mod factory;
+pub mod kind;
 pub mod registry;
 pub mod setup;
 
+pub use kind::MessengerKind;
 pub use registry::{KindSource, MessengerFactory, MessengerRegistry, messenger_registry};
 
 pub use chat_system::messengers::{

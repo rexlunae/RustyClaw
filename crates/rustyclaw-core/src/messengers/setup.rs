@@ -831,7 +831,7 @@ impl crate::config::MessengerConfig {
     /// Secret fields still stored in plaintext in `config.toml`.
     pub fn plaintext_credentials(&self) -> Vec<PlaintextField> {
         plaintext_fields(
-            &self.messenger_type,
+            self.messenger_type.as_str(),
             |f| self.field_value(f),
             |f| self.secret_refs.contains_key(f),
         )

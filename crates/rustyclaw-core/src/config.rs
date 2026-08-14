@@ -311,9 +311,11 @@ pub struct MessengerConfig {
     /// Display name for this messenger instance.
     #[serde(default)]
     pub name: String,
-    /// Messenger type: telegram, discord, signal, matrix, webhook.
+    /// Which backend this account is: an in-tree kind, or
+    /// [`MessengerKind::Other`] for plugin-registered kinds. Serialized as the
+    /// string id (`"telegram"`, `"matrix"`, …).
     #[serde(default)]
-    pub messenger_type: String,
+    pub messenger_type: crate::messengers::MessengerKind,
     /// Whether this messenger is enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -441,7 +443,7 @@ impl std::fmt::Debug for MessengerConfig {
         }
         f.debug_struct("MessengerConfig")
             .field("name", &self.name)
-            .field("messenger_type", &self.messenger_type)
+            .field("messenger_type", &self.messenger_type.as_str())
             .field("enabled", &self.enabled)
             .field("config_path", &self.config_path)
             .field("token", &redact(&self.token))

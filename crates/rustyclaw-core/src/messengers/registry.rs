@@ -118,7 +118,7 @@ impl MessengerRegistry {
     /// the one retired kind names its replacement, and everything else is
     /// plainly unknown.
     pub fn create(&self, config: &MessengerConfig) -> anyhow::Result<Box<dyn Messenger>> {
-        let id = canonical_id(&config.messenger_type);
+        let id = config.messenger_type.canonical_str();
         let factory = {
             let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
             inner
@@ -131,7 +131,7 @@ impl MessengerRegistry {
         // code, and holding a registry lock across them invites deadlock.
         match factory {
             Some(f) => f(config),
-            None => Err(unknown_kind_error(&config.messenger_type)),
+            None => Err(unknown_kind_error(config.messenger_type.as_str())),
         }
     }
 
