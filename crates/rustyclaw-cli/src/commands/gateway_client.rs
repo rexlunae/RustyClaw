@@ -92,11 +92,32 @@ pub(crate) fn run_local_command(config: &mut Config, input: &str) -> Result<()> 
     Ok(())
 }
 
+/// Read a 2FA code from the terminal and answer the gateway's challenge.
+///
+/// The prompt is echo-free: the code is a credential for its 30 seconds.
+async fn answer_auth_challenge(
+    writer: &mut (impl SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
+) -> Result<()> {
+    let code =
+        rpassword::prompt_password(format!("{} 2FA code: ", rustyclaw_core::theme::info("🔑")))
+            .unwrap_or_default();
+    let auth_frame = ClientFrame {
+        frame_type: ClientFrameType::AuthResponse,
+        payload: ClientPayload::AuthResponse {
+            code: code.trim().to_string(),
+        },
+    };
+    let bytes =
+        serialize_frame(&auth_frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+    writer
+        .send(Message::Binary(bytes.into()))
+        .await
+        .context("Failed to send 2FA code")?;
+    Ok(())
+}
+
 /// Send a reload command to the running gateway and wait for the result.
-pub(crate) async fn send_gateway_reload(
-    gateway_url: &str,
-    totp_enabled: bool,
-) -> Result<(String, String)> {
+pub(crate) async fn send_gateway_reload(gateway_url: &str) -> Result<(String, String)> {
     let url = Url::parse(gateway_url).context("Invalid gateway URL")?;
 
     let (ws_stream, _) = tokio_tungstenite::connect_async(url.to_string())
@@ -104,101 +125,15 @@ pub(crate) async fn send_gateway_reload(
         .context("Failed to connect to gateway. Is it running?")?;
     let (mut writer, mut reader) = ws_stream.split();
 
-    // Handle auth challenge if TOTP is enabled
-    if totp_enabled {
-        loop {
-            let msg = match reader.next().await {
-                Some(m) => m,
-                None => anyhow::bail!("Connection closed"),
-            };
-            let msg = msg.context("Gateway read error")?;
-            // Handle both binary and text frames (for backwards compat during transition)
-            match msg {
-                Message::Binary(data) => {
-                    if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
-                        match frame.frame_type {
-                            ServerFrameType::AuthChallenge => {
-                                if let ServerPayload::AuthChallenge { method: _ } = frame.payload {
-                                    let code = rpassword::prompt_password(format!(
-                                        "{} 2FA code: ",
-                                        rustyclaw_core::theme::info("🔑")
-                                    ))
-                                    .unwrap_or_default();
-                                    let auth_frame = ClientFrame {
-                                        frame_type: ClientFrameType::AuthResponse,
-                                        payload: ClientPayload::AuthResponse {
-                                            code: code.trim().to_string(),
-                                        },
-                                    };
-                                    let bytes = serialize_frame(&auth_frame)
-                                        .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                                    writer.send(Message::Binary(bytes.into())).await?;
-                                }
-                            }
-                            ServerFrameType::AuthResult => {
-                                if let ServerPayload::AuthResult {
-                                    ok,
-                                    message,
-                                    retry: _,
-                                } = frame.payload
-                                {
-                                    if !ok {
-                                        let msg = message.as_deref().unwrap_or("Auth failed");
-                                        anyhow::bail!("{}", msg);
-                                    }
-                                    break; // Auth succeeded
-                                }
-                            }
-                            ServerFrameType::Hello => {
-                                break; // No auth needed
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Message::Text(text) => {
-                    // Also handle text frames for backwards compat
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
-                        let frame_type = val.get("type").and_then(|t| t.as_str());
-                        if frame_type == Some("auth_challenge") {
-                            let code = rpassword::prompt_password(format!(
-                                "{} 2FA code: ",
-                                rustyclaw_core::theme::info("🔑")
-                            ))
-                            .unwrap_or_default();
-                            let auth_frame = ClientFrame {
-                                frame_type: ClientFrameType::AuthResponse,
-                                payload: ClientPayload::AuthResponse {
-                                    code: code.trim().to_string(),
-                                },
-                            };
-                            let bytes = serialize_frame(&auth_frame)
-                                .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                            writer.send(Message::Binary(bytes.into())).await?;
-                            continue;
-                        }
-                        if frame_type == Some("auth_result") {
-                            let ok = val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
-                            if !ok {
-                                let msg = val
-                                    .get("message")
-                                    .and_then(|m| m.as_str())
-                                    .unwrap_or("Auth failed");
-                                anyhow::bail!("{}", msg);
-                            }
-                            break;
-                        }
-                        if frame_type == Some("hello") {
-                            break;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Wait for hello frame
+    // ── Handshake ───────────────────────────────────────────────────
+    //
+    // Answer whatever the gateway asks for, rather than deciding in
+    // advance from this machine's config whether a code will be wanted.
+    // The gateway is the one that knows: it reads the vault the secret is
+    // enrolled in, while a local `totp_enabled` is only what onboarding
+    // last recorded here. Gating the prompt on the flag meant an
+    // `auth_challenge` could arrive with nothing willing to prompt for it,
+    // and the reload sat waiting for a code the user was never asked for.
     let mut _result_provider = String::new();
     let mut _result_model = String::new();
     loop {
@@ -216,23 +151,24 @@ pub(crate) async fn send_gateway_reload(
                                 break;
                             }
                         }
-                        ServerFrameType::AuthChallenge if totp_enabled => {
-                            // Prompt the user for their TOTP 2FA code and reply
-                            // with an AuthResponse frame.
-                            let code = rpassword::prompt_password(format!(
-                                "{} 2FA code: ",
-                                rustyclaw_core::theme::info("🔑")
-                            ))
-                            .unwrap_or_default();
-                            let auth_frame = ClientFrame {
-                                frame_type: ClientFrameType::AuthResponse,
-                                payload: ClientPayload::AuthResponse {
-                                    code: code.trim().to_string(),
-                                },
-                            };
-                            let bytes = serialize_frame(&auth_frame)
-                                .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                            writer.send(Message::Binary(bytes.into())).await?;
+                        ServerFrameType::AuthChallenge => {
+                            answer_auth_challenge(&mut writer).await?;
+                        }
+                        ServerFrameType::AuthResult => {
+                            // A rejected code ends the attempt here; the
+                            // gateway allows retries, but a `retry` this
+                            // command re-prompted for would be answered by
+                            // the next challenge frame anyway.
+                            if let ServerPayload::AuthResult { ok, message, .. } = frame.payload
+                                && !ok
+                            {
+                                anyhow::bail!("{}", message.as_deref().unwrap_or("Auth failed"));
+                            }
+                        }
+                        ServerFrameType::AuthLocked => {
+                            if let ServerPayload::AuthLocked { message, .. } = frame.payload {
+                                anyhow::bail!("{}", message);
+                            }
                         }
                         _ => {}
                     }
@@ -241,43 +177,41 @@ pub(crate) async fn send_gateway_reload(
             Some(Ok(Message::Text(text))) => {
                 // Also handle text frames for backwards compat
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
-                    let frame_type = val.get("type").and_then(|t| t.as_str());
-                    if frame_type == Some("hello") || frame_type == Some("auth_challenge") {
-                        if frame_type == Some("auth_challenge") && !totp_enabled {
-                            let code = rpassword::prompt_password(format!(
-                                "{} 2FA code: ",
-                                rustyclaw_core::theme::info("🔑")
-                            ))
-                            .unwrap_or_default();
-                            let auth_frame = ClientFrame {
-                                frame_type: ClientFrameType::AuthResponse,
-                                payload: ClientPayload::AuthResponse {
-                                    code: code.trim().to_string(),
-                                },
-                            };
-                            let bytes = serialize_frame(&auth_frame)
-                                .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                            writer.send(Message::Binary(bytes.into())).await?;
-                            continue;
+                    match val.get("type").and_then(|t| t.as_str()) {
+                        Some("auth_challenge") => {
+                            answer_auth_challenge(&mut writer).await?;
                         }
-                        let provider = val
-                            .get("provider")
-                            .and_then(|p| p.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let model = val
-                            .get("model")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        _result_provider = provider;
-                        _result_model = model;
-                        break;
+                        Some("auth_result") => {
+                            if !val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false) {
+                                let msg = val
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("Auth failed");
+                                anyhow::bail!("{}", msg);
+                            }
+                        }
+                        Some("hello") => {
+                            _result_provider = val
+                                .get("provider")
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            _result_model = val
+                                .get("model")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            break;
+                        }
+                        _ => {}
                     }
                 }
             }
             Some(Ok(Message::Close(_))) => {
                 anyhow::bail!("Gateway closed connection");
+            }
+            Some(Err(e)) => {
+                anyhow::bail!("Gateway read error: {}", e);
             }
             None => {
                 anyhow::bail!("Gateway disconnected");

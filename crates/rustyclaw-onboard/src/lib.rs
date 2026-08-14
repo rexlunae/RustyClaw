@@ -261,6 +261,27 @@ pub fn run_onboard_wizard(
             config.secrets_password_protected = true;
         }
 
+        // The same rule as the password just above: the secret enrolled
+        // in the vault is what 2FA is, `totp_enabled` only records
+        // what a previous run chose, and a config replaced by defaults keeps
+        // the secret while losing the flag. Reconciling here — before the
+        // status line, the verify step and the reconfigure menu below all
+        // read it — repairs the drift instead of working around it, since
+        // onboarding writes the config back on the way out.
+        let totp_on = secrets.totp_required(config.totp_enabled);
+        if totp_on && !config.totp_enabled {
+            println!(
+                "  {}",
+                t::warn("2FA is enrolled in the vault but config disagrees.")
+            );
+            println!(
+                "  {}",
+                t::muted("(Re-enabling it here; the vault is the authority.)")
+            );
+            println!();
+        }
+        config.totp_enabled = totp_on;
+
         // Verify TOTP if enabled.
         if config.totp_enabled {
             verify_totp_loop(&mut reader, secrets)?;
