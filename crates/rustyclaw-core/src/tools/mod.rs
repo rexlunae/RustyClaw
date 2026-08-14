@@ -6,7 +6,12 @@
 // function declarations).
 
 pub mod agent_setup;
+pub mod catalog;
 pub mod error;
+pub use catalog::{
+    CatalogError, PluginToolSpec, RegisteredTool, SourceInfo, ToolCatalog, ToolExec, ToolSnapshot,
+    ToolSource, catalog,
+};
 pub use error::{ToolError, ToolResult};
 
 use tracing::{debug, instrument, warn};
@@ -300,9 +305,11 @@ impl ToolPermission {
     }
 }
 
-/// Return all tool names as a sorted list.
-pub fn all_tool_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = all_tools().iter().map(|t| t.name).collect();
+/// Return the names of every currently-enabled tool, sorted. Reads the
+/// catalog, so it reflects runtime registrations and disabled groups.
+pub fn all_tool_names() -> Vec<String> {
+    let snapshot = catalog().snapshot();
+    let mut names: Vec<String> = snapshot.iter().map(|t| t.name.clone()).collect();
     names.sort();
     names
 }
@@ -475,145 +482,18 @@ impl std::fmt::Debug for ToolDef {
 
 // ── Tool registry ───────────────────────────────────────────────────────────
 
-/// Return all available tools.
+/// Return all built-in tool definitions.
+///
+/// This is the *seed list* the [`catalog`] registers at startup, flattened
+/// from [`catalog::builtin_groups`] so the group table is the single source
+/// of truth. Runtime consumers (schema builders, dispatch, panels) should
+/// take `catalog().snapshot()` instead — it also carries runtime-registered
+/// tools and honours disabled groups; this function does not.
 pub fn all_tools() -> Vec<&'static ToolDef> {
-    vec![
-        &READ_FILE,
-        &WRITE_FILE,
-        &EDIT_FILE,
-        &LIST_DIRECTORY,
-        &SEARCH_FILES,
-        &FIND_FILES,
-        &EXECUTE_COMMAND,
-        &WEB_FETCH,
-        &WEB_SEARCH,
-        &HTTP_REQUEST,
-        &PROCESS,
-        #[cfg(feature = "semantic-memory")]
-        &MEMORY_SEARCH,
-        &MEMORY_GET,
-        &SAVE_MEMORY,
-        &SEARCH_HISTORY,
-        &SESSION_SEARCH,
-        #[cfg(feature = "semantic-memory")]
-        &ADD_MEMORY,
-        &CRON,
-        &SESSIONS_LIST,
-        &SESSIONS_SPAWN,
-        &SESSIONS_KILL,
-        &SESSIONS_SEND,
-        &SESSIONS_HISTORY,
-        &SESSION_STATUS,
-        &AGENTS_LIST,
-        &AGENTS_CREATE,
-        &AGENTS_DELETE,
-        &SUBAGENT_LIST,
-        &SUBAGENT_CREATE,
-        &SUBAGENT_DELETE,
-        &SUBAGENT_RUN,
-        &TRIGGERS_CREATE,
-        &TRIGGERS_LIST,
-        &TRIGGERS_UPDATE,
-        &TRIGGERS_DELETE,
-        &TRIGGERS_SET_ENABLED,
-        &APPLY_PATCH,
-        &SECRETS_LIST,
-        &SECRETS_GET,
-        &SECRETS_STORE,
-        &SECRETS_SET_POLICY,
-        &SECRETS_LINK_TRIGGER,
-        &GATEWAY,
-        &MESSAGE,
-        &TTS,
-        &IMAGE,
-        &NODES,
-        &BROWSER,
-        &CANVAS,
-        &SKILL_LIST,
-        &SKILL_SEARCH,
-        &SKILL_INSTALL,
-        &SKILL_INFO,
-        &SKILL_ENABLE,
-        &SKILL_LINK_SECRET,
-        &SKILL_CREATE,
-        &MCP_LIST,
-        &MCP_CONNECT,
-        &MCP_DISCONNECT,
-        &TASK_LIST,
-        &TASK_STATUS,
-        &TASK_FOREGROUND,
-        &TASK_BACKGROUND,
-        &TASK_CANCEL,
-        &TASK_PAUSE,
-        &TASK_RESUME,
-        &TASK_INPUT,
-        &TASK_DESCRIBE,
-        &THREAD_DESCRIBE,
-        &SET_THREAD_CAPTION,
-        &THREADS_LIST,
-        &MODEL_LIST,
-        &MODEL_ENABLE,
-        &MODEL_DISABLE,
-        &MODEL_SET,
-        &MODEL_RECOMMEND,
-        &HOST_INFO,
-        &LOAD_STATUS,
-        &SERVICE_LIST,
-        &SERVICE_START,
-        &SERVICE_STOP,
-        &SERVICE_RESTART,
-        &SERVICE_LOGS,
-        &DISK_USAGE,
-        &CLASSIFY_FILES,
-        &SYSTEM_MONITOR,
-        &BATTERY_HEALTH,
-        &APP_INDEX,
-        &CLOUD_BROWSE,
-        &BROWSER_CACHE,
-        &SCREENSHOT,
-        &CLIPBOARD,
-        &AUDIT_SENSITIVE,
-        &SECURE_DELETE,
-        &SUMMARIZE_FILE,
-        &PKG_MANAGE,
-        &NET_INFO,
-        &NET_SCAN,
-        &SERVICE_MANAGE,
-        &USER_MANAGE,
-        &FIREWALL,
-        &OLLAMA_MANAGE,
-        &EXO_MANAGE,
-        &AST_GREP_MANAGE,
-        &UV_MANAGE,
-        &NPM_MANAGE,
-        &AGENT_SETUP,
-        &ASK_USER,
-        &CLIENT_DOM_QUERY,
-        &PDF,
-        &CHART,
-        #[cfg(feature = "office-docs")]
-        &DOCUMENT,
-        &SWARM_CREATE,
-        &SWARM_LIST,
-        &SWARM_STATUS,
-        &SWARM_SEND,
-        &SWARM_STOP,
-        &SWARM_DELETE,
-        &SWARM_TEMPLATES,
-        &TODO,
-        &SKILL_CURATOR,
-        &WEB_EXTRACT,
-        #[cfg(feature = "image-gen")]
-        &IMAGE_GENERATE,
-        &PLUGIN_LIST,
-        &PLUGIN_STATE_GET,
-        &PLUGIN_STATE_SET,
-        &PLUGIN_STATE_PATCH,
-        &PLUGIN_CREATE,
-        &FREENET,
-        &RIVER,
-        &ATLAS,
-    ]
+    catalog::builtin_groups()
+        .into_iter()
+        .flat_map(|(_, defs)| defs)
+        .collect()
 }
 
 mod definitions;
@@ -756,8 +636,18 @@ pub async fn execute_tool_streaming(
 ) -> ToolResult {
     debug!("Executing tool");
 
+    // The catalog is the authority on what exists *right now*: a tool from a
+    // disabled group or an unloaded plugin is gone from the snapshot and must
+    // fail here exactly like a hallucinated name — it is no longer advertised
+    // to the model, so calls can only be stale or invented.
+    let snapshot = catalog().snapshot();
+    let Some(registered) = snapshot.get(name).cloned() else {
+        warn!(tool = name, "Unknown or disabled tool requested");
+        return Err(format!("Unknown tool: {}", name).into());
+    };
+
     // Handle async-native tools directly
-    if ASYNC_NATIVE_TOOLS.contains(&name) {
+    if matches!(registered.exec, ToolExec::AsyncNative) {
         let result = match name {
             "execute_command" => {
                 runtime::exec_execute_command_streaming(args, workspace_dir, output).await
@@ -816,16 +706,9 @@ pub async fn execute_tool_streaming(
         return result.map(|s| crate::tool_pipeline::apply_global(name, args, s));
     }
 
-    // Find the tool for sync execution
-    let tool = all_tools().into_iter().find(|t| t.name == name);
-
-    let Some(tool) = tool else {
-        warn!(tool = name, "Unknown tool requested");
-        return Err(format!("Unknown tool: {}", name).into());
-    };
-
-    // Clone what we need for the blocking task
-    let execute_fn = tool.execute;
+    // Sync built-ins and dynamic (plugin) tools both run on the blocking
+    // pool; the only difference is whether the executor is a fn pointer or a
+    // closure carrying the plugin's state.
     let args_for_pipeline = args.clone();
     let args = args.clone();
     let workspace_dir = workspace_dir.to_path_buf();
@@ -842,7 +725,12 @@ pub async fn execute_tool_streaming(
     let result = tokio::task::spawn_blocking(move || {
         crate::tool_caller::with_caller_blocking(caller, || {
             crate::tools::guard_override::with_granted_blocking(guard_granted, || {
-                execute_fn(&args, &workspace_dir)
+                match &registered.exec {
+                    ToolExec::Sync(f) => f(&args, &workspace_dir),
+                    ToolExec::Dynamic(f) => f(&args, &workspace_dir),
+                    // Handled (and returned from) above.
+                    ToolExec::AsyncNative => unreachable!("async-native handled earlier"),
+                }
             })
         })
     })

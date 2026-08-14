@@ -254,6 +254,11 @@ pub struct Config {
     /// Per-tool permission overrides. Tools not listed here default to Allow.
     #[serde(default)]
     pub tool_permissions: HashMap<String, crate::tools::ToolPermission>,
+    /// In-tree tool groups (see `tools::catalog`) to disable wholesale.
+    /// A disabled group's tools are not advertised to the model and cannot
+    /// execute. Groups absent here are enabled — on by default.
+    #[serde(default)]
+    pub disabled_tool_groups: Vec<String>,
     /// Rate and concurrency budgets applied to tool use, per caller.
     #[serde(default)]
     pub tool_limits: crate::tool_limits::ToolLimitsConfig,
@@ -517,6 +522,7 @@ impl Default for Config {
             messenger_poll_interval_ms: None,
             messenger_max_concurrent: None,
             tool_permissions: HashMap::new(),
+            disabled_tool_groups: Vec::new(),
             tool_limits: crate::tool_limits::ToolLimitsConfig::default(),
             tool_healing: crate::tool_healing::ToolHealingConfig::default(),
             tls_cert: None,

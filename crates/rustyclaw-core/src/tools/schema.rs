@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::params::*;
 use super::{
-    ToolDef, ToolParam, all_tools, ast_grep, freenet, kernel_tools, mcp_tools, model_tools, plugin,
+    ToolDef, ToolParam, ast_grep, freenet, kernel_tools, mcp_tools, model_tools, plugin,
     service_tools, session_search, skill_curator, subagent_tools, task_tools, todo_tool,
     web_extract,
 };
@@ -53,9 +53,11 @@ fn params_to_json_schema(params: &[ToolParam]) -> (Value, Value) {
     (Value::Object(properties), Value::Array(required))
 }
 
-/// Resolve the parameter list for a tool (static defs use empty vecs
-/// because Vec isn't const; we resolve at call time).
-fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
+/// Resolve the parameter list for a built-in tool (static defs use empty
+/// vecs because Vec isn't const). Called once per tool at catalog
+/// registration; runtime consumers read the resolved copy off the
+/// [`RegisteredTool`](super::RegisteredTool) instead of this table.
+pub(super) fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
     if !tool.parameters.is_empty() {
         return tool.parameters.clone();
     }
@@ -209,11 +211,11 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
 /// { "type": "function", "function": { "name", "description", "parameters": { … } } }
 /// ```
 pub fn tools_openai() -> Vec<Value> {
-    all_tools()
-        .into_iter()
+    super::catalog()
+        .snapshot()
+        .iter()
         .map(|t| {
-            let params = resolve_params(t);
-            let (properties, required) = params_to_json_schema(&params);
+            let (properties, required) = params_to_json_schema(&t.params);
             json!({
                 "type": "function",
                 "function": {
@@ -236,11 +238,11 @@ pub fn tools_openai() -> Vec<Value> {
 /// { "name", "description", "input_schema": { … } }
 /// ```
 pub fn tools_anthropic() -> Vec<Value> {
-    all_tools()
-        .into_iter()
+    super::catalog()
+        .snapshot()
+        .iter()
         .map(|t| {
-            let params = resolve_params(t);
-            let (properties, required) = params_to_json_schema(&params);
+            let (properties, required) = params_to_json_schema(&t.params);
             json!({
                 "name": t.name,
                 "description": t.description,
@@ -260,11 +262,11 @@ pub fn tools_anthropic() -> Vec<Value> {
 /// { "name", "description", "parameters": { … } }
 /// ```
 pub fn tools_google() -> Vec<Value> {
-    all_tools()
-        .into_iter()
+    super::catalog()
+        .snapshot()
+        .iter()
         .map(|t| {
-            let params = resolve_params(t);
-            let (properties, required) = params_to_json_schema(&params);
+            let (properties, required) = params_to_json_schema(&t.params);
             json!({
                 "name": t.name,
                 "description": t.description,

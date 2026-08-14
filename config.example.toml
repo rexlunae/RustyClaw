@@ -30,6 +30,12 @@ settings_dir = "/home/user/.rustyclaw"
 # Directory containing skills (optional)
 # skills_dir = "/home/user/.rustyclaw/skills"
 
+# In-tree tool groups to disable wholesale (group names are the categories
+# shown in the tool-config panel; see docs/PLUGIN_ARCHITECTURE.md §5). A
+# disabled group's tools are not advertised to the model and cannot execute.
+# All groups are enabled by default.
+# disabled_tool_groups = ["freenet", "sysadmin"]
+
 # Whether to use the secrets storage system
 use_secrets = true
 

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Runtime tool catalog (plugin architecture phase 0, `docs/PLUGIN_ARCHITECTURE.md` §5).**
+  The agent's toolset was a hardcoded list of static definitions, with three
+  side tables (parameters, summaries, panel categories) keyed on tool names —
+  nothing could add or remove a tool while the gateway ran, which the plugin
+  system needs and which blocked the plan to ship built-ins as in-tree
+  plugins. Tools now live in a `ToolCatalog`: built-ins register at startup
+  in named in-tree groups (all enabled by default; the group names are the
+  categories the tool-config panel already shows), each registration
+  resolving its parameter schema, summary, and category once. Provider
+  schemas, tool execution, the tool-config panel, and the toggle validator
+  all read catalog snapshots, so a tool registered at runtime — the plugin
+  loader lands in a later phase — is advertised to the model on the next
+  turn, executable, and toggleable like any built-in, and an unregistered
+  or group-disabled tool fails as unknown instead of executing while
+  unadvertised. New config: `disabled_tool_groups = [...]` disables whole
+  groups (not advertised, not executable); unknown names warn rather than
+  fail the boot. Plugin tool names are namespaced by enforced
+  `<plugin>_` prefix, and registration is atomic — one bad name rejects the
+  batch.
+
 - **Self-healing tool calls (#462).** Models damage their own tool calls in
   recurring, mechanical ways, and each used to be handled by failing. A new
   `tool_healing` layer at the provider choke points now repairs what is

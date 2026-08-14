@@ -617,7 +617,7 @@ impl App {
                         .map(|tn| {
                             let perm = config
                                 .tool_permissions
-                                .get(*tn)
+                                .get(tn.as_str())
                                 .cloned()
                                 .unwrap_or_default();
                             rustyclaw_view::ToolPermInfoData {

@@ -480,6 +480,15 @@ async fn main() -> Result<()> {
         // Initialize plugin manager (dynamic UI panels).
         rustyclaw_core::tools::init_plugin_manager(&config.workspace_dir());
 
+        // Apply config-disabled tool groups to the catalog. Unknown group
+        // names are a warning, not a failed boot: a typo in config should
+        // not take the gateway down, but it must be visible.
+        for group in &config.disabled_tool_groups {
+            if let Err(e) = rustyclaw_core::tools::catalog().set_source_enabled(group, false) {
+                tracing::warn!(group = %group, error = %e, "cannot disable tool group");
+            }
+        }
+
         // Telemetry: aggregate usage stats and keep a log ring for the
         // analytics/logs panels, plus tracing output for operators. The
         // stats handle is registered globally so the panel handler can
