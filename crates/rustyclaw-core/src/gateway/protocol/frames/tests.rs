@@ -261,6 +261,69 @@ mod serialization {
     }
 
     #[test]
+    fn test_plugin_ui_event_and_tool_group_frames_roundtrip() {
+        for (frame_type, payload) in [
+            (
+                ClientFrameType::PluginUiEvent,
+                ClientPayload::PluginUiEvent {
+                    plugin_name: "chart".into(),
+                    element_id: "refresh".into(),
+                    value_json: "{\"period\":\"7d\"}".into(),
+                },
+            ),
+            (
+                ClientFrameType::ToolGroupsList,
+                ClientPayload::ToolGroupsList,
+            ),
+            (
+                ClientFrameType::ToolGroupSetEnabled,
+                ClientPayload::ToolGroupSetEnabled {
+                    key: "freenet".into(),
+                    enabled: false,
+                },
+            ),
+        ] {
+            let frame = ClientFrame {
+                frame_type,
+                payload,
+            };
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ClientFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+            assert_eq!(decoded.frame_type as u8, frame_type as u8);
+        }
+
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ToolGroupsResult,
+            payload: ServerPayload::ToolGroupsResult {
+                groups: vec![ToolGroupDto {
+                    key: "files".into(),
+                    enabled: true,
+                    tool_count: 8,
+                }],
+            },
+        };
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ServerPayload::ToolGroupsResult { groups } => {
+                assert_eq!(groups.len(), 1);
+                assert_eq!(groups[0].key, "files");
+                assert!(groups[0].enabled);
+                assert_eq!(groups[0].tool_count, 8);
+            }
+            _ => panic!("Expected ToolGroupsResult payload"),
+        }
+
+        // Pin the discriminants: these are wire-visible identifiers, and the
+        // enums also encode positionally — appended variants only.
+        assert_eq!(ClientFrameType::PluginUiEvent as u8, 100);
+        assert_eq!(ClientFrameType::ToolGroupsList as u8, 101);
+        assert_eq!(ClientFrameType::ToolGroupSetEnabled as u8, 102);
+        assert_eq!(ServerFrameType::ToolGroupsResult as u8, 95);
+    }
+
+    #[test]
     fn test_project_update_client_roundtrip() {
         let frame = ClientFrame {
             frame_type: ClientFrameType::ProjectUpdate,

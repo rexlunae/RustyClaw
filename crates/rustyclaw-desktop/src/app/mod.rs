@@ -1809,10 +1809,33 @@ pub fn App() -> Element {
                                 state.write().active_plugin = Some(name);
                             },
                             on_action: move |event: PluginActionEvent| {
-                                // Plugin actions are declared for the *agent* to
-                                // carry out — the manager has no executor of its
-                                // own — so clicking one asks the agent to run it
-                                // rather than pretending the UI can.
+                                // The interaction itself goes over the wire: the
+                                // gateway records it against the plugin (bounded
+                                // `_ui_events` ring in its state) and pushes the
+                                // refreshed list back, so the click is a fact even
+                                // when no one is looking. Today's declarative
+                                // actions are still *carried out* by the agent —
+                                // they are prose instructions — so the ask stays
+                                // too, now as the explicit second half rather than
+                                // the only mechanism. Native plugins will consume
+                                // the event in `on_event` and drop the prompt.
+                                let gw = gateway.read().clone();
+                                if let Some(client) = gw {
+                                    let plugin_name = event.plugin_name.clone();
+                                    let element_id = event.action_name.clone();
+                                    spawn(async move {
+                                        if let Err(e) = client
+                                            .send(GatewayCommand::PluginUiEvent {
+                                                plugin_name,
+                                                element_id,
+                                                value_json: "null".to_string(),
+                                            })
+                                            .await
+                                        {
+                                            tracing::error!(error = %e, "PluginUiEvent send failed");
+                                        }
+                                    });
+                                }
                                 on_submit(format!(
                                     "Run the `{}` action on the `{}` plugin.",
                                     event.action_name, event.plugin_name

@@ -2065,6 +2065,29 @@ pub(crate) async fn handle_connection(
                                 ClientPayload::PluginRefresh { plugin_name } => {
                                     plugin_handler::handle_plugin_refresh(&mut *writer, plugin_name).await?;
                                 }
+                                ClientPayload::PluginUiEvent { plugin_name, element_id, value_json } => {
+                                    plugin_handler::handle_plugin_ui_event(
+                                        &mut *writer,
+                                        plugin_name,
+                                        element_id,
+                                        value_json,
+                                    )
+                                    .await?;
+                                }
+                                ClientPayload::ToolGroupsList => {
+                                    let frame = crate::panel_handler::tool_groups_list();
+                                    send_frame(&mut *writer, &frame).await?;
+                                }
+                                ClientPayload::ToolGroupSetEnabled { key, enabled } => {
+                                    let frame = crate::panel_handler::tool_group_set_enabled(
+                                        &mut config,
+                                        &shared_config,
+                                        key,
+                                        enabled,
+                                    )
+                                    .await;
+                                    send_frame(&mut *writer, &frame).await?;
+                                }
                                 ClientPayload::ProjectList => {
                                     project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;
                                 }

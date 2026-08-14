@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Plugin UI events and tool groups on the wire (plugin architecture phase 0,
+  continued).** Clicking a plugin action button used to do exactly one thing:
+  put a chat message in front of the model asking it to please run the action
+  — the click itself vanished. A new `PluginUiEvent` client frame now carries
+  the interaction to the gateway, which records it against the plugin (a
+  bounded `_ui_events` ring inside its persisted state, replicated to clients
+  with the rest of the state) and replies with the refreshed plugin list; the
+  desktop dock sends it on every action press. Declarative actions are still
+  prose for the agent, so the ask remains as the explicit second half —
+  native plugins will consume the event in `on_event` and drop the prompt.
+  The catalog's in-tree tool groups are also reachable over the wire:
+  `ToolGroupsList` returns each group with its enabled state and tool count,
+  `ToolGroupSetEnabled` flips one (applied to the live catalog, persisted in
+  `disabled_tool_groups`, refreshed list in reply) — the surface the plugin
+  manager UI will drive. New frames are appended with pinned discriminants
+  (100–102 client, 95 server), keeping the positional bincode encoding
+  compatible for existing peers.
+
 - **Runtime tool catalog (plugin architecture phase 0, `docs/PLUGIN_ARCHITECTURE.md` §5).**
   The agent's toolset was a hardcoded list of static definitions, with three
   side tables (parameters, summaries, panel categories) keyed on tool names —

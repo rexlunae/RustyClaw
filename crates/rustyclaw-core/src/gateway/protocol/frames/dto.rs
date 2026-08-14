@@ -560,3 +560,13 @@ impl From<crate::downloads::Download> for DownloadInfoDto {
         }
     }
 }
+
+/// One in-tree tool group and its enabled state (see `tools::catalog`).
+/// The key is the group name shown as a category in the tool-config panel;
+/// plugin sources arrive as `plugin:<name>` once the loader exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolGroupDto {
+    pub key: String,
+    pub enabled: bool,
+    pub tool_count: u32,
+}

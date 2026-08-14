@@ -72,6 +72,18 @@ pub fn plugin_snapshots() -> Vec<(crate::plugins::Plugin, Value)> {
 }
 
 /// Reload all plugins.
+/// Record a user interaction with a plugin's UI (see
+/// [`PluginManager::record_ui_event`]). Returns the plugin's updated state.
+pub fn record_plugin_ui_event(
+    plugin_name: &str,
+    element_id: &str,
+    value: &Value,
+) -> Result<Value, String> {
+    manager_lock()?
+        .record_ui_event(plugin_name, element_id, value)
+        .map_err(|e| e.to_string())
+}
+
 pub fn reload_plugins() -> Result<(), String> {
     PLUGIN_MANAGER
         .get()

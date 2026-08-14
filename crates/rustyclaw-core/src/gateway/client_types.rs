@@ -18,7 +18,7 @@ pub use crate::gateway::protocol::frames::{
     ChannelStatusDto, CronJobDto, DownloadInfoDto, EngineInfoDto, EngineModelDto, HistoryEntryDto,
     McpServerDto, MemoryEntryDto, MessengerAccountDto, MessengerProfileDto, ModelUsageDto,
     PluginActionDto, PluginInfoDto, RoutableThreadDto, SessionUsageDto, ThreadRouteDto,
-    ToolConfigDto, UsageTotalsDto,
+    ToolConfigDto, ToolGroupDto, UsageTotalsDto,
 };
 
 // ── Events (server → client) ────────────────────────────────────────────────
@@ -163,6 +163,9 @@ pub enum GatewayEvent {
 
     /// Plugin list and state updated.
     PluginsUpdate { plugins: Vec<PluginInfoDto> },
+
+    /// The in-tree tool groups and their enabled state.
+    ToolGroupsUpdate { groups: Vec<ToolGroupDto> },
 
     /// The messenger setup view. Also arrives after every mutation *this
     /// client* sends, so its form never shows state the gateway has moved
@@ -568,6 +571,25 @@ pub enum GatewayCommand {
     /// Re-read one plugin's state from disk and push the refreshed list.
     #[serde(rename = "plugin_refresh")]
     PluginRefresh { plugin_name: String },
+
+    /// A user interaction with a plugin's UI (button press, form submit).
+    /// The gateway records it against the plugin and replies with the
+    /// refreshed plugin list.
+    #[serde(rename = "plugin_ui_event")]
+    PluginUiEvent {
+        plugin_name: String,
+        element_id: String,
+        value_json: String,
+    },
+
+    /// Request the in-tree tool groups and their enabled state.
+    #[serde(rename = "tool_groups_list")]
+    ToolGroupsList,
+
+    /// Enable or disable a whole tool group; persisted in
+    /// `disabled_tool_groups`.
+    #[serde(rename = "tool_group_set_enabled")]
+    ToolGroupSetEnabled { key: String, enabled: bool },
 
     /// Delete a project
     #[serde(rename = "project_delete")]
@@ -1045,6 +1067,26 @@ impl GatewayCommand {
             GatewayCommand::PluginRefresh { plugin_name } => ClientFrame {
                 frame_type: ClientFrameType::PluginRefresh,
                 payload: ClientPayload::PluginRefresh { plugin_name },
+            },
+            GatewayCommand::PluginUiEvent {
+                plugin_name,
+                element_id,
+                value_json,
+            } => ClientFrame {
+                frame_type: ClientFrameType::PluginUiEvent,
+                payload: ClientPayload::PluginUiEvent {
+                    plugin_name,
+                    element_id,
+                    value_json,
+                },
+            },
+            GatewayCommand::ToolGroupsList => ClientFrame {
+                frame_type: ClientFrameType::ToolGroupsList,
+                payload: ClientPayload::ToolGroupsList,
+            },
+            GatewayCommand::ToolGroupSetEnabled { key, enabled } => ClientFrame {
+                frame_type: ClientFrameType::ToolGroupSetEnabled,
+                payload: ClientPayload::ToolGroupSetEnabled { key, enabled },
             },
             GatewayCommand::MessengerConfig => ClientFrame {
                 frame_type: ClientFrameType::MessengerConfigRequest,
@@ -1682,6 +1724,9 @@ impl GatewayEvent {
             }
             ServerPayload::PluginsUpdate { plugins } => {
                 Some(GatewayEvent::PluginsUpdate { plugins })
+            }
+            ServerPayload::ToolGroupsResult { groups } => {
+                Some(GatewayEvent::ToolGroupsUpdate { groups })
             }
             ServerPayload::MessengerConfigResult {
                 accounts,

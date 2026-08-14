@@ -345,6 +345,59 @@ impl PluginManager {
         self.states.clone()
     }
 
+    /// How many UI events are kept per plugin. Old ones fall off the front:
+    /// the ring is a mailbox for the plugin (and the agent) to notice recent
+    /// interactions, not an audit log.
+    pub const UI_EVENT_RING: usize = 32;
+
+    /// Record a user interaction with the plugin's UI into its state, under
+    /// `_ui_events` — a bounded ring the agent can read (and a native
+    /// plugin's `on_event` will consume directly once the loader exists).
+    /// Kept in state rather than a side channel so it persists, replicates
+    /// to clients with the rest of the state, and needs no new storage.
+    pub fn record_ui_event(
+        &mut self,
+        name: &str,
+        element_id: &str,
+        value: &Value,
+    ) -> Result<Value, PluginError> {
+        if self.get(name).is_none() {
+            return Err(PluginError::NotFound(name.to_string()));
+        }
+        let mut state = self.states.get(name).cloned().unwrap_or_default();
+        if !state.is_object() {
+            state = Value::Object(serde_json::Map::new());
+        }
+        let obj = state
+            .as_object_mut()
+            .expect("state forced to an object above");
+        let events = obj
+            .entry("_ui_events")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if !events.is_array() {
+            *events = Value::Array(Vec::new());
+        }
+        let list = events.as_array_mut().expect("events forced to an array");
+        list.push(serde_json::json!({
+            "element": element_id,
+            "value": value,
+            // Seconds since the epoch: enough to order events and to see
+            // staleness, without pulling a datetime type across the TOML
+            // boundary (which has no null and stringifies datetimes).
+            "at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        }));
+        let excess = list.len().saturating_sub(Self::UI_EVENT_RING);
+        if excess > 0 {
+            list.drain(..excess);
+        }
+        self.states.insert(name.to_string(), state.clone());
+        self.save_state(name)?;
+        Ok(state)
+    }
+
     // ── Plugin creation ──────────────────────────────────────────────────
 
     /// Create a new plugin on disk from name, description, and instructions.
@@ -716,6 +769,64 @@ mod tests {
         assert!(dir.join("state.toml").exists());
         assert!(!dir.join("plugin.json").exists());
         assert!(!dir.join("state.json").exists());
+    }
+
+    #[test]
+    fn ui_events_record_bounded_and_persist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = PluginManager::new(tmp.path().to_path_buf());
+        mgr.create(
+            "dash",
+            "A dashboard",
+            None,
+            "",
+            None,
+            Some(&serde_json::json!({ "title": "t" })),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let state = mgr
+            .record_ui_event("dash", "refresh", &serde_json::json!({"period": "7d"}))
+            .unwrap();
+        let events = state["_ui_events"].as_array().expect("events array");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["element"], "refresh");
+        assert_eq!(events[0]["value"]["period"], "7d");
+        assert!(events[0]["at"].as_u64().is_some());
+        // The rest of the state is untouched.
+        assert_eq!(state["title"], "t");
+
+        // The ring is bounded: old events fall off the front.
+        for i in 0..(PluginManager::UI_EVENT_RING + 5) {
+            mgr.record_ui_event("dash", "tick", &serde_json::json!(i))
+                .unwrap();
+        }
+        let state = mgr.get_state("dash").unwrap();
+        let events = state["_ui_events"].as_array().unwrap();
+        assert_eq!(events.len(), PluginManager::UI_EVENT_RING);
+        assert_eq!(
+            events.last().unwrap()["value"],
+            serde_json::json!(PluginManager::UI_EVENT_RING + 4)
+        );
+
+        // Events survive a reload — they are persisted with the state.
+        let mut reloaded = PluginManager::new(tmp.path().to_path_buf());
+        reloaded.load().unwrap();
+        let state = reloaded.get_state("dash").unwrap();
+        assert_eq!(
+            state["_ui_events"].as_array().unwrap().len(),
+            PluginManager::UI_EVENT_RING
+        );
+    }
+
+    #[test]
+    fn ui_event_for_unknown_plugin_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = PluginManager::new(tmp.path().to_path_buf());
+        let err = mgr.record_ui_event("ghost", "x", &Value::Null).unwrap_err();
+        assert!(matches!(err, PluginError::NotFound(_)));
     }
 
     #[test]

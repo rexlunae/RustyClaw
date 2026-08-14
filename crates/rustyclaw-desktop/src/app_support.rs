@@ -771,8 +771,12 @@ pub(crate) fn handle_gateway_event(
         | GatewayEvent::SecretsSetDisabledResult { .. }
         | GatewayEvent::SecretsDeleteCredentialResult { .. }
         | GatewayEvent::SecretsSetupTotpResult { .. }
-        | GatewayEvent::SecretsVerifyTotpResult { .. }
-        | GatewayEvent::SecretsRemoveTotpResult { .. } => {}
+        | GatewayEvent::SecretsVerifyTotpResult { .. } => {}
+        // Tool groups have no desktop surface yet — the plugin manager UI
+        // (plan §10) will render them; until then the reply frame is
+        // ignored, explicitly, like the TUI does with PluginsUpdate.
+        GatewayEvent::ToolGroupsUpdate { .. } => {}
+        GatewayEvent::SecretsRemoveTotpResult { .. } => {}
         GatewayEvent::Error { message } => {
             let mut s = state.write();
             s.push_notice(MessageRole::Error, message);

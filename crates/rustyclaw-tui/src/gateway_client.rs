@@ -192,6 +192,9 @@ pub(crate) fn gateway_event_to_gw_event(
         // now. Dropped explicitly rather than by a catch-all arm, so adding a
         // TUI plugin panel is a compile error away rather than a silent no-op.
         E::PluginsUpdate { .. } => return None,
+        // Same story for tool groups: the desktop's manager UI drives them;
+        // the TUI's tool-permissions view stays per-tool for now.
+        E::ToolGroupsUpdate { .. } => return None,
         E::ProjectsUpdate {
             projects,
             active_id,
