@@ -27,6 +27,10 @@ mod app;
 mod app_support;
 mod chat_transcript;
 mod components;
+/// Why the client hooks keystrokes, and the guards that keep typing usable.
+/// Test-only: the registry it holds exists to be checked, and to be read.
+#[cfg(test)]
+mod input_latency;
 mod markdown_prep;
 mod menu;
 mod state;

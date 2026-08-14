@@ -6,6 +6,13 @@
 //! messages. This module is the (render-time) bridge between the two; it lives in
 //! the desktop crate because the crate's types pull in `dioxus`, while
 //! `rustyclaw-view` stays framework-agnostic for the TUI.
+//!
+//! **This runs on the typing path.** [`to_transcript`] is called from `Chat`,
+//! the component that owns the composer's draft text, so it rebuilds the whole
+//! transcript on every keystroke. Anything added here that scales with the
+//! length of the conversation is paid per character typed — which is why
+//! markdown sanitising is cached and attachment reads are cached. See
+//! `docs/input-latency.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -291,7 +298,9 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         // source so raw-HTML attack vectors don't survive pulldown-cmark → webview.
         MessageRole::Assistant => (
             ChatRole::Assistant,
-            ChatMessagePayload::Markdown(sanitize_markdown(&msg.content)),
+            // A streaming bubble's source changes on every flush, so caching
+            // it would only fill the cache with dead entries.
+            ChatMessagePayload::Markdown(sanitize_markdown(&msg.content, !msg.is_streaming)),
             true,
         ),
         // Reasoning renders as a collapsible timeline: a one-line
@@ -529,7 +538,7 @@ fn push_ask_user(
     }
     let question = GcChatMessage {
         role: ChatRole::Assistant,
-        payload: ChatMessagePayload::Markdown(sanitize_markdown(&md)),
+        payload: ChatMessagePayload::Markdown(sanitize_markdown(&md, true)),
         id: parent_id.clone(),
         actions: Vec::new(),
     };
@@ -611,8 +620,91 @@ fn reasoning_steps(content: &str, is_streaming: bool) -> Vec<ReasoningStep> {
 // markdown link syntax — a `[x](javascript:…)` link reached the DOM untouched.
 // `markdown_prep::prepare` closes that gap and also autolinks bare URLs; see
 // that module for the details.
-fn sanitize_markdown(src: &str) -> String {
+//
+// Both passes are full parses of the message (an HTML parse, then a CommonMark
+// parse), and [`to_transcript`] runs them for *every* message in the thread.
+// That is a per-keystroke cost, not a per-message one: the composer's draft
+// text lives in the same component scope that builds the transcript, so typing
+// one character re-runs this over the whole conversation. `cache` keeps that
+// off the typing path — see [`MarkdownCache`] and `docs/input-latency.md`.
+fn sanitize_markdown(src: &str, cache: bool) -> String {
+    if !cache {
+        return sanitize_markdown_uncached(src);
+    }
+    if let Some(hit) = MARKDOWN_CACHE.lock().ok().and_then(|c| c.get(src)) {
+        return hit;
+    }
+    let cleaned = sanitize_markdown_uncached(src);
+    if let Ok(mut c) = MARKDOWN_CACHE.lock() {
+        c.insert(src.to_string(), cleaned.clone());
+    }
+    cleaned
+}
+
+fn sanitize_markdown_uncached(src: &str) -> String {
+    record_markdown_parse();
     crate::markdown_prep::prepare(&ammonia::clean(src))
+}
+
+/// Cache of sanitised markdown, keyed by the raw message source.
+///
+/// Sanitising is pure — same source, same output — so a rebuild of an
+/// unchanged message can reuse the previous result instead of re-parsing it.
+/// The budget bounds retained text the same way [`DataUriCache`] does; a
+/// streaming message is never stored (its source changes on every flush, so
+/// entries for it would be garbage the moment they are written).
+#[derive(Default)]
+struct MarkdownCache {
+    entries: HashMap<String, String>,
+    total_bytes: usize,
+}
+
+impl MarkdownCache {
+    /// A long thread is a few hundred bubbles; past that the oldest entries
+    /// are far off-screen and re-parsing them costs nothing that is felt.
+    const MAX_ENTRIES: usize = 512;
+    /// Budget for source + sanitised text held here.
+    const MAX_BYTES: usize = 16 * 1024 * 1024;
+
+    fn get(&self, src: &str) -> Option<String> {
+        self.entries.get(src).cloned()
+    }
+
+    fn insert(&mut self, src: String, cleaned: String) {
+        let incoming = src.len() + cleaned.len();
+        // Crossing either bound resets the cache, matching `DataUriCache`:
+        // the next few renders re-parse, then the cache refills.
+        if (self.total_bytes + incoming > Self::MAX_BYTES && !self.entries.is_empty())
+            || self.entries.len() >= Self::MAX_ENTRIES
+        {
+            self.entries.clear();
+            self.total_bytes = 0;
+        }
+        self.total_bytes += incoming;
+        self.entries.insert(src, cleaned);
+    }
+}
+
+static MARKDOWN_CACHE: LazyLock<Mutex<MarkdownCache>> =
+    LazyLock::new(|| Mutex::new(MarkdownCache::default()));
+
+/// Counts sanitiser runs so the latency guard can assert that re-rendering an
+/// unchanged thread parses nothing. Compiled out of release builds.
+#[cfg(test)]
+static MARKDOWN_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn record_markdown_parse() {
+    MARKDOWN_PARSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(test))]
+fn record_markdown_parse() {}
+
+/// Number of markdown sanitiser runs so far in this process.
+#[cfg(test)]
+pub(crate) fn markdown_parse_count() -> usize {
+    MARKDOWN_PARSES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // ── Tool call hints ──────────────────────────────────────────────────────────
