@@ -145,7 +145,7 @@ pub fn validate_subagent_tools(tools: &[String]) -> Result<Vec<String>> {
         if tool.is_empty() {
             continue;
         }
-        if !known.contains(&tool) {
+        if !known.iter().any(|k| k.as_str() == tool) {
             bail!("Unknown tool '{}' in subagent toolset", tool);
         }
         if !tool_allowed_in_subagent(tool) {

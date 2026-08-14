@@ -92,7 +92,7 @@ pub(super) async fn handle_command_action(
                 .map(|name| {
                     let perm = config
                         .tool_permissions
-                        .get(*name)
+                        .get(name.as_str())
                         .cloned()
                         .unwrap_or_default();
                     rustyclaw_view::ToolPermInfoData {

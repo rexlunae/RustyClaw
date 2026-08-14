@@ -1042,86 +1042,28 @@ async fn mcp_disconnect(name: String) -> ServerFrame {
 // Tool config
 // ═════════════════════════════════════════════════════════════════════════
 
-/// Rough grouping of registry tools for the panel.
-fn tool_category(name: &str) -> &'static str {
-    match name {
-        "read_file" | "write_file" | "edit_file" | "list_directory" | "search_files"
-        | "find_files" | "apply_patch" | "document" => "files",
-        "execute_command" | "process" => "runtime",
-        "web_fetch" | "web_search" | "web_extract" | "http_request" => "web",
-        "memory_search" | "memory_get" | "save_memory" | "search_history" | "add_memory" => {
-            "memory"
-        }
-        "cron" => "scheduling",
-        n if n.starts_with("sessions_")
-            || n == "session_status"
-            || n == "session_search"
-            || n.starts_with("agents_")
-            || n.starts_with("subagent_")
-            || n.starts_with("triggers_") =>
-        {
-            "sessions"
-        }
-        n if n.starts_with("secrets_") => "secrets",
-        "gateway" => "gateway",
-        "message" | "tts" => "messaging",
-        // Freenet and the apps built on it — all reach the network through a
-        // local Freenet node rather than through `web_fetch`.
-        "freenet" | "river" | "atlas" => "freenet",
-        "image" | "image_generate" => "media",
-        "nodes" | "canvas" => "devices",
-        "browser" => "browser",
-        n if n.starts_with("skill_") => "skills",
-        n if n.starts_with("mcp_") => "mcp",
-        n if n.starts_with("task_") => "tasks",
-        "thread_describe" | "set_thread_caption" | "threads_list" => "threads",
-        n if n.starts_with("model_") => "models",
-        "host_info" | "load_status" => "system",
-        n if n.starts_with("service_") => "services",
-        "disk_usage" | "classify_files" | "system_monitor" | "battery_health" | "app_index"
-        | "cloud_browse" | "browser_cache" | "screenshot" | "clipboard" | "audit_sensitive"
-        | "secure_delete" | "summarize_file" => "system",
-        "pkg_manage" | "net_info" | "net_scan" | "service_manage" | "user_manage" | "firewall" => {
-            "sysadmin"
-        }
-        "ollama_manage" | "exo_manage" | "agent_setup" => "engines",
-        "ast_grep_manage" | "uv_manage" | "npm_manage" => "code",
-        "pdf" | "chart" => "documents",
-        n if n.starts_with("swarm_") => "swarm",
-        n if n.starts_with("plugin_") => "plugins",
-        "todo" => "planning",
-        "skill_curator" => "skills",
-        "ask_user" | "client_dom_query" => "interactive",
-        _ => "other",
-    }
-}
-
 fn tool_config_list(config: &Config) -> ServerFrame {
-    use rustyclaw_core::tools::{ToolPermission, all_tools, tool_summary};
+    use rustyclaw_core::tools::{ToolPermission, catalog};
 
-    let mut tools: Vec<ToolConfigDto> = all_tools()
+    // The catalog resolves category and summary at registration, so a
+    // runtime-registered plugin tool lists here exactly like a built-in —
+    // the name-keyed grouping table this panel used to keep is gone (it
+    // lives on as the in-tree group table in `tools::catalog`).
+    let mut tools: Vec<ToolConfigDto> = catalog()
+        .snapshot()
         .iter()
         .map(|def| {
             let permission = config
                 .tool_permissions
-                .get(def.name)
+                .get(def.name.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let summary = tool_summary(def.name);
             ToolConfigDto {
-                name: def.name.to_string(),
-                category: tool_category(def.name).to_string(),
+                name: def.name.clone(),
+                category: def.category.clone(),
                 enabled: !matches!(permission, ToolPermission::Deny),
                 policy: permission.to_string(),
-                description: if summary == "Unknown tool" {
-                    def.description
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .to_string()
-                } else {
-                    summary.to_string()
-                },
+                description: def.summary.clone(),
             }
         })
         .collect();
@@ -1141,15 +1083,18 @@ async fn tool_toggle(
     tool_name: String,
     enabled: bool,
 ) -> ServerFrame {
-    use rustyclaw_core::tools::{ToolPermission, all_tools};
+    use rustyclaw_core::tools::{ToolPermission, catalog};
 
     // Mutate and persist the *shared* config, then mirror into this
     // connection's snapshot. Persisting the snapshot serialised whatever it
     // held at connect time, so a toggle here silently erased every setting
     // other connections had saved since — messenger accounts and routes most
     // destructively, stranding their vault credentials.
+    //
+    // Validated against the live catalog, not the built-in list, so tools a
+    // plugin registered at runtime can be toggled like any other.
     let result: Result<(), String> = async {
-        if !all_tools().iter().any(|def| def.name == tool_name) {
+        if !catalog().snapshot().contains(&tool_name) {
             return Err(format!("Unknown tool: '{}'", tool_name));
         }
         let permission = if enabled {
@@ -1318,10 +1263,13 @@ mod tests {
 
     #[test]
     fn tool_categories_cover_registry() {
-        for def in rustyclaw_core::tools::all_tools() {
-            assert_ne!(
-                tool_category(def.name),
-                "other",
+        // Category is resolved at catalog registration now; the invariant
+        // the old name-matching table enforced — every tool grouped, none
+        // falling through to "other" — holds structurally for built-ins
+        // (category = group name) and must stay non-empty for everything.
+        for def in rustyclaw_core::tools::catalog().snapshot().iter() {
+            assert!(
+                !def.category.is_empty() && def.category != "other",
                 "tool '{}' needs a panel category",
                 def.name
             );
