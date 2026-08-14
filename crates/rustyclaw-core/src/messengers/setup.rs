@@ -23,6 +23,7 @@
 //! entry in [`KINDS`].
 
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 // ── Field schema ────────────────────────────────────────────────────────────
@@ -54,7 +55,8 @@ impl FieldKind {
 }
 
 /// Whether a field must be filled in, and if not, what it is grouped with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Not `Copy`: the `OneOf` group name may be owned by a plugin-registered kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Requirement {
     /// Must be present for the account to work.
@@ -64,22 +66,22 @@ pub enum Requirement {
     /// Part of a named alternatives group: at least one field in the group
     /// must be set. Matrix, for example, accepts a password *or* an access
     /// token, and demanding both would be wrong.
-    OneOf(&'static str),
+    OneOf(Cow<'static, str>),
 }
 
 /// One configurable field on a messenger account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldSpec {
     /// Key in [`crate::config::MessengerConfig`] and in the values map.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     /// Short label for a form.
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     /// How to enter and store it.
     pub kind: FieldKind,
     /// Whether it has to be filled in.
     pub requirement: Requirement,
     /// One line explaining where the user gets this value.
-    pub help: &'static str,
+    pub help: Cow<'static, str>,
 }
 
 impl FieldSpec {
@@ -90,11 +92,11 @@ impl FieldSpec {
         help: &'static str,
     ) -> Self {
         Self {
-            name,
-            label,
+            name: Cow::Borrowed(name),
+            label: Cow::Borrowed(label),
             kind,
             requirement: Requirement::Required,
-            help,
+            help: Cow::Borrowed(help),
         }
     }
 
@@ -105,11 +107,11 @@ impl FieldSpec {
         help: &'static str,
     ) -> Self {
         Self {
-            name,
-            label,
+            name: Cow::Borrowed(name),
+            label: Cow::Borrowed(label),
             kind,
             requirement: Requirement::Optional,
-            help,
+            help: Cow::Borrowed(help),
         }
     }
 
@@ -121,11 +123,11 @@ impl FieldSpec {
         help: &'static str,
     ) -> Self {
         Self {
-            name,
-            label,
+            name: Cow::Borrowed(name),
+            label: Cow::Borrowed(label),
             kind,
-            requirement: Requirement::OneOf(group),
-            help,
+            requirement: Requirement::OneOf(Cow::Borrowed(group)),
+            help: Cow::Borrowed(help),
         }
     }
 
@@ -139,17 +141,17 @@ impl FieldSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KindSpec {
     /// Type id as written to `messenger_type` in config.
-    pub id: &'static str,
+    pub id: Cow<'static, str>,
     /// Human-readable name.
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     /// Emoji shown next to the account in listings.
-    pub icon: &'static str,
+    pub icon: Cow<'static, str>,
     /// One line on what this backend is and what it needs.
-    pub summary: &'static str,
+    pub summary: Cow<'static, str>,
     /// Cargo feature the gateway must be built with, if any.
-    pub feature: Option<&'static str>,
+    pub feature: Option<Cow<'static, str>>,
     /// Fields the account exposes, in the order a form should show them.
-    pub fields: &'static [FieldSpec],
+    pub fields: Cow<'static, [FieldSpec]>,
 }
 
 impl KindSpec {
@@ -167,38 +169,38 @@ impl KindSpec {
 /// of silently omitting it.
 pub static KINDS: &[KindSpec] = &[
     KindSpec {
-        id: "telegram",
-        label: "Telegram",
-        icon: "✈️",
-        summary: "Bot account. Create one with @BotFather and paste its token.",
+        id: Cow::Borrowed("telegram"),
+        label: Cow::Borrowed("Telegram"),
+        icon: Cow::Borrowed("✈️"),
+        summary: Cow::Borrowed("Bot account. Create one with @BotFather and paste its token."),
         feature: None,
-        fields: &[FieldSpec::required(
+        fields: Cow::Borrowed(&[FieldSpec::required(
             "token",
             "Bot token",
             FieldKind::Secret,
             "From @BotFather, of the form 123456:ABC-DEF...",
-        )],
+        )]),
     },
     KindSpec {
-        id: "discord",
-        label: "Discord",
-        icon: "🎮",
-        summary: "Bot account from the Discord developer portal.",
+        id: Cow::Borrowed("discord"),
+        label: Cow::Borrowed("Discord"),
+        icon: Cow::Borrowed("🎮"),
+        summary: Cow::Borrowed("Bot account from the Discord developer portal."),
         feature: None,
-        fields: &[FieldSpec::required(
+        fields: Cow::Borrowed(&[FieldSpec::required(
             "token",
             "Bot token",
             FieldKind::Secret,
             "Developer portal → your application → Bot → Reset Token",
-        )],
+        )]),
     },
     KindSpec {
-        id: "slack",
-        label: "Slack",
-        icon: "💼",
-        summary: "Bot user token, optionally with Socket Mode for events.",
+        id: Cow::Borrowed("slack"),
+        label: Cow::Borrowed("Slack"),
+        icon: Cow::Borrowed("💼"),
+        summary: Cow::Borrowed("Bot user token, optionally with Socket Mode for events."),
         feature: None,
-        fields: &[
+        fields: Cow::Borrowed(&[
             FieldSpec::required(
                 "token",
                 "Bot token",
@@ -217,15 +219,17 @@ pub static KINDS: &[KindSpec] = &[
                 FieldKind::Text,
                 "Channel to post to when a message names none",
             ),
-        ],
+        ]),
     },
     KindSpec {
-        id: "matrix",
-        label: "Matrix",
-        icon: "🔗",
-        summary: "Any homeserver. Log in with a password or an existing access token.",
-        feature: Some("matrix"),
-        fields: &[
+        id: Cow::Borrowed("matrix"),
+        label: Cow::Borrowed("Matrix"),
+        icon: Cow::Borrowed("🔗"),
+        summary: Cow::Borrowed(
+            "Any homeserver. Log in with a password or an existing access token.",
+        ),
+        feature: Some(Cow::Borrowed("matrix")),
+        fields: Cow::Borrowed(&[
             FieldSpec::required(
                 "homeserver",
                 "Homeserver",
@@ -252,15 +256,15 @@ pub static KINDS: &[KindSpec] = &[
                 "matrix-auth",
                 "Use instead of a password if you already have one",
             ),
-        ],
+        ]),
     },
     KindSpec {
-        id: "irc",
-        label: "IRC",
-        icon: "💬",
-        summary: "Any IRC network. TLS on port 6697 is the usual choice.",
+        id: Cow::Borrowed("irc"),
+        label: Cow::Borrowed("IRC"),
+        icon: Cow::Borrowed("💬"),
+        summary: Cow::Borrowed("Any IRC network. TLS on port 6697 is the usual choice."),
         feature: None,
-        fields: &[
+        fields: Cow::Borrowed(&[
             FieldSpec::required(
                 "server",
                 "Server",
@@ -287,36 +291,36 @@ pub static KINDS: &[KindSpec] = &[
                 FieldKind::Secret,
                 "NickServ or server password, if the network needs one",
             ),
-        ],
+        ]),
     },
     KindSpec {
-        id: "signal",
-        label: "Signal",
-        icon: "📱",
-        summary: "Talks to a local signal-cli that you have already registered.",
-        feature: Some("signal-cli"),
-        fields: &[FieldSpec::required(
+        id: Cow::Borrowed("signal"),
+        label: Cow::Borrowed("Signal"),
+        icon: Cow::Borrowed("📱"),
+        summary: Cow::Borrowed("Talks to a local signal-cli that you have already registered."),
+        feature: Some(Cow::Borrowed("signal-cli")),
+        fields: Cow::Borrowed(&[FieldSpec::required(
             "phone",
             "Phone number",
             FieldKind::Text,
             "In E.164 form, e.g. +15551234567",
-        )],
+        )]),
     },
     KindSpec {
-        id: "whatsapp",
-        label: "WhatsApp",
-        icon: "📞",
-        summary: "Pairs as a linked device; scan the QR code on first start.",
-        feature: Some("whatsapp"),
-        fields: &[],
+        id: Cow::Borrowed("whatsapp"),
+        label: Cow::Borrowed("WhatsApp"),
+        icon: Cow::Borrowed("📞"),
+        summary: Cow::Borrowed("Pairs as a linked device; scan the QR code on first start."),
+        feature: Some(Cow::Borrowed("whatsapp")),
+        fields: Cow::Borrowed(&[]),
     },
     KindSpec {
-        id: "google_chat",
-        label: "Google Chat",
-        icon: "🅖",
-        summary: "Incoming webhook, service account, or bot token.",
+        id: Cow::Borrowed("google_chat"),
+        label: Cow::Borrowed("Google Chat"),
+        icon: Cow::Borrowed("🅖"),
+        summary: Cow::Borrowed("Incoming webhook, service account, or bot token."),
         feature: None,
-        fields: &[
+        fields: Cow::Borrowed(&[
             FieldSpec::one_of(
                 "webhook_url",
                 "Webhook URL",
@@ -344,15 +348,15 @@ pub static KINDS: &[KindSpec] = &[
                 FieldKind::List,
                 "Space ids to listen on; required for service account mode",
             ),
-        ],
+        ]),
     },
     KindSpec {
-        id: "teams",
-        label: "Microsoft Teams",
-        icon: "🟣",
-        summary: "Incoming webhook, or a Bot Framework registration.",
+        id: Cow::Borrowed("teams"),
+        label: Cow::Borrowed("Microsoft Teams"),
+        icon: Cow::Borrowed("🟣"),
+        summary: Cow::Borrowed("Incoming webhook, or a Bot Framework registration."),
         feature: None,
-        fields: &[
+        fields: Cow::Borrowed(&[
             FieldSpec::one_of(
                 "webhook_url",
                 "Webhook URL",
@@ -373,41 +377,41 @@ pub static KINDS: &[KindSpec] = &[
                 FieldKind::Secret,
                 "Client secret for the app registration",
             ),
-        ],
+        ]),
     },
     KindSpec {
-        id: "imessage",
-        label: "iMessage",
-        icon: "🍎",
-        summary: "Reads the local macOS Messages database. macOS only.",
+        id: Cow::Borrowed("imessage"),
+        label: Cow::Borrowed("iMessage"),
+        icon: Cow::Borrowed("🍎"),
+        summary: Cow::Borrowed("Reads the local macOS Messages database. macOS only."),
         feature: None,
-        fields: &[FieldSpec::optional(
+        fields: Cow::Borrowed(&[FieldSpec::optional(
             "server",
             "chat.db path",
             FieldKind::Path,
             "Defaults to ~/Library/Messages/chat.db",
-        )],
+        )]),
     },
     KindSpec {
-        id: "webhook",
-        label: "Webhook",
-        icon: "🪝",
-        summary: "Posts to an arbitrary HTTP endpoint. Send-only.",
+        id: Cow::Borrowed("webhook"),
+        label: Cow::Borrowed("Webhook"),
+        icon: Cow::Borrowed("🪝"),
+        summary: Cow::Borrowed("Posts to an arbitrary HTTP endpoint. Send-only."),
         feature: None,
-        fields: &[FieldSpec::required(
+        fields: Cow::Borrowed(&[FieldSpec::required(
             "webhook_url",
             "Endpoint URL",
             FieldKind::Secret,
             "Anything that accepts a JSON POST",
-        )],
+        )]),
     },
     KindSpec {
-        id: "console",
-        label: "Console",
-        icon: "🖥️",
-        summary: "Reads and writes the gateway's own stdio. Useful for testing.",
+        id: Cow::Borrowed("console"),
+        label: Cow::Borrowed("Console"),
+        icon: Cow::Borrowed("🖥️"),
+        summary: Cow::Borrowed("Reads and writes the gateway's own stdio. Useful for testing."),
         feature: None,
-        fields: &[],
+        fields: Cow::Borrowed(&[]),
     },
 ];
 
@@ -689,9 +693,9 @@ pub fn route_for<'a>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaintextField {
     /// Field name, e.g. `token`.
-    pub field: &'static str,
+    pub field: Cow<'static, str>,
     /// Label from the field schema.
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
 }
 
 /// Secret-valued fields this account still keeps in plaintext config.
@@ -709,11 +713,11 @@ pub fn plaintext_fields(
         return Vec::new();
     };
     spec.secret_fields()
-        .filter(|f| !has_secret_ref(f.name))
-        .filter(|f| value_of(f.name).is_some_and(|v| !v.trim().is_empty()))
+        .filter(|f| !has_secret_ref(&f.name))
+        .filter(|f| value_of(&f.name).is_some_and(|v| !v.trim().is_empty()))
         .map(|f| PlaintextField {
-            field: f.name,
-            label: f.label,
+            field: f.name.clone(),
+            label: f.label.clone(),
         })
         .collect()
 }
@@ -849,15 +853,15 @@ pub fn validate_fields(kind: &str, has_value: impl Fn(&str) -> bool) -> Result<(
     let mut errors = Vec::new();
     let mut groups: BTreeMap<&str, (bool, Vec<&str>)> = BTreeMap::new();
 
-    for field in spec.fields {
-        match field.requirement {
-            Requirement::Required if !has_value(field.name) => {
+    for field in spec.fields.iter() {
+        match &field.requirement {
+            Requirement::Required if !has_value(&field.name) => {
                 errors.push(format!("{} is required", field.label));
             }
             Requirement::OneOf(group) => {
-                let entry = groups.entry(group).or_insert((false, Vec::new()));
-                entry.0 |= has_value(field.name);
-                entry.1.push(field.label);
+                let entry = groups.entry(group.as_ref()).or_insert((false, Vec::new()));
+                entry.0 |= has_value(&field.name);
+                entry.1.push(field.label.as_ref());
             }
             _ => {}
         }
@@ -1067,9 +1071,9 @@ mod tests {
             .as_object()
             .expect("MessengerConfig serializes as a map");
         for kind in KINDS {
-            for field in kind.fields {
+            for field in kind.fields.iter() {
                 assert!(
-                    object.contains_key(field.name),
+                    object.contains_key(field.name.as_ref()),
                     "{}.{} is not a MessengerConfig field",
                     kind.id,
                     field.name

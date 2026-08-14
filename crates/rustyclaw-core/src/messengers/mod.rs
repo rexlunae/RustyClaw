@@ -3,7 +3,11 @@
 //! All messenger implementations are now in the `chat-system` crate.
 //! This module re-exports them for backwards compatibility.
 
+mod factory;
+pub mod registry;
 pub mod setup;
+
+pub use registry::{KindSource, MessengerFactory, MessengerRegistry, messenger_registry};
 
 pub use chat_system::messengers::{
     ConsoleMessenger, DiscordMessenger, GoogleChatMessenger, IMessageMessenger, IrcMessenger,

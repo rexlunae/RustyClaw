@@ -459,7 +459,7 @@ pub(super) fn handle_normal_key(
                 }
                 KeyCode::Enter => {
                     if let Some(kind) = kinds.get(cursor) {
-                        data.editor = Some(MessengerEditorData::new(kind.id));
+                        data.editor = Some(MessengerEditorData::new(kind.id.as_ref()));
                         data.kind_picker = None;
                     }
                 }
