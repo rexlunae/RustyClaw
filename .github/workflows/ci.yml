@@ -172,6 +172,13 @@ jobs:
       - name: Run unit tests (default features)
         run: cargo test --lib --bins --tests --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
 
+      # The desktop client was not tested by any job, so its tests — the
+      # streaming-chunk throttle and the typing-latency guards, both of which
+      # exist because typing kept regressing — never ran anywhere. Separate
+      # step because it is a bin-only package: `--lib` fails on it.
+      - name: Run unit tests (desktop client)
+        run: cargo test --bins --tests --package rustyclaw-desktop
+
       - name: Run unit tests (no default features)
         run: cargo test --lib --bins --tests --no-default-features --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
 

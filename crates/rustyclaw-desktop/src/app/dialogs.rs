@@ -1,4 +1,17 @@
 //! Modal/overlay dialog rendering for the desktop `App` component.
+//!
+//! This is a *component*, not a function `App` calls inline, and that is
+//! load-bearing for typing latency. Several dialogs mirror what the user types
+//! into a signal that `App` owns (the TOTP code, the agent name in the
+//! hatching dialog, …). Called inline, every read of those signals subscribed
+//! `App`'s scope, so one keystroke in a dialog re-rendered the entire window —
+//! cloning the whole message list into `Chat`'s props and rebuilding the
+//! sidebar tree per character. As a component this has its own reactive scope:
+//! the same keystroke re-renders the dialogs and nothing else.
+//!
+//! Its props compare equal on every render (`Signal` is `PartialEq` by
+//! identity), so `App` re-rendering does not re-render the dialogs either —
+//! they update from the signals they read. See `docs/input-latency.md`.
 
 #![allow(unused_imports)]
 use std::sync::Arc;
@@ -24,16 +37,15 @@ use rustyclaw_view::*;
 use super::signals::{AppSignals, do_reconnect};
 use anyhow::Context;
 
-pub(super) fn render_dialogs(sig: AppSignals) -> Element {
+#[component]
+pub(super) fn Dialogs(sig: AppSignals) -> Element {
     #[allow(unused_mut, unused_variables)]
     let AppSignals {
         mut state,
         mut gateway,
         mut did_auto_connect,
         mut active_event_client,
-        mut auth_code,
         mut show_pairing,
-        mut hatching_dialog,
         mut show_settings,
         mut show_swarm,
         mut swarm_creating,
@@ -57,6 +69,11 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
         mut show_connection,
         mut connection_prefs,
     } = sig;
+
+    // Draft text typed into a dialog. Owned here rather than in `App` so a
+    // keystroke re-renders this scope only — see the module docs.
+    let mut auth_code = use_signal(String::new);
+    let mut hatching_dialog = use_signal(|| HatchingDialogData::new(state.read().needs_hatching));
 
     let on_secrets_command = move |cmd: SecretsCommand| {
         // Dropping revealed plaintext is local state, not a gateway round

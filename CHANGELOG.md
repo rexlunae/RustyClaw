@@ -338,6 +338,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sit waiting on a code it never prompted for. It now answers whatever the
   gateway asks for.
 
+- **Typing in the desktop client was jerky, and kept becoming jerky again.**
+  Every text field is a controlled input — a keystroke is copied into a Rust
+  signal, re-rendered, and written back onto the field — so any render that is
+  slow or scales with the conversation is felt directly as lag or as swallowed
+  characters. Two paths did both. Building the transcript re-ran an HTML parse
+  and a CommonMark parse over *every* message in the thread, and it runs inside
+  the component that owns the composer's draft text, so a long conversation was
+  re-sanitised once per character typed; sanitised markdown is now cached by
+  source, leaving a keystroke parsing nothing and a streaming flush re-parsing
+  only the bubble that changed. The dialogs were rendered by a plain function
+  call inlined into `App`'s reactive scope while their draft signals (the TOTP
+  code, the agent name) were declared in `App`, so one digit of a TOTP code
+  re-cloned the whole message list into the chat's props and rebuilt the
+  sidebar tree; the dialogs are now a component with their own scope and own
+  their draft text, which `AppSignals` no longer carries. Neither fix removes a
+  keyboard handler — the `onkeydown` shortcuts are one key comparison each and
+  were never the problem — but every one of them is now documented with its
+  reason in `input_latency.rs`, and a test fails on an undocumented one, on a
+  global key listener, on dialogs moving back into `App`'s scope, and on a
+  keystroke or a streaming flush re-parsing markdown it does not need to.
+  `rustyclaw-desktop` is now in the CI unit-test job — it was in none, which is
+  why this kept coming back unnoticed. See `docs/input-latency.md`.
+
 - **Every paired client was locked out after the gateway restarted.** The
   SSH auth check compared whole `PublicKey` structs, and that equality
   includes the key's comment — which exists only on the disk side. Pairing
