@@ -68,6 +68,83 @@ const LINK_INTERCEPT_JS: &str = r#"
 })();
 "#;
 
+/// Commit accumulated streaming chunks to app state in a single write.
+///
+/// The UI updater coalesces token chunks on an ~80 ms budget so a fast
+/// stream does not re-render the whole app once per token (which made
+/// every text input in the window — composer, dialogs, rename boxes —
+/// feel jerky and, under backlog, drop or overwrite characters). Only
+/// chunks targeting the visible thread are applied; a turn running in
+/// another thread streams nowhere and arrives whole at its end.
+fn flush_pending_chunks(
+    pending: &mut Vec<(Option<u64>, String, u32, usize)>,
+    state: &mut AppState,
+    last_flush: &mut Option<std::time::Instant>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    for (thread_id, text, count, bytes) in pending.drain(..) {
+        if state.frame_targets_view(thread_id) {
+            state.append_to_current_message(&text);
+            state.streaming_chunks += count;
+            state.streaming_bytes += bytes;
+        }
+    }
+    *last_flush = Some(std::time::Instant::now());
+}
+
+#[cfg(test)]
+mod chunk_throttle_tests {
+    use super::*;
+
+    #[test]
+    fn flush_commits_visible_thread_in_one_write() {
+        let mut state = AppState::default();
+        state.foreground_thread_id = Some(7);
+        let mut pending = vec![
+            (Some(7), "Hel".to_string(), 1, 3),
+            (Some(7), "lo".to_string(), 1, 2),
+        ];
+        let mut last_flush = None;
+        flush_pending_chunks(&mut pending, &mut state, &mut last_flush);
+
+        // Pending is drained and the flush stamp recorded.
+        assert!(pending.is_empty());
+        assert!(last_flush.is_some());
+
+        // Both deltas landed as one streaming message, and the counters
+        // were merged — exactly one state write's worth of work.
+        assert_eq!(state.streaming_chunks, 2);
+        assert_eq!(state.streaming_bytes, 5);
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].content, "Hello");
+    }
+
+    #[test]
+    fn flush_drops_off_view_thread() {
+        let mut state = AppState::default();
+        state.foreground_thread_id = Some(7);
+        let mut pending = vec![(Some(9), "other".to_string(), 1, 5)];
+        let mut last_flush = None;
+        flush_pending_chunks(&mut pending, &mut state, &mut last_flush);
+
+        assert!(pending.is_empty());
+        assert_eq!(state.streaming_chunks, 0);
+        assert_eq!(state.streaming_bytes, 0);
+        assert!(state.messages.is_empty());
+    }
+
+    #[test]
+    fn flush_is_a_no_op_when_nothing_pending() {
+        let mut state = AppState::default();
+        let mut pending = Vec::new();
+        let mut last_flush = None;
+        flush_pending_chunks(&mut pending, &mut state, &mut last_flush);
+        assert!(last_flush.is_none());
+    }
+}
+
 #[component]
 pub fn App() -> Element {
     // Application state
@@ -496,6 +573,18 @@ pub fn App() -> Element {
             spawn(async move {
                 let mut last_foreground_history_request: Option<u64> = None;
                 let mut refreshed_threads_this_connection = false;
+                // Streaming re-render throttle. The worker can wake us once
+                // per token, and committing each Chunks entry straight to
+                // app state re-renders the whole tree — every text input
+                // (composer, dialogs, rename boxes) got a fresh controlled
+                // `value` patch at token rate while an answer streamed,
+                // which read as jerky typing and, under backlog, overwritten
+                // characters. Accumulate chunks here and commit them in one
+                // state write on a ~80 ms budget instead: ~12 renders/sec
+                // instead of one per token, imperceptibly coarser text.
+                let chunk_flush_interval = std::time::Duration::from_millis(80);
+                let mut last_chunk_flush: Option<std::time::Instant> = None;
+                let mut pending_chunks: Vec<(Option<u64>, String, u32, usize)> = Vec::new();
                 loop {
                     notify.notified().await;
 
@@ -508,6 +597,19 @@ pub fn App() -> Element {
                     // StreamStart → Chunks → ResponseDone sequencing
                     // is preserved.
                     for entry in entries {
+                        // A non-chunk event must land after the chunks that
+                        // preceded it, so commit anything accumulated before
+                        // it is handled (ordering is the only contract that
+                        // matters here; the time budget below is what stops
+                        // the stream from re-rendering at token rate).
+                        if !matches!(&entry, BufferEntry::Chunks { .. }) {
+                            let mut s = state.write();
+                            flush_pending_chunks(
+                                &mut pending_chunks,
+                                &mut s,
+                                &mut last_chunk_flush,
+                            );
+                        }
                         match entry {
                             BufferEntry::Event {
                                 event: GatewayEvent::DomQuery { id, js },
@@ -626,16 +728,26 @@ pub fn App() -> Element {
                                 count,
                                 bytes,
                             } => {
-                                let mut s = state.write();
-                                // Chunks belong to the turn that produced
-                                // them, and the turn to its thread. A turn
-                                // running in a thread the user is not looking
-                                // at streams nowhere; its transcript arrives
-                                // whole when it finishes.
-                                if s.frame_targets_view(thread_id) {
-                                    s.append_to_current_message(&text);
-                                    s.streaming_chunks += count;
-                                    s.streaming_bytes += bytes;
+                                // Accumulate instead of committing: one
+                                // state write per flush interval keeps the
+                                // app from re-rendering per token. Chunks
+                                // belong to the turn that produced them, and
+                                // the turn to its thread. A turn running in a
+                                // thread the user is not looking at streams
+                                // nowhere; its transcript arrives whole when
+                                // it finishes.
+                                match pending_chunks
+                                    .iter_mut()
+                                    .find(|(tid, _, _, _)| *tid == thread_id)
+                                {
+                                    Some((_, ptext, pcount, pbytes)) => {
+                                        ptext.push_str(&text);
+                                        *pcount += count;
+                                        *pbytes += bytes;
+                                    }
+                                    None => {
+                                        pending_chunks.push((thread_id, text, count, bytes));
+                                    }
                                 }
                             }
                         }
@@ -658,13 +770,24 @@ pub fn App() -> Element {
                     // finish while a batch sits unread — and this cannot park
                     // forever: every push is followed by a `notify_one`, as is
                     // the store above, and each drain takes *all* entries.
-                    if worker_done.load(std::sync::atomic::Ordering::SeqCst) {
+                    let worker_finished = worker_done.load(std::sync::atomic::Ordering::SeqCst);
+                    // Commit on the time budget, and always before exiting:
+                    // a stream's tail must not be stranded in the buffer.
+                    if !pending_chunks.is_empty()
+                        && (worker_finished
+                            || last_chunk_flush
+                                .is_none_or(|t| t.elapsed() >= chunk_flush_interval))
+                    {
+                        let mut s = state.write();
+                        flush_pending_chunks(&mut pending_chunks, &mut s, &mut last_chunk_flush);
+                    }
+                    if worker_finished {
                         let drained = buffer
                             .lock()
                             .expect("stream buffer poisoned")
                             .entries
                             .is_empty();
-                        if drained {
+                        if drained && pending_chunks.is_empty() {
                             break;
                         }
                     }
