@@ -47,8 +47,10 @@ pub(crate) fn open_secrets(config: &Config) -> Result<SecretsManager> {
         SecretsManager::new(config.credentials_dir())
     };
 
-    // If TOTP 2FA is enabled, verify before returning.
-    if config.totp_enabled {
+    // If TOTP 2FA is enabled, verify before returning. Asked of the vault
+    // for the same reason as the password above: the enrolled secret is the
+    // authority and the config flag is only what onboarding chose.
+    if manager.totp_required(config.totp_enabled) {
         loop {
             let code = prompt_password("Enter your 2FA code: ")?;
             match manager.verify_totp(code.trim()) {

@@ -1125,3 +1125,82 @@ fn requires_password_agrees_with_is_locked() {
     assert!(SecretsManager::new(&dir).is_locked());
     assert!(!SecretsManager::with_password(&dir, "pw".to_string()).is_locked());
 }
+
+// ── `totp_required` ─────────────────────────────────────────────────────
+//
+// The gateway asks this before challenging a connecting client, so a wrong
+// answer here is a client that is never asked for its 2FA code — a gateway
+// whose owner enrolled an authenticator and believes it is protected.
+
+/// The regression this rule exists for: `totp_enabled` is not part of the
+/// boot slice, so a config replaced by defaults loses it while the vault
+/// keeps the enrolled secret. The secret wins.
+#[test]
+fn an_enrolled_secret_requires_totp_even_when_the_config_forgot() {
+    let dir = temp_dir();
+    let mut manager = SecretsManager::new(&dir);
+    manager.set_agent_access(true);
+    manager.setup_totp("testuser").unwrap();
+
+    assert!(manager.totp_required(false));
+}
+
+/// The mirror-image drift: a flag left set by a run that later removed the
+/// secret. Challenging there could only reject everyone — there is no secret
+/// left to check a code against.
+#[test]
+fn a_readable_vault_with_no_secret_does_not_require_totp() {
+    let dir = temp_dir();
+    let mut manager = SecretsManager::new(&dir);
+    manager.set_agent_access(true);
+    manager.setup_totp("testuser").unwrap();
+    manager.remove_totp().unwrap();
+
+    assert!(!manager.totp_required(true));
+}
+
+/// A locked vault cannot be asked, so the config flag stands — the same
+/// fail-closed fallback `requires_password` makes for a vault not yet on
+/// disk.
+#[test]
+fn a_locked_vault_falls_back_to_the_config_flag() {
+    let dir = temp_dir();
+    {
+        let mut seeded = SecretsManager::with_password(&dir, "pw".to_string());
+        seeded.set_agent_access(true);
+        seeded.setup_totp("testuser").unwrap();
+    }
+
+    // Password vault, no password: nothing here can read the secret.
+    let mut locked = SecretsManager::new(&dir);
+    assert!(locked.is_locked());
+    assert!(locked.totp_required(true));
+    assert!(!locked.totp_required(false));
+}
+
+/// Nothing written yet is not "no 2FA": the config records what onboarding
+/// chose and there is no vault to contradict it.
+#[test]
+fn no_vault_on_disk_falls_back_to_the_config_flag() {
+    let dir = temp_dir();
+    let mut manager = SecretsManager::new(&dir);
+    manager.set_agent_access(true);
+
+    assert!(manager.totp_required(true));
+    assert!(!manager.totp_required(false));
+}
+
+/// Asked on every connection, including ones that never touch a secret —
+/// so it must not be the call that brings a vault (and its key file) into
+/// existence.
+#[test]
+fn asking_whether_totp_applies_creates_no_vault() {
+    let dir = temp_dir();
+    let mut manager = SecretsManager::new(&dir);
+    manager.set_agent_access(true);
+
+    manager.totp_required(true);
+
+    assert!(!dir.join("secrets.json").exists());
+    assert!(!dir.join("secrets.key").exists());
+}

@@ -811,7 +811,7 @@ async fn main() -> Result<()> {
                     .unwrap_or("ws://127.0.0.1:9001");
                 let sp = t::spinner("Reloading gateway configuration\u{2026}");
 
-                match send_gateway_reload(url, config.totp_enabled).await {
+                match send_gateway_reload(url).await {
                     Ok((provider, model)) => {
                         t::spinner_ok(
                             &sp,

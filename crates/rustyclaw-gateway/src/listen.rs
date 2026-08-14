@@ -523,7 +523,12 @@ pub async fn run_gateway(
             .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
         allow_password: false,
         require_pubkey: true,
-        allow_unknown_keys_with_totp: config.totp_enabled,
+        // Admitting an unpaired key rests entirely on the TOTP challenge in
+        // `handle_transport_connection` being there to catch it, so the two
+        // must answer the same question the same way — from the vault, not
+        // from a config flag either of them could be reading alone. See
+        // `SecretsManager::totp_required`.
+        allow_unknown_keys_with_totp: vault.lock().await.totp_required(config.totp_enabled),
     };
 
     // Everything from here on runs inside the block, so every way out of it

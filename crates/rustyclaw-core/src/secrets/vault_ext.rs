@@ -488,6 +488,40 @@ impl SecretsManager {
             .is_some()
     }
 
+    /// Whether this installation must challenge for a TOTP code.
+    ///
+    /// The same shape as [`requires_password`](Self::requires_password), and
+    /// for the same reason: `Config::totp_enabled` records what onboarding
+    /// chose, while the enrolled secret in the vault is what 2FA actually
+    /// *is*. The two disagree whenever the config has been replaced by
+    /// defaults — a hand-edited file, or `Config::load` quarantining a torn
+    /// one — and `totp_enabled` is not part of the boot slice that survives
+    /// that, so the flag goes false while the secret stays in the vault.
+    /// A caller trusting the flag alone then stops asking for a code and
+    /// silently serves a gateway whose owner believes it has 2FA on.
+    ///
+    /// So the vault answers whenever it can be asked:
+    ///
+    /// - secret enrolled → required, whatever the config says;
+    /// - vault readable and holding none → not required: there is no secret
+    ///   to check a code against, so a challenge could only reject everyone;
+    /// - vault locked, unwritten or unreadable → nothing to ask, so
+    ///   `config_flag` stands (fail closed, and "password"/"2FA" for a vault
+    ///   onboarding configured but nothing has written yet).
+    pub fn totp_required(&mut self, config_flag: bool) -> bool {
+        // Deliberately not `has_totp`: `get_secret` would *create* a vault
+        // through `ensure_vault`, and this question gets asked on every
+        // connection — including ones that never touch a secret.
+        if !self.vault_path.exists() {
+            return config_flag;
+        }
+        match self.get_secret(Self::TOTP_SECRET_KEY, true) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => config_flag,
+        }
+    }
+
     /// Remove the stored TOTP secret (disables 2FA).
     pub fn remove_totp(&mut self) -> Result<()> {
         if self.has_totp() {

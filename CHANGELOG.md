@@ -307,6 +307,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Clients stopped being asked for their 2FA code.** Whether to challenge a
+  connecting client read `config.totp_enabled` alone — what onboarding last
+  recorded, not what 2FA is. The enrolled secret lives in the vault, and
+  `totp_enabled` is not part of the boot slice, so a config replaced by
+  defaults (a hand-edited file, or `Config::load` quarantining a torn one)
+  dropped the flag while the vault kept the secret: the gateway served every
+  connection with no challenge, no console line and no log event, and the
+  owner had no way to tell from the client that 2FA had stopped applying.
+  The same flag also admits *unpaired* SSH keys, on the understanding that
+  the code challenge is there to catch them — so the two together opened a
+  gateway to any key. The decision is now
+  `SecretsManager::totp_required`, asked of the vault by both, the same rule
+  the secret viewer's step-up check already used: an enrolled secret means a
+  code is required whatever the config says; a readable vault with no secret
+  means no challenge (there would be nothing to check it against); and a
+  locked or not-yet-written vault falls back to the config flag. Onboarding
+  reconciles the flag with the vault on the way through, so a drifted config
+  is repaired rather than worked around.
+
+- **A gateway behind OpenSSH hung up instead of asking for a code.** Under
+  `--ssh-stdio` sshd owns the socket, so the gateway sees a pipe with no
+  peer address — and the TOTP path needed one for rate limiting, closing the
+  connection before the challenge went out. That reached the user as a
+  client that never prompts and a connection that dies on its own. Peerless
+  transports are now challenged like any other and share one rate-limit
+  bucket under an address no peer can present. `rustyclaw gateway reload`
+  had the mirror-image bug: it decided from its own `totp_enabled` whether
+  to expect a challenge (and one branch had the test inverted), so it could
+  sit waiting on a code it never prompted for. It now answers whatever the
+  gateway asks for.
+
 - **Every paired client was locked out after the gateway restarted.** The
   SSH auth check compared whole `PublicKey` structs, and that equality
   includes the key's comment — which exists only on the disk side. Pairing

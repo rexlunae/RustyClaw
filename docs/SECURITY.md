@@ -47,6 +47,13 @@ rustyclaw secrets totp enable
 
 This generates a QR code for your authenticator app. Once enabled, the agent (and user) must provide a valid TOTP code to access secrets.
 
+Whether 2FA applies is read from the vault, not from `totp_enabled`: a secret
+enrolled in the vault means every client is challenged on connect, whatever the
+config says, and a vault with no secret enrolled is never challenged (there
+would be nothing to check a code against). `totp_enabled` records the choice
+and still decides for a vault that is locked or has not been written yet — so
+a config replaced by defaults cannot silently turn 2FA off.
+
 ### Layer 3: Per-Credential Access Policies
 
 Each credential can have its own access policy:

@@ -447,16 +447,29 @@ pub(crate) async fn handle_connection(
     //
     // If TOTP 2FA is enabled, require it for every transport.
     // SSH public-key auth is necessary but not sufficient.
-    if config.totp_enabled {
-        // Rate limiting requires a peer IP.
-        let rate_ip = match peer_ip {
-            Some(ip) => ip,
-            None => {
-                warn!("TOTP required but no peer IP available");
-                writer.close().await?;
-                return Ok(());
-            }
-        };
+    //
+    // Asked of the vault, not of `config.totp_enabled` alone: the enrolled
+    // secret is what 2FA is, the flag only records what onboarding chose,
+    // and a config replaced by defaults loses the flag while the vault keeps
+    // the secret. See `SecretsManager::totp_required` — the same rule the
+    // secret viewer's step-up check already applies.
+    let totp_required = {
+        let mut v = vault.lock().await;
+        v.totp_required(config.totp_enabled)
+    };
+    if totp_required {
+        // Rate limiting is keyed by peer IP. A transport without one —
+        // `--ssh-stdio`, where sshd owns the socket and the gateway sees
+        // only a pipe — must still be challenged: closing here answered a
+        // 2FA-protected gateway with silence, which reaches the user as a
+        // client that never asks for a code and a connection that dies on
+        // its own. Peerless transports share one bucket, under an address
+        // no peer can present. That costs nothing where it applies: sshd
+        // runs a fresh gateway process per connection, so the limiter
+        // starts empty on each one regardless, `MAX_TOTP_ATTEMPTS` below
+        // bounds guessing within a connection, and opening another one
+        // means passing sshd's public-key auth again.
+        let rate_ip = peer_ip.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
         // Check rate limit first.
         if let Some(remaining) = auth::check_rate_limit(&rate_limiter, rate_ip).await {
@@ -3187,22 +3200,17 @@ mod tests {
         Ok((tmp, cfg))
     }
 
-    #[tokio::test]
-    async fn ssh_connection_requires_totp_when_enabled() -> Result<()> {
-        let (_tmp, mut cfg) = test_config_with_temp_state()?;
-        cfg.totp_enabled = true;
-
-        let peer = PeerInfo {
-            addr: Some("127.0.0.1:2222".parse().unwrap()),
-            username: Some("tester".to_string()),
-            key_fingerprint: Some("SHA256:test".to_string()),
-            transport_type: TransportType::Ssh,
-        };
-
-        // Disconnect immediately after first server write.
+    /// Serve one connection that hangs up at the first read, and return
+    /// everything the gateway wrote to it. Enough to see the handshake:
+    /// whether a client is challenged for a code is decided before any
+    /// frame of the client's is read.
+    async fn handshake_frames(
+        cfg: Config,
+        peer: PeerInfo,
+        vault: SharedVault,
+    ) -> Result<Vec<ServerFrame>> {
         let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![None]);
 
-        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
         let skill_mgr: SharedSkillManager =
             Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
         rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
@@ -3224,12 +3232,110 @@ mod tests {
         )
         .await?;
 
-        let frames = outgoing.lock().await;
+        let frames = outgoing.lock().await.clone();
+        Ok(frames)
+    }
+
+    fn challenged(frames: &[ServerFrame]) -> bool {
+        frames
+            .iter()
+            .any(|f| matches!(f.frame_type, ServerFrameType::AuthChallenge))
+    }
+
+    fn ssh_peer() -> PeerInfo {
+        PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_connection_requires_totp_when_enabled() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = true;
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let frames = handshake_frames(cfg, ssh_peer(), vault).await?;
+
         assert!(
-            frames
-                .iter()
-                .any(|f| matches!(f.frame_type, ServerFrameType::AuthChallenge)),
+            challenged(&frames),
             "Expected TOTP auth challenge for SSH connection when totp_enabled=true"
+        );
+
+        Ok(())
+    }
+
+    /// The enrolled secret is what 2FA is; `totp_enabled` only records what
+    /// onboarding chose, and it is not in the boot slice that survives a
+    /// config replaced by defaults. Trusting the flag alone meant a gateway
+    /// with an authenticator enrolled quietly stopped asking for codes.
+    #[tokio::test]
+    async fn an_enrolled_vault_is_challenged_even_when_the_config_forgot() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+
+        let mut manager = SecretsManager::new(cfg.credentials_dir());
+        manager.set_agent_access(true);
+        manager.setup_totp("tester")?;
+        let vault: SharedVault = Arc::new(Mutex::new(manager));
+
+        let frames = handshake_frames(cfg, ssh_peer(), vault).await?;
+
+        assert!(
+            challenged(&frames),
+            "a vault with TOTP enrolled must be challenged whatever the config says"
+        );
+
+        Ok(())
+    }
+
+    /// A vault that holds no TOTP secret has no code to check one against,
+    /// so a stale flag must not produce a challenge nothing can answer.
+    #[tokio::test]
+    async fn a_vault_without_totp_is_not_challenged_on_a_stale_flag() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = true;
+
+        // A real vault on disk, readable, with no TOTP secret in it.
+        let mut manager = SecretsManager::new(cfg.credentials_dir());
+        manager.set_agent_access(true);
+        manager.store_secret("api_key", "sk-123")?;
+        let vault: SharedVault = Arc::new(Mutex::new(manager));
+
+        let frames = handshake_frames(cfg, ssh_peer(), vault).await?;
+
+        assert!(
+            !challenged(&frames),
+            "no enrolled secret means no second factor to demand"
+        );
+
+        Ok(())
+    }
+
+    /// `--ssh-stdio` behind OpenSSH: sshd owns the socket, so the gateway
+    /// sees a pipe with no peer address. That used to close the connection
+    /// before the challenge went out, which reaches the user as a client
+    /// that never asks for a code.
+    #[tokio::test]
+    async fn a_transport_without_a_peer_address_is_still_challenged() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = true;
+
+        let peer = PeerInfo {
+            addr: None,
+            username: Some("tester".to_string()),
+            key_fingerprint: None,
+            transport_type: TransportType::SshSubsystem,
+        };
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let frames = handshake_frames(cfg, peer, vault).await?;
+
+        assert!(
+            challenged(&frames),
+            "a peerless transport must be challenged, not dropped"
         );
 
         Ok(())
