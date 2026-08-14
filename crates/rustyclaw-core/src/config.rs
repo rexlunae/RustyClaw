@@ -419,6 +419,18 @@ pub struct MessengerConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secret_refs: BTreeMap<String, String>,
 
+    // ── Fields without a struct slot ───────────────────────────────────
+    /// Values for schema fields that have no named field above — a plugin
+    /// kind's fields live here, keyed by schema field name and stored as
+    /// entered. The kind's schema (via the messenger registry) is the
+    /// authority on which names are meaningful: the gateway save path
+    /// rejects names the schema doesn't list, while this storage stays
+    /// permissive so a plugin account round-trips without this struct
+    /// learning its vocabulary. Secret fields never land here — they live
+    /// in the vault behind `secret_refs` like any builtin's.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, String>,
+
     // ── Presented identity ─────────────────────────────────────────────
     /// How the agent introduces itself on this messenger. Unset fields fall
     /// back to the agent's own name and description.
@@ -471,6 +483,9 @@ impl std::fmt::Debug for MessengerConfig {
             .field("paired_users", &self.paired_users)
             .field("dm", &self.dm)
             .field("secret_refs", &self.secret_refs.keys().collect::<Vec<_>>())
+            // Keys only: the schema saying which extra fields are secret
+            // isn't consultable from Debug, so no value is trusted here.
+            .field("extra", &self.extra.keys().collect::<Vec<_>>())
             .field("profile", &self.profile)
             .finish()
     }

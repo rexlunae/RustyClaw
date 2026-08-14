@@ -497,6 +497,18 @@ impl MessengerRegistry {
 - Collisions: a plugin kind may not shadow any id in `KINDS` (even
   feature-off — the id would change meaning when the feature returns) nor
   any other plugin's kind. First registration wins; there is no override.
+- **Field storage** (landed): a plugin kind's schema is not decorative —
+  its field values live in `MessengerConfig.extra`, a `field name → value`
+  map that `field_value`/`set_field` fall through to for any name without
+  a struct slot. Storage is deliberately permissive; the schema (registry)
+  is the authority on which names are valid, enforced where fields enter
+  (the gateway save path). Secret fields never land there: they vault
+  behind `secret_refs` exactly like a builtin's, and `resolve_credentials`
+  delivers them back through `set_field` at connect time, so a plugin
+  factory reads everything — plain and secret — via `field_value`. The
+  `messenger_type` id itself is `MessengerKind`: unit variants for the
+  in-tree vocabulary, `Other(String)` carrying plugin ids; serialized as
+  the bare string either way.
 
 ### 14.2 The ABI surface (rides §3/§12 phase 1)
 

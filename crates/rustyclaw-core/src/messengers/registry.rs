@@ -365,6 +365,43 @@ mod tests {
     }
 
     #[test]
+    fn plugin_field_values_reach_the_factory() {
+        let reg = MessengerRegistry::new_with_builtins();
+        let mut spec = plugin_spec("acme_fields");
+        spec.fields = Cow::Owned(vec![FieldSpec {
+            name: Cow::Borrowed("workspace"),
+            label: Cow::Borrowed("Workspace"),
+            kind: setup::FieldKind::Text,
+            requirement: setup::Requirement::Required,
+            help: Cow::Borrowed("Which workspace to join"),
+        }]);
+        // The factory reads its schema's field the only way a plugin can:
+        // by name through `field_value`, backed by the `extra` map.
+        let factory: MessengerFactory = Arc::new(|config: &MessengerConfig| {
+            let workspace = config
+                .field_value("workspace")
+                .ok_or_else(|| anyhow::anyhow!("workspace not set"))?;
+            Ok(Box::new(ConsoleMessenger::new(format!(
+                "{}@{workspace}",
+                config.name
+            ))) as Box<dyn Messenger>)
+        });
+        reg.register_plugin_kind("acme", spec, factory)
+            .expect("registers");
+
+        let mut config = MessengerConfig {
+            messenger_type: "acme_fields".into(),
+            name: "a1".into(),
+            ..Default::default()
+        };
+        config.set_field("workspace", "myteam").unwrap();
+        let messenger = reg
+            .create(&config)
+            .unwrap_or_else(|e| panic!("plugin field should reach the factory: {e}"));
+        assert_eq!(messenger.name(), "a1@myteam");
+    }
+
+    #[test]
     fn plugin_kind_cannot_shadow_in_tree_ids() {
         let reg = MessengerRegistry::new_with_builtins();
         // A registered builtin.

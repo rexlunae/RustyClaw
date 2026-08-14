@@ -709,7 +709,12 @@ pub fn plaintext_fields(
     value_of: impl Fn(&str) -> Option<String>,
     has_secret_ref: impl Fn(&str) -> bool,
 ) -> Vec<PlaintextField> {
-    let Some(spec) = kind_spec(kind) else {
+    // Registry first so a plugin kind's secrets are scanned like a
+    // builtin's; the static table still answers for feature-off kinds.
+    let Some(spec) = crate::messengers::messenger_registry()
+        .spec(kind)
+        .or_else(|| kind_spec(kind).cloned())
+    else {
         return Vec::new();
     };
     spec.secret_fields()
@@ -756,7 +761,12 @@ impl crate::config::MessengerConfig {
             "spaces" => list(&self.spaces),
             "app_id" => text(&self.app_id),
             "app_password" => text(&self.app_password),
-            _ => None,
+            // A field without a struct slot — a plugin kind's field.
+            other => self
+                .extra
+                .get(other)
+                .cloned()
+                .filter(|s| !s.trim().is_empty()),
         }
     }
 
@@ -765,6 +775,13 @@ impl crate::config::MessengerConfig {
     /// Returns the parse failure rather than silently dropping a bad value: a
     /// port that quietly failed to apply is a connection failure nobody can
     /// explain later.
+    ///
+    /// A name with no struct slot is stored verbatim in [`Self::extra`] —
+    /// that is where a plugin kind's fields live. Storage does not judge the
+    /// name: whether a field belongs to the account's kind is the schema's
+    /// call, made where fields enter (the gateway save path checks the
+    /// registry), not down here where a rejection could strand a plugin
+    /// account's data.
     pub fn set_field(&mut self, field: &str, value: &str) -> Result<(), String> {
         let trimmed = value.trim();
         let text = |v: &str| (!v.is_empty()).then(|| v.to_string());
@@ -810,7 +827,13 @@ impl crate::config::MessengerConfig {
                     other => return Err(format!("'{other}' is not a yes/no value")),
                 }
             }
-            other => return Err(format!("Unknown field: '{other}'")),
+            other => {
+                if trimmed.is_empty() {
+                    self.extra.remove(other);
+                } else {
+                    self.extra.insert(other.to_string(), trimmed.to_string());
+                }
+            }
         }
         Ok(())
     }
@@ -846,7 +869,13 @@ impl crate::config::MessengerConfig {
 /// submitted form and a credential already in the vault — re-editing an
 /// account without retyping its token must not read as "token missing".
 pub fn validate_fields(kind: &str, has_value: impl Fn(&str) -> bool) -> Result<(), Vec<String>> {
-    let Some(spec) = kind_spec(kind) else {
+    // Registry first, so a plugin kind's account validates against the
+    // schema its plugin registered; the static table still answers for
+    // feature-off builtins, which validate even where they cannot connect.
+    let Some(spec) = crate::messengers::messenger_registry()
+        .spec(kind)
+        .or_else(|| kind_spec(kind).cloned())
+    else {
         return Err(vec![format!("Unknown messenger type: '{kind}'")]);
     };
 
@@ -951,6 +980,40 @@ mod tests {
     #[test]
     fn an_unknown_messenger_type_is_rejected_rather_than_accepted_blankly() {
         assert!(validate_fields("carrier-pigeon", |_| true).is_err());
+    }
+
+    #[test]
+    fn a_field_with_no_struct_slot_lives_in_extra_and_round_trips() {
+        let mut config = crate::config::MessengerConfig::default();
+        config.set_field("workspace", " myteam ").unwrap();
+        assert_eq!(
+            config.extra.get("workspace").map(String::as_str),
+            Some("myteam"),
+            "trimmed value stored under its own name"
+        );
+        assert_eq!(config.field_value("workspace").as_deref(), Some("myteam"));
+        assert!(config.field_is_set("workspace"));
+
+        // An empty value clears, same as a named field.
+        config.set_field("workspace", "").unwrap();
+        assert!(config.extra.is_empty());
+        assert_eq!(config.field_value("workspace"), None);
+        assert!(!config.field_is_set("workspace"));
+    }
+
+    #[test]
+    fn extra_fields_survive_a_toml_round_trip() {
+        let mut config = crate::config::MessengerConfig {
+            name: "acme-1".into(),
+            messenger_type: "acme_chat".into(),
+            ..Default::default()
+        };
+        config.set_field("workspace", "myteam").unwrap();
+
+        let text = toml::to_string(&config).expect("serializes");
+        let back: crate::config::MessengerConfig = toml::from_str(&text).expect("parses");
+        assert_eq!(back, config);
+        assert_eq!(back.field_value("workspace").as_deref(), Some("myteam"));
     }
 
     #[test]

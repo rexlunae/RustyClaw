@@ -1223,6 +1223,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_plugin_kind_account_saves_like_a_builtin() {
+        use rustyclaw_core::messengers::setup::{FieldKind, FieldSpec, KindSpec, Requirement};
+        use std::borrow::Cow;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+
+        // A kind this gateway was never compiled with: schema from the
+        // registry, plain field with no MessengerConfig slot, one secret.
+        let spec = KindSpec {
+            id: Cow::Borrowed("cfg_plugin_chat"),
+            label: Cow::Borrowed("Acme Chat"),
+            icon: Cow::Borrowed("🔌"),
+            summary: Cow::Borrowed("Plugin-registered test kind"),
+            feature: None,
+            fields: Cow::Owned(vec![
+                FieldSpec {
+                    name: Cow::Borrowed("workspace"),
+                    label: Cow::Borrowed("Workspace"),
+                    kind: FieldKind::Text,
+                    requirement: Requirement::Required,
+                    help: Cow::Borrowed("Which workspace to join"),
+                },
+                FieldSpec {
+                    name: Cow::Borrowed("api_key"),
+                    label: Cow::Borrowed("API key"),
+                    kind: FieldKind::Secret,
+                    requirement: Requirement::Required,
+                    help: Cow::Borrowed("Acme API key"),
+                },
+            ]),
+        };
+        rustyclaw_core::messengers::messenger_registry()
+            .register_plugin_kind(
+                "cfg-test-plugin",
+                spec,
+                Arc::new(|config: &MessengerConfig| {
+                    Ok(Box::new(rustyclaw_core::messengers::ConsoleMessenger::new(
+                        config.name.clone(),
+                    ))
+                        as Box<dyn rustyclaw_core::messengers::Messenger>)
+                }),
+            )
+            .expect("plugin kind registers");
+
+        save_account(
+            &mut config,
+            &vault,
+            None,
+            "acme-1".to_string(),
+            "cfg_plugin_chat".to_string(),
+            true,
+            vec![("workspace".to_string(), "myteam".to_string())],
+            vec![("api_key".to_string(), "sekrit".to_string())],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("plugin-kind account saves");
+
+        let account = &config.messengers[0];
+        assert_eq!(account.messenger_type.as_str(), "cfg_plugin_chat");
+        assert_eq!(
+            account.extra.get("workspace").map(String::as_str),
+            Some("myteam"),
+            "plain plugin field persists in `extra`"
+        );
+        assert_eq!(
+            account.secret_ref("api_key"),
+            Some("messenger/acme-1/api_key"),
+            "plugin secret is vault-referenced, not in config"
+        );
+        assert!(!account.extra.contains_key("api_key"));
+        assert_eq!(
+            vault
+                .lock()
+                .await
+                .read_service_credential("messenger/acme-1/api_key")
+                .unwrap()
+                .map(String::from)
+                .as_deref(),
+            Some("sekrit")
+        );
+    }
+
+    #[tokio::test]
     async fn a_saved_credential_goes_to_the_vault_and_not_to_config() {
         let dir = tempfile::tempdir().unwrap();
         let (mut config, vault) = fixture(dir.path());
