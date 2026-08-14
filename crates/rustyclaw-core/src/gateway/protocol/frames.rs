@@ -203,6 +203,12 @@ pub enum ClientFrameType {
     Steer = 98,
     /// Delete one message from a thread's history.
     MessageDelete = 99,
+    /// A user interaction with a plugin's UI (button press, form submit).
+    PluginUiEvent = 100,
+    /// Request the in-tree tool groups and their enabled state.
+    ToolGroupsList = 101,
+    /// Enable or disable a whole tool group.
+    ToolGroupSetEnabled = 102,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -398,6 +404,10 @@ pub enum ServerFrameType {
     /// Reply to a `ThreadExport`: the thread's transcript as Markdown,
     /// ready to be written wherever the user chooses.
     ThreadExportResult = 94,
+    /// The in-tree tool groups and their enabled state. Appended — serde
+    /// encodes these enums by declaration order, so new types go last even
+    /// though the `= N` values already diverge from the indices.
+    ToolGroupsResult = 95,
 }
 
 /// Status frame sub-types.
@@ -1125,6 +1135,26 @@ pub enum ClientPayload {
         thread_id: u64,
         message_id: String,
     },
+    /// A user interaction with a plugin's UI. Until now the only thing a
+    /// plugin action button could do was ask the agent in prose; this frame
+    /// carries the interaction itself, so the gateway can record it against
+    /// the plugin (and, once native plugins land, deliver it to `on_event`).
+    /// `value_json` is JSON-as-string, like `PluginInfoDto::state_json` —
+    /// the transport is bincode.
+    PluginUiEvent {
+        plugin_name: String,
+        element_id: String,
+        value_json: String,
+    },
+    /// Request the in-tree tool groups and their enabled state.
+    ToolGroupsList,
+    /// Enable or disable a whole tool group (see `tools::catalog`). The
+    /// gateway persists the choice in `disabled_tool_groups` and replies
+    /// with the refreshed group list.
+    ToolGroupSetEnabled {
+        key: String,
+        enabled: bool,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1656,6 +1686,11 @@ pub enum ServerPayload {
     /// a wrong picture.
     DownloadsUpdate {
         downloads: Vec<DownloadInfoDto>,
+    },
+    /// The in-tree tool groups with their enabled state. Reply to
+    /// `ToolGroupsList` and `ToolGroupSetEnabled`.
+    ToolGroupsResult {
+        groups: Vec<ToolGroupDto>,
     },
 }
 

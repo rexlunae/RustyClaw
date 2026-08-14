@@ -1124,6 +1124,66 @@ async fn tool_toggle(
     }
 }
 
+/// The in-tree tool groups with their enabled state, as a reply frame.
+fn tool_groups_frame() -> ServerFrame {
+    let groups = rustyclaw_core::tools::catalog()
+        .sources()
+        .into_iter()
+        .map(|s| rustyclaw_core::gateway::protocol::ToolGroupDto {
+            key: s.key,
+            enabled: s.enabled,
+            tool_count: s.tool_count as u32,
+        })
+        .collect();
+    ServerFrame {
+        frame_type: ServerFrameType::ToolGroupsResult,
+        payload: ServerPayload::ToolGroupsResult { groups },
+    }
+}
+
+pub(crate) fn tool_groups_list() -> ServerFrame {
+    tool_groups_frame()
+}
+
+/// Enable or disable a whole tool group: apply to the live catalog, persist
+/// in `disabled_tool_groups` (same shared-config discipline as
+/// `tool_toggle` — mutate the shared config, save, mirror locally), and
+/// reply with the refreshed group list so the panel redraws from truth.
+pub(crate) async fn tool_group_set_enabled(
+    config: &mut Config,
+    shared_config: &crate::SharedConfig,
+    key: String,
+    enabled: bool,
+) -> ServerFrame {
+    let result: Result<(), String> = async {
+        rustyclaw_core::tools::catalog()
+            .set_source_enabled(&key, enabled)
+            .map_err(|e| e.to_string())?;
+        {
+            let mut shared = shared_config.write().await;
+            shared.disabled_tool_groups.retain(|g| g != &key);
+            if !enabled {
+                shared.disabled_tool_groups.push(key.clone());
+            }
+            shared.save(None).map_err(|e| e.to_string())?;
+            config.disabled_tool_groups = shared.disabled_tool_groups.clone();
+        }
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => tool_groups_frame(),
+        Err(e) => ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: format!("Tool group not toggled: {e}"),
+            },
+        },
+    }
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 // Channels
 // ═════════════════════════════════════════════════════════════════════════

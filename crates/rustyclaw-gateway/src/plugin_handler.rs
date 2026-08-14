@@ -84,3 +84,37 @@ pub(crate) async fn handle_plugin_refresh(
     }
     send_plugins_update(writer).await
 }
+
+/// Handle a `PluginUiEvent`: record the interaction against the plugin and
+/// push the refreshed list, so the client that clicked sees the state move.
+///
+/// This is the wire replacement for the desktop's old behaviour of turning a
+/// button press into a chat message — the interaction is now a fact recorded
+/// on the plugin (bounded ring under `_ui_events` in its state) rather than
+/// only a request to the model. Once native plugins land, this same frame
+/// routes to the plugin's `on_event` instead of the ring.
+pub(crate) async fn handle_plugin_ui_event(
+    writer: &mut dyn transport::TransportWriter,
+    plugin_name: String,
+    element_id: String,
+    value_json: String,
+) -> Result<()> {
+    debug!(plugin = %plugin_name, element = %element_id, "Plugin UI event");
+    // The value travels as JSON-in-a-string (the wire is bincode). A client
+    // that sends something unparsable still gets its interaction recorded —
+    // as the raw string — rather than dropped: the button press happened.
+    let value = serde_json::from_str(&value_json)
+        .unwrap_or_else(|_| serde_json::Value::String(value_json.clone()));
+    if let Err(e) = rustyclaw_core::tools::record_plugin_ui_event(&plugin_name, &element_id, &value)
+    {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: format!("Plugin UI event not recorded: {e}"),
+            },
+        };
+        return send_frame(writer, &frame).await;
+    }
+    send_plugins_update(writer).await
+}
