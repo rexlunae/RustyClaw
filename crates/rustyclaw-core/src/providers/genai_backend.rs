@@ -306,6 +306,9 @@ impl From<genai::chat::ChatResponse> for ModelResponse {
         let mut result = ModelResponse {
             prompt_tokens: resp.usage.prompt_tokens.map(|t| t.max(0) as u64),
             completion_tokens: resp.usage.completion_tokens.map(|t| t.max(0) as u64),
+            // The OpenAI adapter reports reasoning in a dedicated field, not
+            // as a content part — read it before consuming the content.
+            reasoning: resp.reasoning_content.clone().unwrap_or_default(),
             ..Default::default()
         };
 
@@ -318,8 +321,9 @@ impl From<genai::chat::ChatResponse> for ModelResponse {
                     result.text.push_str(&t);
                 }
                 ContentPart::ToolCall(tc) => result.tool_calls.push(tc.into()),
-                // Thinking-mode providers require the reasoning content to
-                // be echoed back on later assistant messages.
+                // Fallback for adapters that surface reasoning as a part
+                // (the OpenAI adapter already provided it via the
+                // `reasoning_content` field above).
                 ContentPart::ReasoningContent(r) => {
                     if !result.reasoning.is_empty() {
                         result.reasoning.push('\n');
@@ -904,6 +908,29 @@ mod tests {
         assert_eq!(assistant_content(&plain), "hi");
         // ... but wraps a turn that carries reasoning so the API gets it back.
         assert!(assistant_content(&model_resp).contains("reasoning"));
+    }
+
+    #[test]
+    fn batch_response_captures_reasoning_from_the_dedicated_field() {
+        // The OpenAI adapter reports reasoning in ChatResponse::reasoning_content
+        // (not as a content part), and scheduled/internal turns take the
+        // non-streaming path — the reasoning must still reach ModelResponse.
+        let resp = genai::chat::ChatResponse {
+            content: genai::chat::MessageContent::from_text("answer"),
+            reasoning_content: Some("the reasoning".to_string()),
+            model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            provider_model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            stop_reason: None,
+            usage: genai::chat::Usage::default(),
+            captured_raw_body: None,
+            response_id: None,
+        };
+        let converted: ModelResponse = resp.into();
+        assert_eq!(converted.text, "answer");
+        assert_eq!(
+            converted.reasoning, "the reasoning",
+            "batch reasoning must come from ChatResponse::reasoning_content"
+        );
     }
 
     #[test]
