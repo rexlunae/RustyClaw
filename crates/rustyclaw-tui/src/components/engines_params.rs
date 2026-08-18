@@ -145,7 +145,8 @@ fn on_off(v: bool) -> String {
 /// Adjust a field by `delta` (+1 / -1 keypresses).  Numeric fields step by
 /// `field.step`; selects cycle through their options (None included); toggles
 /// set on (+) or off (-); `default_model` cycles through `models` (None
-/// included).
+/// included, and a no-op while the model list is empty so the saved choice
+/// is never erased by a pick with nothing to pick).
 pub fn adjust(field: &ParamField, cfg: &mut EngineConfig, delta: i32, models: &[String]) {
     match field.key {
         "context_length" => adjust_num(&mut cfg.context_length, delta, field.step),
@@ -162,6 +163,12 @@ pub fn adjust(field: &ParamField, cfg: &mut EngineConfig, delta: i32, models: &[
         "max_output_tokens" => adjust_num(&mut cfg.max_output_tokens, delta, field.step),
         "max_concurrency" => adjust_num(&mut cfg.max_concurrency, delta, field.step),
         "default_model" => {
+            // With no model list there is nothing to pick from: cycling
+            // would land on the None-only option and silently erase the
+            // saved choice, so changing the key is a no-op instead.
+            if models.is_empty() {
+                return;
+            }
             let mut options: Vec<Option<String>> = vec![None];
             options.extend(models.iter().cloned().map(Some));
             let idx = options
@@ -324,6 +331,20 @@ mod tests {
         // -1 from unset wraps to the last model.
         adjust(&DEFAULT_MODEL, &mut cfg, -1, &models);
         assert_eq!(cfg.default_model.as_deref(), Some("b.gguf"));
+    }
+
+    #[test]
+    fn default_model_is_a_noop_with_an_empty_model_list() {
+        // With nothing to pick, +/- must not erase the saved choice (the
+        // cycle would otherwise land on the None-only option).
+        let mut cfg = EngineConfig {
+            default_model: Some("a.gguf".into()),
+            ..Default::default()
+        };
+        adjust(&DEFAULT_MODEL, &mut cfg, 1, &[]);
+        assert_eq!(cfg.default_model.as_deref(), Some("a.gguf"));
+        adjust(&DEFAULT_MODEL, &mut cfg, -1, &[]);
+        assert_eq!(cfg.default_model.as_deref(), Some("a.gguf"));
     }
 
     #[test]
