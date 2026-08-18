@@ -938,7 +938,7 @@ pub fn engine_service_defs(
 
 /// Determine the command+args to start an engine process.
 fn engine_start_command(id: &str, cfg: &EngineConfig) -> (String, Vec<String>) {
-    let mut args: Vec<String> = cfg.extra_args.clone();
+    let args: Vec<String> = cfg.extra_args.clone();
     match id {
         "ollama" => {
             let cmd = "ollama".to_string();
@@ -953,17 +953,22 @@ fn engine_start_command(id: &str, cfg: &EngineConfig) -> (String, Vec<String>) {
         }
         "llamacpp" => {
             let cmd = "llama-server".to_string();
-            // Always pass the resolved port (not only when configured), so
-            // the port-scoped stop can identify auto-started servers.
+            // Built-in flags first, then extra_args last: llama-server takes
+            // the last occurrence of a repeated flag, so a hand-written
+            // `--port`/`--ctx-size` in extra_args must override the defaults.
+            // The resolved port is always emitted so the port-scoped stop can
+            // identify auto-started servers.
+            let mut a = Vec::new();
             let port = cfg.port.unwrap_or(8080);
-            args.extend(["--port".to_string(), port.to_string()]);
+            a.extend(["--port".to_string(), port.to_string()]);
             if let Some(ref models_dir) = cfg.models_dir {
-                args.extend(["--model-store".to_string(), models_dir.clone()]);
+                a.extend(["--model-store".to_string(), models_dir.clone()]);
             }
             if let Some(ctx) = cfg.context_length {
-                args.extend(["--ctx-size".to_string(), ctx.to_string()]);
+                a.extend(["--ctx-size".to_string(), ctx.to_string()]);
             }
-            (cmd, args)
+            a.extend(args);
+            (cmd, a)
         }
         "joshua" => {
             let cmd = "joshua".to_string();
@@ -1030,6 +1035,45 @@ mod sh_quote_tests {
 #[cfg(test)]
 mod fallback_tests {
     use super::*;
+
+    /// llama.cpp auto-start: built-in flags come first, so a hand-written
+    /// `--port`/`--ctx-size` in extra_args still wins (llama-server takes
+    /// the last occurrence of a repeated flag).
+    #[test]
+    fn llamacpp_start_command_lets_extra_args_override_builtins() {
+        let cfg = EngineConfig {
+            context_length: Some(4096),
+            extra_args: vec![
+                "--port".into(),
+                "9999".into(),
+                "--ctx-size".into(),
+                "8192".into(),
+            ],
+            ..Default::default()
+        };
+        let (cmd, args) = engine_start_command("llamacpp", &cfg);
+        assert_eq!(cmd, "llama-server");
+        // Built-ins first …
+        assert_eq!(
+            &args[0..4],
+            &[
+                "--port".to_string(),
+                "8080".to_string(),
+                "--ctx-size".to_string(),
+                "4096".to_string()
+            ]
+        );
+        // … then extra_args last, so they win.
+        assert_eq!(
+            &args[4..],
+            &[
+                "--port".to_string(),
+                "9999".to_string(),
+                "--ctx-size".to_string(),
+                "8192".to_string()
+            ]
+        );
+    }
 
     /// A local engine whose server is not running must still surface its
     /// on-disk models through the provider-model fallback, with the fetch

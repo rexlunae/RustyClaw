@@ -452,7 +452,12 @@ pub enum StatusType {
 /// be misread — so a peer at version 1 cannot decode these. Mismatched peers
 /// fail at the first affected frame rather than mis-parsing one into another;
 /// the version is what lets an envelope-carrying transport say so plainly.
-pub const WIRE_PROTOCOL_VERSION: u16 = 3;
+/// Bumped to 4 when `EngineConfig` gained its typed parameter fields (the
+/// already-shipped `EngineConfigSet` payload widened by seven positional
+/// fields) and `EngineConfigList` / `ProviderModelLoadedList` were added: an
+/// older peer must fail at the first affected frame instead of reading the
+/// new fields as wrong values.
+pub const WIRE_PROTOCOL_VERSION: u16 = 4;
 
 /// Stream ID used for connection-level control frames.
 pub const CONTROL_STREAM_ID: u64 = 0;

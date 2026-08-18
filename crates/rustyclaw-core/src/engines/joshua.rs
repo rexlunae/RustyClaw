@@ -143,20 +143,22 @@ impl JoshuaEngine {
         }
         let port = cfg.port.unwrap_or(DEFAULT_PORT);
         let mut cmd = format!(
-            "nohup joshua serve --model '{}' --addr 127.0.0.1:{}",
-            model_path.display(),
+            "nohup joshua serve --model {} --addr 127.0.0.1:{}",
+            sh_quote(&model_path.display().to_string()),
             port
         );
         // Typed parameters (context window, device, huge pages, …) become
         // flags first; raw extra_args come after so an explicit flag in
-        // extra_args still wins (clap takes the last occurrence).
+        // extra_args still wins (clap takes the last occurrence).  Every
+        // extra_arg is sh_quoted: they are client-supplied strings that
+        // reach a `sh -c` command line, so metacharacters must stay inert.
         for arg in joshua_serve_flags(cfg) {
             cmd.push(' ');
             cmd.push_str(&arg);
         }
         for arg in &cfg.extra_args {
             cmd.push(' ');
-            cmd.push_str(arg);
+            cmd.push_str(&sh_quote(arg));
         }
         cmd.push_str(" > /dev/null 2>&1 &");
         Self::sh(&cmd).await.ignore();
@@ -210,6 +212,7 @@ impl JoshuaEngine {
     /// Whether a `joshua serve` process for the given port is still running
     /// (best-effort; Linux only).  Used to tell "still loading" apart from
     /// "crashed" when the health probe has not answered yet.
+    #[cfg(target_os = "linux")]
     async fn server_process_alive(port: u16) -> bool {
         crate::engines::running_server_cmdlines("joshua serve")
             .await

@@ -218,7 +218,9 @@ impl LocalEngine for LlamaCppEngine {
         }
         for arg in &cfg.extra_args {
             cmd.push(' ');
-            cmd.push_str(arg);
+            // extra_args are client-supplied strings reaching a `sh -c`
+            // command line — quote them so metacharacters stay inert.
+            cmd.push_str(&crate::engines::sh_quote(arg));
         }
         cmd.push_str(" > /dev/null 2>&1 &");
         Self::sh(&cmd).await.ignore();
@@ -234,10 +236,10 @@ impl LocalEngine for LlamaCppEngine {
         // Scoped to the configured port: `pkill -f 'llama-server'` would
         // also kill servers started manually on other ports.  Report what
         // actually happened instead of always claiming success.
-        let port = cfg.port.unwrap_or(8080);
-        let pattern = format!("llama-server .*--port {}", port);
         #[cfg(target_os = "linux")]
         {
+            let port = cfg.port.unwrap_or(8080);
+            let pattern = format!("llama-server .*--port {}", port);
             let running = crate::engines::running_server_cmdlines(&pattern)
                 .await
                 .iter()
@@ -257,7 +259,9 @@ impl LocalEngine for LlamaCppEngine {
         // No process inspection on this platform: fall back to stopping
         // every llama-server rather than claiming success while one runs.
         #[cfg(not(target_os = "linux"))]
-        Self::sh("pkill -f 'llama-server' 2>/dev/null; echo 'stopped'").await
+        {
+            Self::sh("pkill -f 'llama-server' 2>/dev/null; echo 'stopped'").await
+        }
     }
 
     async fn list_models(&self, cfg: &EngineConfig) -> Result<Vec<LocalModel>> {
@@ -437,7 +441,9 @@ impl LocalEngine for LlamaCppEngine {
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
         let endpoint = Self::endpoint(cfg);
 
-        // P6: Extract per-model knobs from extra_args.
+        // Per-model knobs: an explicit `--ctx-size` in extra_args (the
+        // gateway's per-load override rides here) wins; otherwise the
+        // persisted typed context window applies.
         let mut ctx_size: Option<u32> = None;
         let mut i = 0;
         while i < cfg.extra_args.len() {
@@ -449,6 +455,9 @@ impl LocalEngine for LlamaCppEngine {
             } else {
                 i += 1;
             }
+        }
+        if ctx_size.is_none() {
+            ctx_size = cfg.context_length;
         }
 
         let mut body = serde_json::json!({ "model": model });
