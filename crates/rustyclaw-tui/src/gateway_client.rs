@@ -441,6 +441,9 @@ pub(crate) fn gateway_event_to_gw_event(
         // (`CommandAction::FetchModels`), so gateway-fetched lists are not
         // surfaced here — they exist for remote clients like the desktop app.
         E::ProviderModelListResult { .. } => return None,
+        // The enriched payloads (loaded markers, full engine configs) ride
+        // in their own frames; the TUI consumes them where it renders them.
+        E::ProviderModelLoadedList { .. } | E::EngineConfigList { .. } => return None,
         E::EngineModelListResult { engine, models } => GwEvent::EngineModelListResult {
             engine: engine.clone(),
             models: models

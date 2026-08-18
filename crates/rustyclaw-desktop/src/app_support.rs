@@ -904,6 +904,7 @@ pub(crate) fn handle_gateway_event(
             provider,
             models,
             error,
+            ..
         } => {
             if let Some(err) = error {
                 // Keep the static fallback in the picker.  The provider
@@ -919,6 +920,10 @@ pub(crate) fn handle_gateway_event(
                 state.write().provider_models.insert(provider, models);
             }
         }
+        // The loaded/running markers and full engine configs arrive in their
+        // own frames (new capabilities, new frames); the desktop surfaces
+        // them once the enriched-payload handling lands with the UI work.
+        GatewayEvent::ProviderModelLoadedList { .. } | GatewayEvent::EngineConfigList { .. } => {}
         GatewayEvent::EnginePullProgress {
             engine,
             model,

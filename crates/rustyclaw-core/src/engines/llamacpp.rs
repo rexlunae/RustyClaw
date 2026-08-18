@@ -21,6 +21,14 @@ impl LlamaCppEngine {
         })
     }
 
+    /// `(model name, port)` for every `llama-server` process running on the
+    /// host — including ones started manually outside RustyClaw.  Best-effort
+    /// (Linux); empty elsewhere.
+    async fn running_servers() -> Vec<(String, Option<u16>)> {
+        let lines = crate::engines::running_server_cmdlines("llama-server").await;
+        crate::engines::parse_server_cmdlines(&lines, &["--model", "-m"], &["--port"], 8080)
+    }
+
     async fn api(endpoint: &str, method: &str, path: &str, body: Option<&Value>) -> Result<String> {
         let url = format!("{}{}", endpoint, path);
         let client = reqwest::Client::new();
@@ -116,6 +124,8 @@ impl LocalEngine for LlamaCppEngine {
     async fn status(&self, cfg: &EngineConfig) -> EngineStatus {
         let presence = self.detect().await;
         let endpoint = Self::endpoint(cfg);
+        let configured_port = cfg.port.unwrap_or(8080);
+        let detected = Self::running_servers().await;
 
         let run_status = if !presence.installed {
             EngineRunStatus::Stopped
@@ -132,7 +142,26 @@ impl LocalEngine for LlamaCppEngine {
                 loaded_models: available, // llama-server only shows loaded models
                 available_models: available,
             }
+        } else if let Some((_, port)) = detected
+            .iter()
+            .find(|(_, port)| *port == Some(configured_port))
+        {
+            // A llama-server on the engine's own configured port is running
+            // (e.g. started manually outside RustyClaw): report it so the
+            // UI's lifecycle gating stays tied to this engine's server.
+            let detected_endpoint = port
+                .map(|port| format!("http://127.0.0.1:{}", port))
+                .unwrap_or(endpoint);
+            let loaded = detected.len() as u32;
+            EngineRunStatus::Running {
+                endpoint: detected_endpoint,
+                loaded_models: loaded,
+                available_models: loaded,
+            }
         } else {
+            // llama-server processes on *other* ports belong to someone
+            // else: this engine is not running, and reporting Running would
+            // hide the Start button while Stop could not touch that server.
             EngineRunStatus::Stopped
         };
 
@@ -186,11 +215,18 @@ impl LocalEngine for LlamaCppEngine {
         let port = cfg.port.unwrap_or(8080);
         let mut cmd = format!("nohup llama-server --port {}", port);
         if let Some(ref dir) = cfg.models_dir {
-            cmd.push_str(&format!(" --models-dir '{}'", dir));
+            cmd.push_str(&format!(" --models-dir {}", sh_quote(dir)));
+        }
+        // The typed context window applies to manual starts too (it already
+        // applies to auto-start via `engine_start_command`).
+        if let Some(ctx) = cfg.context_length {
+            cmd.push_str(&format!(" --ctx-size {}", ctx));
         }
         for arg in &cfg.extra_args {
             cmd.push(' ');
-            cmd.push_str(arg);
+            // extra_args are client-supplied strings reaching a `sh -c`
+            // command line — quote them so metacharacters stay inert.
+            cmd.push_str(&crate::engines::sh_quote(arg));
         }
         cmd.push_str(" > /dev/null 2>&1 &");
         Self::sh(&cmd).await.ignore();
@@ -202,38 +238,125 @@ impl LocalEngine for LlamaCppEngine {
         }
     }
 
-    async fn stop(&self) -> Result<String> {
-        Self::sh("pkill -f 'llama-server' 2>/dev/null; echo 'stopped'").await
+    /// `cfg` is only read inside the Linux block (process inspection); the
+    /// non-Linux fallback ignores it.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    async fn stop(&self, cfg: &EngineConfig) -> Result<String> {
+        // Scoped to the configured port: `pkill -f 'llama-server'` would
+        // also kill servers started manually on other ports.  Report what
+        // actually happened instead of always claiming success.  The pattern
+        // terminates the digit run (`( |$)`), so a short port such as 1234
+        // cannot match a server running on 12345.
+        #[cfg(target_os = "linux")]
+        {
+            let port = cfg.port.unwrap_or(8080);
+            let pattern = format!("llama-server .*--port {}( |$)", port);
+            let running = crate::engines::running_server_cmdlines(&pattern)
+                .await
+                .iter()
+                .any(|line| line.contains("llama-server"));
+            if !running {
+                return Ok(format!(
+                    "no llama-server is running on port {} (nothing to stop)",
+                    port
+                ));
+            }
+            return Self::sh(&format!(
+                "pkill -f '{}' 2>/dev/null; echo 'stopped'",
+                pattern
+            ))
+            .await;
+        }
+        // No process inspection on this platform: fall back to stopping
+        // every llama-server rather than claiming success while one runs.
+        #[cfg(not(target_os = "linux"))]
+        {
+            Self::sh("pkill -f 'llama-server' 2>/dev/null; echo 'stopped'").await
+        }
     }
 
     async fn list_models(&self, cfg: &EngineConfig) -> Result<Vec<LocalModel>> {
+        // A running llama-server reports only the model it is serving.  For
+        // "what is available locally" we merge in every GGUF in the models
+        // directory (configured `models_dir`, or the llama.cpp cache dir),
+        // so models on disk show up even before the server is started.
+        let mut names: Vec<String> = Vec::new();
+        let mut loaded: Vec<String> = Vec::new();
         let endpoint = Self::endpoint(cfg);
-        let resp = Self::api(&endpoint, "GET", "/v1/models", None).await?;
-        let parsed: Value = serde_json::from_str(&resp)?;
-        let models = parsed
-            .get("data")
-            .and_then(|d| d.as_array())
-            .cloned()
-            .unwrap_or_default();
+        if let Ok(resp) = Self::api(&endpoint, "GET", "/v1/models", None).await {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&resp) {
+                if let Some(arr) = parsed.get("data").and_then(|d| d.as_array()) {
+                    for m in arr {
+                        if let Some(id) = m.get("id").and_then(|n| n.as_str()) {
+                            names.push(id.to_string());
+                            loaded.push(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Mark models served by running llama-server processes (even ones
+        // started outside RustyClaw) as loaded.
+        for (name, _) in Self::running_servers().await {
+            if !loaded.iter().any(|l| l == &name) {
+                loaded.push(name);
+            }
+        }
 
-        Ok(models
-            .iter()
-            .map(|m| {
-                let name = m
-                    .get("id")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("?")
-                    .to_string();
+        let models_dir = cfg.models_dir.clone().unwrap_or_else(|| {
+            dirs::cache_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join("llama.cpp")
+                .to_string_lossy()
+                .to_string()
+        });
+        // (name, path) for every GGUF on disk, deduped against the API list.
+        let mut on_disk: Vec<(String, std::path::PathBuf)> = Vec::new();
+        for path in crate::engines::scan_gguf_models(std::path::Path::new(&models_dir)) {
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            if !names.iter().any(|n| n == &name) {
+                names.push(name.clone());
+                on_disk.push((name, path));
+            }
+        }
+        // A model served by a running llama-server may live outside the
+        // scanned models dir (e.g. started manually with an explicit
+        // `--model /elsewhere/foo.gguf` while the API is unreachable from
+        // the configured endpoint).  It is loaded, so it must appear in the
+        // list — like Joshua's list_models, surface any loaded id that the
+        // scan did not produce.
+        for name in &loaded {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.clone());
+            }
+        }
+
+        Ok(names
+            .into_iter()
+            .map(|name| {
+                let is_loaded = loaded.iter().any(|l| l == &name);
+                let (size_bytes, modified_at) = on_disk
+                    .iter()
+                    .find(|(n, _)| n == &name)
+                    .and_then(|(_, p)| std::fs::metadata(p).ok())
+                    .map(|m| (m.len(), m.modified().ok()))
+                    .unwrap_or((0, None));
+                let modified_at = modified_at
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs().to_string());
                 LocalModel {
                     name,
-                    size_bytes: 0,
+                    size_bytes,
                     quantization: None,
                     context_length: None,
-                    loaded: true, // if listed by llama-server, it's loaded
+                    loaded: is_loaded,
                     vram_bytes: None,
                     family: None,
                     format: Some("gguf".into()),
-                    modified_at: None,
+                    modified_at,
                 }
             })
             .collect())
@@ -311,17 +434,38 @@ impl LocalEngine for LlamaCppEngine {
                 .to_string_lossy()
                 .to_string()
         });
-        Self::sh(&format!(
-            "rm -f {} 2>&1",
-            sh_quote(&format!("{}/{}", models_dir, model))
-        ))
-        .await
+        // `list_models` names on-disk GGUFs by their file stem (no .gguf
+        // extension, possibly inside a per-repo subdirectory), so resolve
+        // the name back to the actual scanned path before deleting — a bare
+        // `rm -f {dir}/{model}` would point at nothing and silently report
+        // success while the file stays on disk.
+        let dir = std::path::Path::new(&models_dir);
+        let matched = crate::engines::scan_gguf_models(dir).into_iter().find(|p| {
+            p.file_stem().is_some_and(|s| s.to_string_lossy() == model)
+                || p.file_name().is_some_and(|s| s.to_string_lossy() == model)
+        });
+        let Some(path) = matched else {
+            anyhow::bail!(
+                "Model '{}' not found in {} (available: {})",
+                model,
+                models_dir,
+                crate::engines::scan_gguf_models(dir)
+                    .iter()
+                    .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        };
+        std::fs::remove_file(&path)?;
+        Ok(format!("Removed {}", path.display()))
     }
 
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
         let endpoint = Self::endpoint(cfg);
 
-        // P6: Extract per-model knobs from extra_args.
+        // Per-model knobs: an explicit `--ctx-size` in extra_args (the
+        // gateway's per-load override rides here) wins; otherwise the
+        // persisted typed context window applies.
         let mut ctx_size: Option<u32> = None;
         let mut i = 0;
         while i < cfg.extra_args.len() {
@@ -333,6 +477,9 @@ impl LocalEngine for LlamaCppEngine {
             } else {
                 i += 1;
             }
+        }
+        if ctx_size.is_none() {
+            ctx_size = cfg.context_length;
         }
 
         let mut body = serde_json::json!({ "model": model });

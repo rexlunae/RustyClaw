@@ -156,7 +156,7 @@ impl LocalEngine for ExoEngine {
         }
     }
 
-    async fn stop(&self) -> Result<String> {
+    async fn stop(&self, _cfg: &EngineConfig) -> Result<String> {
         Self::sh("pkill -f 'exo' 2>/dev/null; echo 'stopped'").await
     }
 

@@ -78,9 +78,11 @@ use_secrets = true
 # models = ["qwen3-coder-30b", "llama-3.3-70b"] # optional; /v1/models is also queried
 
 # ── Local inference engines ───────────────────────────────────────────────
-# Engines are managed from the TUI /engines panel (install/start/stop/pull).
-# Joshua (https://github.com/rexlunae/joshua) is a pure-Rust GGUF server:
-# one process serves one model, picked from models_dir at startup.
+# Engines are managed from the TUI /engines panel (install/start/stop/pull)
+# and the desktop "Local Engines & Models" dialog (which also edits the
+# parameters below).  Joshua (https://github.com/rexlunae/joshua) is a
+# pure-Rust GGUF server: one process serves one model, picked from models_dir
+# at startup.
 #
 # [engines.joshua]
 # enabled = true
@@ -88,6 +90,14 @@ use_secrets = true
 # models_dir = "/home/user/.rustyclaw/models/joshua"
 # default_model = "qwen3-4b-Q4_K_M"             # GGUF file stem to serve
 # auto_start = true                             # start with the gateway
+# context_length = 8192                         # --n-ctx (joshua/llama.cpp/ollama)
+# device = "auto"                               # joshua --device: auto|cpu|metal|cuda
+# huge_pages = "off"                            # joshua --huge-pages: off|transparent|2mb|1gb|huge
+# mmap = false                                  # joshua --mmap: require a memory-mappable model
+# lazy_weights = false                          # joshua --lazy-weights: optimise for huge models
+# max_output_tokens = 4096                      # joshua --max-output-tokens
+# max_concurrency = 8                           # joshua --max-concurrency
+# extra_args = []                               # any other flags, passed verbatim
 #
 # [engines.ollama]
 # enabled = true

@@ -190,7 +190,7 @@ impl LocalEngine for OllamaEngine {
         }
     }
 
-    async fn stop(&self) -> Result<String> {
+    async fn stop(&self, _cfg: &EngineConfig) -> Result<String> {
         let os = std::env::consts::OS;
         match os {
             "macos" => Self::sh("brew services stop ollama 2>/dev/null; pkill -f 'ollama serve' 2>/dev/null; echo 'stopped'").await,
@@ -207,6 +207,22 @@ impl LocalEngine for OllamaEngine {
             .and_then(|m| m.as_array())
             .cloned()
             .unwrap_or_default();
+
+        // What is actually resident in memory: `/api/ps` knows; `/api/tags`
+        // only lists what is pulled.  Mark those names loaded so the UI's
+        // "running" badge reflects reality.
+        let mut loaded: Vec<String> = Vec::new();
+        if let Ok(ps) = Self::api(&endpoint, "GET", "/api/ps", None).await {
+            if let Ok(v) = serde_json::from_str::<Value>(&ps) {
+                if let Some(arr) = v.get("models").and_then(|m| m.as_array()) {
+                    for m in arr {
+                        if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                            loaded.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(models
             .iter()
@@ -231,12 +247,13 @@ impl LocalEngine for OllamaEngine {
                     .get("modified_at")
                     .and_then(|d| d.as_str())
                     .map(|s| s.to_string());
+                let is_loaded = loaded.iter().any(|l| l == &name);
                 LocalModel {
                     name,
                     size_bytes,
                     quantization,
                     context_length: None,
-                    loaded: false,
+                    loaded: is_loaded,
                     vram_bytes: None,
                     family,
                     format: Some("gguf".into()),
@@ -312,13 +329,20 @@ impl LocalEngine for OllamaEngine {
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
         let endpoint = Self::endpoint(cfg);
 
-        // P6: Extract per-model knobs from extra_args.
+        // Per-model knobs: an explicit `--num-ctx=` in extra_args (the
+        // gateway's per-load override rides here) wins; otherwise the
+        // persisted typed context window applies.
         let mut options = serde_json::Map::new();
         for arg in &cfg.extra_args {
             if let Some(val) = arg.strip_prefix("--num-ctx=") {
                 if let Ok(n) = val.parse::<u32>() {
                     options.insert("num_ctx".to_string(), serde_json::Value::Number(n.into()));
                 }
+            }
+        }
+        if !options.contains_key("num_ctx") {
+            if let Some(ctx) = cfg.context_length {
+                options.insert("num_ctx".to_string(), serde_json::Value::Number(ctx.into()));
             }
         }
 

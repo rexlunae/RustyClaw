@@ -408,6 +408,14 @@ pub enum ServerFrameType {
     /// encodes these enums by declaration order, so new types go last even
     /// though the `= N` values already diverge from the indices.
     ToolGroupsResult = 95,
+    /// Full per-engine configuration, sent right after `EngineListResult`
+    /// (new frame rather than a widened `EngineInfoDto`: the wire format is
+    /// positional bincode, so adding a field to an existing payload breaks
+    /// older peers — see `docs/PLUGIN_ARCHITECTURE.md`).
+    EngineConfigList = 96,
+    /// Which models a provider's list reports as loaded/running, sent right
+    /// after `ProviderModelListResult`.  New frame for the same reason.
+    ProviderModelLoadedList = 97,
 }
 
 /// Status frame sub-types.
@@ -444,7 +452,12 @@ pub enum StatusType {
 /// be misread — so a peer at version 1 cannot decode these. Mismatched peers
 /// fail at the first affected frame rather than mis-parsing one into another;
 /// the version is what lets an envelope-carrying transport say so plainly.
-pub const WIRE_PROTOCOL_VERSION: u16 = 3;
+/// Bumped to 4 when `EngineConfig` gained its typed parameter fields (the
+/// already-shipped `EngineConfigSet` payload widened by seven positional
+/// fields) and `EngineConfigList` / `ProviderModelLoadedList` were added: an
+/// older peer must fail at the first affected frame instead of reading the
+/// new fields as wrong values.
+pub const WIRE_PROTOCOL_VERSION: u16 = 4;
 
 /// Stream ID used for connection-level control frames.
 pub const CONTROL_STREAM_ID: u64 = 0;
@@ -1691,6 +1704,18 @@ pub enum ServerPayload {
     /// `ToolGroupsList` and `ToolGroupSetEnabled`.
     ToolGroupsResult {
         groups: Vec<ToolGroupDto>,
+    },
+    /// Full per-engine configuration (parameters, default model, extra
+    /// args), keyed by engine id.  Sent after `EngineListResult`.
+    EngineConfigList {
+        configs: std::collections::HashMap<String, crate::engines::EngineConfig>,
+    },
+    /// Models the local engine reports as loaded/running, sent after
+    /// `ProviderModelListResult` (a subset of that frame's `models`; empty
+    /// for cloud providers).
+    ProviderModelLoadedList {
+        provider: String,
+        loaded: Vec<String>,
     },
 }
 

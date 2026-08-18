@@ -89,7 +89,7 @@ impl LocalEngine for LmStudioEngine {
         anyhow::bail!("LM Studio manages its own lifecycle; start it from the app")
     }
 
-    async fn stop(&self) -> Result<String> {
+    async fn stop(&self, _cfg: &EngineConfig) -> Result<String> {
         anyhow::bail!("LM Studio manages its own lifecycle; stop it from the app")
     }
 
@@ -103,6 +103,9 @@ impl LocalEngine for LmStudioEngine {
             .cloned()
             .unwrap_or_default();
 
+        // Modern LM Studio's `/v1/models` lists downloaded models, not just
+        // the one currently resident in memory — there is no way to tell
+        // what is loaded from the API, so never claim "running".
         Ok(models
             .iter()
             .map(|m| {
@@ -116,7 +119,7 @@ impl LocalEngine for LmStudioEngine {
                     size_bytes: 0,
                     quantization: None,
                     context_length: None,
-                    loaded: true,
+                    loaded: false,
                     vram_bytes: None,
                     family: None,
                     format: None,

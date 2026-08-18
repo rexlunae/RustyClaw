@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Configurable model-call deadline.** The gateway's per-turn model call
+  used a hard-coded 180s cap, which local engines on a loaded machine can
+  exceed while prefilling a large prompt (a single 2k-token prompt on a
+  busy CPU box took ~15 minutes here). `RUSTYCLAW_MODEL_TIMEOUT_SECS`
+  now overrides it (default stays 180), so local-model setups can give
+  turns the time they need instead of dying mid-prefill.
+
+- **Local model management in the UI: on-disk models in every picker, and
+  engine parameters.** The chat composer's model dropdown (desktop) and the
+  provider/model selectors (TUI) now show what is actually available locally
+  for the local engine providers — Joshua, llama.cpp, LM Studio, exo, Ollama
+  — even when the engine server is not running. The gateway's
+  `ProviderModelList` handler (and the TUI's beside-the-vault fetches) merge
+  the live API list with the engine registry's own model list; for the
+  file-based engines (Joshua, llama.cpp) that list is a scan of the models
+  directory, so a model only has to be on disk to be pickable. llama.cpp's
+  `list_models` gained the same on-disk scan. `EngineInfoDto` now carries the
+  engine's full `EngineConfig`, and the "Local Engines & Models" dialog
+  (desktop) gained a parameters editor per engine tab: context window
+  (`--n-ctx`/`--ctx-size`/`--num-ctx`), default model (picked from the local
+  model list), auto-start, and — for Joshua — device (`--device`), huge pages
+  (`--huge-pages`), `--mmap`, `--lazy-weights`, `--max-output-tokens` and
+  `--max-concurrency`. The TUI `/engines` panel got the same editor as a
+  keyboard-driven mode (p to edit, +/- adjust, x clear, Enter saves via
+  `EngineConfigSet`, which persists to config.toml). Parameters apply on the
+  next engine start or model load; per-load context overrides for Joshua now
+  map to `--n-ctx`. New `EngineConfig` fields are optional and defaulted, so
+  existing configs parse unchanged.
+
+### Added
+
 - **Messenger-kind registry (plugin architecture, `docs/PLUGIN_ARCHITECTURE.md`
   §14).** Messenger backends had the pre-phase-0 tool shape: a static schema
   table beside a hardcoded factory `match` in the gateway, plus a `cfg!`

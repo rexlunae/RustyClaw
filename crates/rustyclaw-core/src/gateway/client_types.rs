@@ -355,6 +355,17 @@ pub enum GatewayEvent {
         models: Vec<String>,
         error: Option<String>,
     },
+    /// Which of a provider's models are loaded/running (sent after
+    /// `ProviderModelListResult`; pickers use it to mark running models).
+    ProviderModelLoadedList {
+        provider: String,
+        loaded: Vec<String>,
+    },
+    /// Full per-engine configuration keyed by engine id (sent after
+    /// `EngineListResult`).
+    EngineConfigList {
+        configs: std::collections::HashMap<String, crate::engines::EngineConfig>,
+    },
     /// Engine pull progress (streaming).
     EnginePullProgress {
         engine: String,
@@ -772,6 +783,14 @@ pub enum GatewayCommand {
         context_length: Option<u32>,
         #[serde(default)]
         extra_args: Vec<String>,
+    },
+
+    /// Replace the full configuration for an engine (parameters, default
+    /// model, extra args).  The gateway persists it to config.toml.
+    #[serde(rename = "engine_config_set")]
+    EngineConfigSet {
+        engine: String,
+        config: crate::engines::EngineConfig,
     },
 
     // ── Panel commands ─────────────────────────────────────────────────
@@ -1428,6 +1447,10 @@ impl GatewayCommand {
                     extra_args,
                 },
             },
+            GatewayCommand::EngineConfigSet { engine, config } => ClientFrame {
+                frame_type: ClientFrameType::EngineConfigSet,
+                payload: ClientPayload::EngineConfigSet { engine, config },
+            },
             // ── Panels ───────────────────────────────────────────────
             GatewayCommand::CronList => ClientFrame {
                 frame_type: ClientFrameType::CronListRequest,
@@ -2073,6 +2096,12 @@ impl GatewayEvent {
                 models,
                 error,
             }),
+            ServerPayload::ProviderModelLoadedList { provider, loaded } => {
+                Some(GatewayEvent::ProviderModelLoadedList { provider, loaded })
+            }
+            ServerPayload::EngineConfigList { configs } => {
+                Some(GatewayEvent::EngineConfigList { configs })
+            }
             ServerPayload::EnginePullProgress {
                 engine,
                 model,

