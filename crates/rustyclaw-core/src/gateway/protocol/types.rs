@@ -253,4 +253,9 @@ pub struct ModelResponse {
     /// Token counts reported by the provider (when available).
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
+    /// The model's reasoning/thinking text, when the provider emits it.
+    /// Providers in "thinking mode" (DeepSeek, Kimi, …) require it to be
+    /// passed back on later assistant messages in the same conversation.
+    #[serde(default)]
+    pub reasoning: String,
 }

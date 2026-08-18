@@ -556,6 +556,28 @@ impl ThreadManager {
         });
     }
 
+    /// Add an assistant message whose response carried reasoning/thinking
+    /// text (thinking-mode providers require it back on later turns).
+    pub fn add_message_with_reasoning(
+        &mut self,
+        id: ThreadId,
+        role: MessageRole,
+        content: impl Into<String>,
+        reasoning: Option<String>,
+    ) {
+        let message_count = if let Some(thread) = self.threads.get_mut(&id) {
+            thread.add_message_with_reasoning(role, content, reasoning);
+            thread.messages.len()
+        } else {
+            return;
+        };
+
+        self.emit(ThreadEvent::MessageAdded {
+            thread_id: id,
+            message_count,
+        });
+    }
+
     /// Add a message to the foreground thread.
     pub fn add_foreground_message(&mut self, role: MessageRole, content: impl Into<String>) {
         if let Some(id) = self.foreground_id {

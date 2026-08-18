@@ -301,8 +301,17 @@ pub fn thread_history_to_chat_messages(
                     .unwrap_or_default();
 
                 if tool_calls.is_empty() {
-                    // Plain assistant text turn.
-                    out.push(ChatMessage::text("assistant", &m.content));
+                    // Plain assistant text turn. When the turn carried
+                    // reasoning (thinking-mode providers require it back),
+                    // the request-side content is the canonical envelope so
+                    // the reasoning is echoed; otherwise plain text.
+                    let model_resp = ModelResponse {
+                        text: m.content.clone(),
+                        reasoning: m.reasoning.clone().unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    let content = providers::assistant_content(&model_resp);
+                    out.push(ChatMessage::text("assistant", &content));
                     i += 1;
                     continue;
                 }
@@ -379,6 +388,7 @@ pub fn thread_history_to_chat_messages(
                 let model_resp = ModelResponse {
                     text: m.content.clone(),
                     tool_calls,
+                    reasoning: m.reasoning.clone().unwrap_or_default(),
                     ..Default::default()
                 };
                 let assistant_content = format_assistant_message(provider, &model_resp);
@@ -807,3 +817,6 @@ fn format_probe_error(err: &anyhow_tracing::Error) -> String {
 // and client crates share one genai instance. Re-export the single dispatch
 // entry point so call sites use `providers::call_with_tools`.
 pub use rustyclaw_core::providers::call_with_tools;
+// Assistant-content encoding helpers (reasoning echo for thinking-mode
+// providers) shared with dispatch.
+pub use rustyclaw_core::providers::assistant_content;

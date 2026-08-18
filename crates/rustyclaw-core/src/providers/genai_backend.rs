@@ -96,12 +96,33 @@ pub fn encode_assistant_message(model_resp: &ModelResponse) -> String {
         })
         .collect();
 
-    json!({
+    let mut envelope = json!({
         "__rustyclaw_kind": "assistant_tools",
         "text": model_resp.text,
         "tool_calls": tool_calls,
-    })
-    .to_string()
+    });
+    // Thinking-mode providers (DeepSeek, Kimi, …) require the reasoning
+    // content of earlier assistant turns to be passed back verbatim; keep
+    // it in the canonical envelope so it round-trips through the history.
+    if !model_resp.reasoning.is_empty() {
+        envelope["reasoning"] = json!(model_resp.reasoning);
+    }
+    envelope.to_string()
+}
+
+/// Content for an assistant message in the *request* stream: the canonical
+/// envelope when the turn carries tool calls or reasoning (so the API gets
+/// both back on the next round), plain text otherwise.
+///
+/// Unlike [`encode_assistant_message`], this never wraps a bare text turn —
+/// the plain-text shape is what request builders and history reconstruction
+/// expect for ordinary assistant replies.
+pub fn assistant_content(model_resp: &ModelResponse) -> String {
+    if model_resp.tool_calls.is_empty() && model_resp.reasoning.is_empty() {
+        model_resp.text.clone()
+    } else {
+        encode_assistant_message(model_resp)
+    }
 }
 
 /// Encode a single tool result into the canonical `tool_result` envelope,
@@ -232,6 +253,9 @@ async fn consume_stream(
                     server::send_thinking_start(writer).await.ignore();
                     thinking_started = true;
                 }
+                // Keep the reasoning for the turn: thinking-mode providers
+                // require it to be echoed back on later assistant messages.
+                result.reasoning.push_str(&chunk.content);
                 server::send_thinking_delta(writer, &chunk.content)
                     .await
                     .ignore();
@@ -282,6 +306,9 @@ impl From<genai::chat::ChatResponse> for ModelResponse {
         let mut result = ModelResponse {
             prompt_tokens: resp.usage.prompt_tokens.map(|t| t.max(0) as u64),
             completion_tokens: resp.usage.completion_tokens.map(|t| t.max(0) as u64),
+            // The OpenAI adapter reports reasoning in a dedicated field, not
+            // as a content part — read it before consuming the content.
+            reasoning: resp.reasoning_content.clone().unwrap_or_default(),
             ..Default::default()
         };
 
@@ -294,6 +321,15 @@ impl From<genai::chat::ChatResponse> for ModelResponse {
                     result.text.push_str(&t);
                 }
                 ContentPart::ToolCall(tc) => result.tool_calls.push(tc.into()),
+                // Fallback for adapters that surface reasoning as a part
+                // (the OpenAI adapter already provided it via the
+                // `reasoning_content` field above).
+                ContentPart::ReasoningContent(r) => {
+                    if !result.reasoning.is_empty() {
+                        result.reasoning.push('\n');
+                    }
+                    result.reasoning.push_str(&r);
+                }
                 _ => {}
             }
         }
@@ -483,6 +519,15 @@ fn deduplicate_tool_ids(
 fn decode_assistant(content: &str) -> GenChatMessage {
     if let Some(env) = parse_canonical(content, "assistant_tools") {
         let mut parts: Vec<ContentPart> = Vec::new();
+        // Reasoning first: the genai adapters hoist ReasoningContent parts
+        // into the sibling `reasoning_content` / `thinking` field, so
+        // thinking-mode providers receive it back (they reject the request
+        // otherwise).
+        if let Some(reasoning) = env.get("reasoning").and_then(|v| v.as_str()) {
+            if !reasoning.trim().is_empty() {
+                parts.push(ContentPart::ReasoningContent(reasoning.to_string()));
+            }
+        }
         if let Some(text) = env.get("text").and_then(|v| v.as_str()) {
             if !text.trim().is_empty() {
                 parts.push(ContentPart::from_text(text.to_string()));
@@ -830,6 +875,62 @@ mod tests {
         assert_eq!(calls[0].call_id, "call_1");
         assert_eq!(calls[0].fn_name, "read_file");
         assert_eq!(calls[0].fn_arguments["path"], "a.rs");
+    }
+
+    #[test]
+    fn reasoning_round_trips_through_the_envelope() {
+        // Thinking-mode providers require the reasoning content of earlier
+        // assistant turns to be passed back; the canonical envelope must
+        // carry it and decode back into a genai ReasoningContent part.
+        let model_resp = ModelResponse {
+            text: "answer".to_string(),
+            reasoning: "I should look up the weather first.".to_string(),
+            ..Default::default()
+        };
+        let encoded = encode_assistant_message(&model_resp);
+        let msg = decode_assistant(&encoded);
+        assert_eq!(msg.role, ChatRole::Assistant);
+        assert_eq!(msg.content.first_text(), Some("answer"));
+        let reasoning = msg.content.reasoning_contents();
+        assert_eq!(
+            reasoning,
+            vec!["I should look up the weather first."],
+            "reasoning must decode back into a ReasoningContent part"
+        );
+        // A turn without reasoning stays reasoning-free.
+        let plain = ModelResponse {
+            text: "hi".to_string(),
+            ..Default::default()
+        };
+        let msg = decode_assistant(&assistant_content(&plain));
+        assert_eq!(msg.content.reasoning_contents().len(), 0);
+        // assistant_content keeps bare text turns as plain text.
+        assert_eq!(assistant_content(&plain), "hi");
+        // ... but wraps a turn that carries reasoning so the API gets it back.
+        assert!(assistant_content(&model_resp).contains("reasoning"));
+    }
+
+    #[test]
+    fn batch_response_captures_reasoning_from_the_dedicated_field() {
+        // The OpenAI adapter reports reasoning in ChatResponse::reasoning_content
+        // (not as a content part), and scheduled/internal turns take the
+        // non-streaming path — the reasoning must still reach ModelResponse.
+        let resp = genai::chat::ChatResponse {
+            content: genai::chat::MessageContent::from_text("answer"),
+            reasoning_content: Some("the reasoning".to_string()),
+            model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            provider_model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            stop_reason: None,
+            usage: genai::chat::Usage::default(),
+            captured_raw_body: None,
+            response_id: None,
+        };
+        let converted: ModelResponse = resp.into();
+        assert_eq!(converted.text, "answer");
+        assert_eq!(
+            converted.reasoning, "the reasoning",
+            "batch reasoning must come from ChatResponse::reasoning_content"
+        );
     }
 
     #[test]
