@@ -369,6 +369,10 @@ pub(super) fn apply_gw_event(
         mut show_engines_dialog,
         mut engines_data,
         mut engines_cursor,
+        mut engines_params_edit,
+        mut engines_params_cursor,
+        mut engines_params_drafts,
+        mut engines_action_result,
         mut show_cron_dialog,
         mut cron_data,
         mut show_memory_dialog,
@@ -1629,9 +1633,18 @@ pub(super) fn apply_gw_event(
         }
         // ── Engines ──────────────────────────────────────────────────────
         GwEvent::ShowEngines => {
+            // A fresh open starts in normal mode with no stale drafts.
+            if !show_engines_dialog.get() {
+                engines_params_edit.set(false);
+                engines_params_drafts.write().clear();
+            }
             show_engines_dialog.set(true);
         }
         GwEvent::EngineListResult { engines } => {
+            // The configs came from the gateway; drafts seeded from an older
+            // snapshot are stale, so drop them (p re-seeds from the fresh
+            // config when the user next enters edit mode).
+            engines_params_drafts.write().clear();
             let mut data = engines_data.read().clone().unwrap_or_default();
             // Fill in host resources from the last HostInfo snapshot.
             if let Some(host) = host_info.read().as_ref() {
@@ -1646,6 +1659,15 @@ pub(super) fn apply_gw_event(
                 .min(data.engines.len().saturating_sub(1));
             engines_cursor.set(cursor);
             data.selected_engine = data.engines.get(cursor).map(|e| e.id.clone());
+            engines_data.set(Some(data));
+        }
+        GwEvent::EngineConfigList { configs } => {
+            let mut data = engines_data.read().clone().unwrap_or_default();
+            for engine in &mut data.engines {
+                if let Some(cfg) = configs.get(&engine.id) {
+                    engine.config = cfg.clone();
+                }
+            }
             engines_data.set(Some(data));
         }
         GwEvent::EngineModelListResult { engine, models } => {
@@ -1703,10 +1725,16 @@ pub(super) fn apply_gw_event(
         }
         GwEvent::EngineActionResult {
             engine,
+            model,
             ok,
             message,
-            ..
         } => {
+            // Keep the outcome of model actions (Load/Unload) for the
+            // dialog's inline feedback; lifecycle actions surface as
+            // notices instead.
+            if model.is_some() {
+                engines_action_result.set(Some((engine.clone(), ok, message.clone())));
+            }
             // Record the terminal outcome on the engine's install panel (so
             // the dialog shows "install complete/failed"), and also surface a
             // one-line notice in the chat. Only finish an install that's

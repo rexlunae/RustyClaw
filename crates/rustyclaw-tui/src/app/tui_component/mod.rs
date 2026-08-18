@@ -261,6 +261,12 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let show_engines_dialog = hooks.use_state(|| false);
     let engines_data: State<Option<rustyclaw_view::EnginesPanelData>> = hooks.use_state(|| None);
     let engines_cursor = hooks.use_state(|| 0usize);
+    let engines_params_edit = hooks.use_state(|| false);
+    let engines_params_cursor = hooks.use_state(|| 0usize);
+    let engines_params_drafts: State<
+        std::collections::HashMap<String, rustyclaw_core::engines::EngineConfig>,
+    > = hooks.use_state(std::collections::HashMap::new);
+    let engines_action_result: State<Option<(String, bool, String)>> = hooks.use_state(|| None);
     let show_cron_dialog = hooks.use_state(|| false);
     let cron_data: State<Option<rustyclaw_view::CronPanelData>> = hooks.use_state(|| None);
     let show_memory_dialog = hooks.use_state(|| false);
@@ -433,6 +439,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         show_engines_dialog,
         engines_data,
         engines_cursor,
+        engines_params_edit,
+        engines_params_cursor,
+        engines_params_drafts,
+        engines_action_result,
         show_cron_dialog,
         cron_data,
         show_memory_dialog,
@@ -725,6 +735,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             services_data: services_data.read().clone(),
             show_engines_dialog: show_engines_dialog.get(),
             engines_data: engines_data.read().clone(),
+            engines_params_edit: engines_params_edit.get(),
+            engines_params_cursor: engines_params_cursor.get(),
+            engines_params_drafts: engines_params_drafts.read().clone(),
+            engines_action_result: engines_action_result.read().clone(),
             show_cron_dialog: show_cron_dialog.get(),
             cron_data: cron_data.read().clone(),
             show_memory_dialog: show_memory_dialog.get(),

@@ -283,11 +283,13 @@ pub(super) async fn handle_command_action(
                 });
 
             let gw_tx2 = gw_tx.clone();
+            let engine_configs = config.engines.clone();
             tokio::spawn(async move {
-                match rustyclaw_core::providers::fetch_models_detailed(
+                match rustyclaw_core::engines::provider_models_detailed_with_local_fallback(
                     &provider_id,
                     api_key.as_deref(),
                     base_url.as_deref(),
+                    &engine_configs,
                 )
                 .await
                 {
@@ -311,7 +313,8 @@ pub(super) async fn handle_command_action(
                             .ignore();
                     }
                     Err(e) => {
-                        gw_tx2.send(GwEvent::error_from_err(&e)).ignore();
+                        let err = anyhow_tracing::Error::from(e);
+                        gw_tx2.send(GwEvent::error_from_err(&err)).ignore();
                     }
                 }
             });

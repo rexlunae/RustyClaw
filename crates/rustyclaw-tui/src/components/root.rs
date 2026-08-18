@@ -189,6 +189,15 @@ pub struct RootProps {
     // engines dialog overlay (/engines)
     pub show_engines_dialog: bool,
     pub engines_data: Option<rustyclaw_view::EnginesPanelData>,
+    /// Parameter-edit mode for the engines dialog (p toggles).
+    pub engines_params_edit: bool,
+    /// Focused field index within the active engine's parameter list.
+    pub engines_params_cursor: usize,
+    /// In-progress parameter edits per engine id.
+    pub engines_params_drafts:
+        std::collections::HashMap<String, rustyclaw_core::engines::EngineConfig>,
+    /// Outcome of the last engine model action (engine, ok, message).
+    pub engines_action_result: Option<(String, bool, String)>,
 
     // gateway panel overlays (/cron, /memory, /mcp, /channels)
     pub show_cron_dialog: bool,
@@ -287,6 +296,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     // Engines dialog state
     let show_engines = props.show_engines_dialog;
     let engines = props.engines_data.clone();
+    let engines_params_edit = props.engines_params_edit;
+    let engines_params_cursor = props.engines_params_cursor;
+    let engines_params_drafts = props.engines_params_drafts.clone();
+    let engines_action_result = props.engines_action_result.clone();
 
     // Gateway panel dialog state
     let show_cron = props.show_cron_dialog;
@@ -774,6 +787,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         EnginesDialog(
                             data: engines,
+                            params_edit: engines_params_edit,
+                            params_cursor: engines_params_cursor,
+                            params_drafts: engines_params_drafts,
+                            action_result: engines_action_result,
                         )
                     }
                 }.into_any()
