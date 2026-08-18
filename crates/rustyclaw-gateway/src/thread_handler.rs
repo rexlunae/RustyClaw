@@ -1360,6 +1360,7 @@ mod tests {
                     tool_calls: None,
                     tool_call_id: None,
                     media: None,
+                    reasoning: None,
                 });
             thread
                 .messages
@@ -1371,6 +1372,7 @@ mod tests {
                     tool_calls: None,
                     tool_call_id: None,
                     media: None,
+                    reasoning: None,
                 });
         }
         let mut writer = CapturingWriter { frames: Vec::new() };

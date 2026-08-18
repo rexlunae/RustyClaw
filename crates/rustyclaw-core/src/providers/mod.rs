@@ -482,7 +482,7 @@ mod models;
 pub use custom::*;
 pub use device_flow::*;
 pub use genai_backend::{
-    call_anthropic_with_tools, call_google_with_tools, call_openai_with_tools,
+    assistant_content, call_anthropic_with_tools, call_google_with_tools, call_openai_with_tools,
     encode_assistant_message, encode_tool_result,
 };
 pub use models::*;

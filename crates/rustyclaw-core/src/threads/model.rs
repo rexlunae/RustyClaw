@@ -215,6 +215,13 @@ pub struct ThreadMessage {
     /// `threads.json` files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<Vec<crate::gateway::protocol::types::MediaRef>>,
+    /// The model's reasoning/thinking text for an assistant turn, when the
+    /// provider emitted one. Thinking-mode providers (DeepSeek, Kimi, …)
+    /// require it to be passed back verbatim on later assistant messages,
+    /// so it is persisted alongside the turn. Optional and skipped when
+    /// absent for backward compatibility with existing `threads.json` files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 /// Message role.
@@ -572,6 +579,29 @@ impl AgentThread {
             tool_calls: None,
             tool_call_id: None,
             media: None,
+            reasoning: None,
+        });
+    }
+
+    /// Add an assistant message whose response carried reasoning/thinking
+    /// text. Thinking-mode providers (DeepSeek, Kimi, …) require the
+    /// reasoning content to be passed back on later turns, so it is stored
+    /// with the message for history reconstruction.
+    pub fn add_message_with_reasoning(
+        &mut self,
+        role: MessageRole,
+        content: impl Into<String>,
+        reasoning: Option<String>,
+    ) {
+        self.push_message(ThreadMessage {
+            id: None,
+            role,
+            content: content.into(),
+            timestamp: SystemTime::now(),
+            tool_calls: None,
+            tool_call_id: None,
+            media: None,
+            reasoning,
         });
     }
 
@@ -591,6 +621,7 @@ impl AgentThread {
             tool_calls: None,
             tool_call_id: None,
             media: None,
+            reasoning: None,
         });
     }
 
@@ -613,6 +644,7 @@ impl AgentThread {
             tool_calls: None,
             tool_call_id: None,
             media: Some(media),
+            reasoning: None,
         });
     }
 
@@ -702,6 +734,7 @@ impl AgentThread {
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             media: None,
+            reasoning: None,
         });
     }
 
@@ -715,6 +748,7 @@ impl AgentThread {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             media: None,
+            reasoning: None,
         });
     }
 

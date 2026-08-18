@@ -988,9 +988,10 @@ pub(crate) async fn dispatch_text_message(
                 if flush_pending_resume && tool_executor::is_flush_acknowledgement(&model_resp.text)
                 {
                     flush_pending_resume = false;
-                    resolved
-                        .messages
-                        .push(ChatMessage::text("assistant", &model_resp.text));
+                    resolved.messages.push(ChatMessage::text(
+                        "assistant",
+                        &providers::assistant_content(&model_resp),
+                    ));
                     resolved.messages.push(ChatMessage::text(
                         "user",
                         "Memory flush noted. Now continue with my original request above.",
@@ -1024,9 +1025,10 @@ pub(crate) async fn dispatch_text_message(
                     // cause the TUI to show the same text twice.
 
                     // Append assistant message and continuation prompt
-                    resolved
-                        .messages
-                        .push(ChatMessage::text("assistant", &model_resp.text));
+                    resolved.messages.push(ChatMessage::text(
+                        "assistant",
+                        &providers::assistant_content(&model_resp),
+                    ));
                     resolved.messages.push(ChatMessage::text(
                         "user",
                         "Continue. Execute the action you described.",
@@ -1044,9 +1046,18 @@ pub(crate) async fn dispatch_text_message(
                         let mut tm = thread_mgr.lock().await;
                         if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
                             updated_thread_id = Some(thread.id);
-                            thread.add_message(
+                            // Thinking-mode providers require the reasoning
+                            // content to be passed back on later turns, so
+                            // persist it with the turn.
+                            let reasoning = if model_resp.reasoning.is_empty() {
+                                None
+                            } else {
+                                Some(model_resp.reasoning.clone())
+                            };
+                            thread.add_message_with_reasoning(
                                 rustyclaw_core::threads::MessageRole::Assistant,
                                 &model_resp.text,
+                                reasoning,
                             );
                         }
                         // Persist the final assistant turn so reconnecting
