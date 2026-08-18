@@ -124,6 +124,7 @@ impl LocalEngine for LlamaCppEngine {
     async fn status(&self, cfg: &EngineConfig) -> EngineStatus {
         let presence = self.detect().await;
         let endpoint = Self::endpoint(cfg);
+        let configured_port = cfg.port.unwrap_or(8080);
         let detected = Self::running_servers().await;
 
         let run_status = if !presence.installed {
@@ -141,12 +142,14 @@ impl LocalEngine for LlamaCppEngine {
                 loaded_models: available, // llama-server only shows loaded models
                 available_models: available,
             }
-        } else if !detected.is_empty() {
-            // llama-server processes are running outside the configured
-            // endpoint; report them so the UI reflects reality.
-            let detected_endpoint = detected
-                .first()
-                .and_then(|(_, port)| *port)
+        } else if let Some((_, port)) = detected
+            .iter()
+            .find(|(_, port)| *port == Some(configured_port))
+        {
+            // A llama-server on the engine's own configured port is running
+            // (e.g. started manually outside RustyClaw): report it so the
+            // UI's lifecycle gating stays tied to this engine's server.
+            let detected_endpoint = port
                 .map(|port| format!("http://127.0.0.1:{}", port))
                 .unwrap_or(endpoint);
             let loaded = detected.len() as u32;
@@ -156,6 +159,9 @@ impl LocalEngine for LlamaCppEngine {
                 available_models: loaded,
             }
         } else {
+            // llama-server processes on *other* ports belong to someone
+            // else: this engine is not running, and reporting Running would
+            // hide the Start button while Stop could not touch that server.
             EngineRunStatus::Stopped
         };
 
@@ -232,14 +238,19 @@ impl LocalEngine for LlamaCppEngine {
         }
     }
 
+    /// `cfg` is only read inside the Linux block (process inspection); the
+    /// non-Linux fallback ignores it.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     async fn stop(&self, cfg: &EngineConfig) -> Result<String> {
         // Scoped to the configured port: `pkill -f 'llama-server'` would
         // also kill servers started manually on other ports.  Report what
-        // actually happened instead of always claiming success.
+        // actually happened instead of always claiming success.  The pattern
+        // terminates the digit run (`( |$)`), so a short port such as 1234
+        // cannot match a server running on 12345.
         #[cfg(target_os = "linux")]
         {
             let port = cfg.port.unwrap_or(8080);
-            let pattern = format!("llama-server .*--port {}", port);
+            let pattern = format!("llama-server .*--port {}( |$)", port);
             let running = crate::engines::running_server_cmdlines(&pattern)
                 .await
                 .iter()
@@ -309,6 +320,17 @@ impl LocalEngine for LlamaCppEngine {
             if !names.iter().any(|n| n == &name) {
                 names.push(name.clone());
                 on_disk.push((name, path));
+            }
+        }
+        // A model served by a running llama-server may live outside the
+        // scanned models dir (e.g. started manually with an explicit
+        // `--model /elsewhere/foo.gguf` while the API is unreachable from
+        // the configured endpoint).  It is loaded, so it must appear in the
+        // list — like Joshua's list_models, surface any loaded id that the
+        // scan did not produce.
+        for name in &loaded {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.clone());
             }
         }
 

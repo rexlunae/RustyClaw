@@ -211,13 +211,22 @@ impl JoshuaEngine {
 
     /// Whether a `joshua serve` process for the given port is still running
     /// (best-effort; Linux only).  Used to tell "still loading" apart from
-    /// "crashed" when the health probe has not answered yet.
+    /// "crashed" when the health probe has not answered yet.  The port match
+    /// must terminate the digit run, so 808 does not match a server on 8080.
     #[cfg(target_os = "linux")]
     async fn server_process_alive(port: u16) -> bool {
+        let needle = format!("127.0.0.1:{}", port);
         crate::engines::running_server_cmdlines("joshua serve")
             .await
             .iter()
-            .any(|line| line.contains(&format!("127.0.0.1:{}", port)))
+            .any(|line| {
+                line.match_indices(&needle).any(|(end, _)| {
+                    line[end..]
+                        .chars()
+                        .next()
+                        .is_none_or(|c| !c.is_ascii_digit())
+                })
+            })
     }
 }
 
@@ -341,6 +350,7 @@ impl LocalEngine for JoshuaEngine {
         let presence = self.detect().await;
         let endpoint = Self::endpoint(cfg);
         let available = scan_gguf_models(&Self::models_dir(cfg)).len() as u32;
+        let configured_port = cfg.port.unwrap_or(DEFAULT_PORT);
         let detected = Self::running_servers().await;
 
         let run_status = if Self::is_running(&endpoint).await {
@@ -350,13 +360,14 @@ impl LocalEngine for JoshuaEngine {
                 loaded_models: loaded,
                 available_models: available.max(loaded),
             }
-        } else if !detected.is_empty() {
-            // Joshua servers are running on the host outside the configured
-            // endpoint (started manually, or another instance).  Report them
-            // so the UI reflects reality instead of "stopped".
-            let detected_endpoint = detected
-                .first()
-                .and_then(|(_, port)| *port)
+        } else if let Some((_, port)) = detected
+            .iter()
+            .find(|(_, port)| *port == Some(configured_port))
+        {
+            // A joshua server on the engine's own configured port is running
+            // (e.g. started manually outside RustyClaw): report it so the
+            // UI's lifecycle gating stays tied to this engine's server.
+            let detected_endpoint = port
                 .map(|port| format!("http://127.0.0.1:{}", port))
                 .unwrap_or(endpoint);
             let loaded = detected.len() as u32;
@@ -366,6 +377,9 @@ impl LocalEngine for JoshuaEngine {
                 available_models: available.max(loaded),
             }
         } else {
+            // Joshua servers on *other* ports belong to someone else: the
+            // engine itself is not running, and reporting Running would hide
+            // the Start button while Stop could not touch that server.
             EngineRunStatus::Stopped
         };
 
@@ -422,10 +436,12 @@ impl LocalEngine for JoshuaEngine {
 
     async fn stop(&self, cfg: &EngineConfig) -> Result<String> {
         // Scoped to the configured port: `pkill -f 'joshua serve'` would
-        // also kill servers started manually on other ports.
+        // also kill servers started manually on other ports.  The pattern
+        // terminates the digit run (`( |$)`), so a short port such as 808
+        // cannot match a server running on 8080.
         let port = cfg.port.unwrap_or(DEFAULT_PORT);
         Self::sh(&format!(
-            "pkill -f 'joshua serve .*127.0.0.1:{}' 2>/dev/null; echo 'stopped'",
+            "pkill -f 'joshua serve .*127.0.0.1:{}( |$)' 2>/dev/null; echo 'stopped'",
             port
         ))
         .await

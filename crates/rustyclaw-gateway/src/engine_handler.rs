@@ -77,7 +77,7 @@ pub async fn handle_engine_request(
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Build and send an `EngineActionResult` frame.
-async fn send_action_result(
+pub(crate) async fn send_action_result(
     writer: &mut dyn TransportWriter,
     engine: String,
     model: Option<String>,

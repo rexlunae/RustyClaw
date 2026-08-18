@@ -2320,22 +2320,44 @@ pub(crate) async fn handle_connection(
                                     ).await?;
                                 }
                                 ClientPayload::EngineConfigSet { engine, config: new_cfg } => {
-                                    // Persist through the shared config — writing
-                                    // this connection's snapshot would erase
-                                    // settings other connections saved since it
-                                    // was taken (messenger accounts included).
-                                    config.engines.insert(engine.clone(), new_cfg.clone());
+                                    // Reject structurally invalid configs
+                                    // before they reach config.toml or a
+                                    // shell command line (the port feeds the
+                                    // pkill/pgrep patterns on stop paths).
+                                    if let Err(msg) =
+                                        rustyclaw_core::engines::validate_engine_config(&new_cfg)
                                     {
-                                        let mut shared = shared_config.write().await;
-                                        shared.engines.insert(engine.clone(), new_cfg.clone());
-                                        crate::helpers::persist_config(&shared);
+                                        crate::engine_handler::send_action_result(
+                                            &mut *writer,
+                                            engine,
+                                            None,
+                                            false,
+                                            msg,
+                                        )
+                                        .await?;
+                                    } else {
+                                        // Persist through the shared config —
+                                        // writing this connection's snapshot
+                                        // would erase settings other
+                                        // connections saved since it was
+                                        // taken (messenger accounts included).
+                                        config.engines.insert(engine.clone(), new_cfg.clone());
+                                        {
+                                            let mut shared = shared_config.write().await;
+                                            shared.engines.insert(engine.clone(), new_cfg.clone());
+                                            crate::helpers::persist_config(&shared);
+                                        }
+                                        crate::engine_handler::handle_engine_request(
+                                            &mut *writer,
+                                            ClientPayload::EngineConfigSet {
+                                                engine,
+                                                config: new_cfg,
+                                            },
+                                            &engine_registry,
+                                            &config.engines,
+                                        )
+                                        .await?;
                                     }
-                                    crate::engine_handler::handle_engine_request(
-                                        &mut *writer,
-                                        ClientPayload::EngineConfigSet { engine, config: new_cfg },
-                                        &engine_registry,
-                                        &config.engines,
-                                    ).await?;
                                 }
                                 ClientPayload::ProviderModelList { provider } => {
                                     handle_provider_model_list(

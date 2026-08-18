@@ -120,6 +120,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Validate a client-supplied [`EngineConfig`] before it is persisted.
+///
+/// The typed fields that reach a shell command line are validated here
+/// (the same spirit as the `device`/`huge_pages` allow-list in
+/// [`joshua_serve_flags`]): the port feeds `pgrep`/`pkill` regex patterns
+/// on the stop paths, and rejecting a value that cannot be a real server
+/// port keeps that safety structural instead of relying on the field's type
+/// alone.  Extend this as new shell-reaching fields are added.
+pub fn validate_engine_config(cfg: &EngineConfig) -> Result<(), String> {
+    if cfg.port == Some(0) {
+        return Err("engine port must be between 1 and 65535".to_string());
+    }
+    Ok(())
+}
+
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
@@ -1073,6 +1088,25 @@ mod fallback_tests {
                 "8192".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn validate_engine_config_rejects_an_unusable_port() {
+        // Port 0 would feed the stop-path pkill/pgrep patterns with a value
+        // that can never be a real server port; it must be rejected before
+        // the config is persisted.
+        let bad = EngineConfig {
+            port: Some(0),
+            ..Default::default()
+        };
+        assert!(validate_engine_config(&bad).is_err());
+        // Unset and ordinary ports pass.
+        assert!(validate_engine_config(&EngineConfig::default()).is_ok());
+        let good = EngineConfig {
+            port: Some(8331),
+            ..Default::default()
+        };
+        assert!(validate_engine_config(&good).is_ok());
     }
 
     /// A local engine whose server is not running must still surface its
