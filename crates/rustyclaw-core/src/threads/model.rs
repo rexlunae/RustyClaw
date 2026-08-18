@@ -720,11 +720,14 @@ impl AgentThread {
 
     /// Add an assistant turn that issued tool calls. `text` may be empty
     /// when the model produced only tool calls. `tool_calls` is the
-    /// normalized JSON form (`Vec<{id, name, arguments}>`).
+    /// normalized JSON form (`Vec<{id, name, arguments}>`). `reasoning`
+    /// carries the turn's thinking text (thinking-mode providers require
+    /// it back on later turns).
     pub fn add_assistant_with_tool_calls(
         &mut self,
         text: impl Into<String>,
         tool_calls: serde_json::Value,
+        reasoning: Option<String>,
     ) {
         self.push_message(ThreadMessage {
             id: None,
@@ -734,7 +737,7 @@ impl AgentThread {
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             media: None,
-            reasoning: None,
+            reasoning,
         });
     }
 

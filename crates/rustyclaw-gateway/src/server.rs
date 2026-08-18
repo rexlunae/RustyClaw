@@ -4972,6 +4972,7 @@ mod tests {
                         "name": tool,
                         "arguments": {"path": "src/main.rs"}
                     }]),
+                    None,
                 );
                 thread.add_tool_result("call_1", "ok");
             }

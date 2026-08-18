@@ -1557,6 +1557,11 @@ pub(crate) async fn dispatch_text_message(
             thread.add_assistant_with_tool_calls(
                 model_resp.text.clone(),
                 serde_json::Value::Array(normalized),
+                if model_resp.reasoning.is_empty() {
+                    None
+                } else {
+                    Some(model_resp.reasoning.clone())
+                },
             );
             for tr in &tool_results {
                 thread.add_tool_result(tr.id.clone(), tr.output.clone());
