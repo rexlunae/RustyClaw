@@ -642,6 +642,13 @@ pub(super) fn handle_normal_key(
             if let Some(engine) = selected_engine {
                 let fields = crate::components::engines_params::fields_for(&engine);
                 if !fields.is_empty() {
+                    // The active engine can change under the editor: an
+                    // EngineModelListResult for another engine moves
+                    // `engines_cursor`, so the focused field index may now
+                    // exceed this engine's field list.  Clamp before use —
+                    // indexing past the end would panic the terminal app.
+                    let focused = engines_params_cursor.get().min(fields.len() - 1);
+                    engines_params_cursor.set(focused);
                     match code {
                         KeyCode::Esc => {
                             // Discard the draft: without this, the dialog
@@ -665,7 +672,7 @@ pub(super) fn handle_normal_key(
                         }
                         // +/- adjust; x clears back to default.
                         KeyCode::Char('+') | KeyCode::Char('=') => {
-                            let field = fields[engines_params_cursor.get()];
+                            let field = fields[focused];
                             let models: Vec<String> = engines_data
                                 .read()
                                 .as_ref()
@@ -678,7 +685,7 @@ pub(super) fn handle_normal_key(
                             crate::components::engines_params::adjust(&field, draft, 1, &models);
                         }
                         KeyCode::Char('-') | KeyCode::Char('_') => {
-                            let field = fields[engines_params_cursor.get()];
+                            let field = fields[focused];
                             let models: Vec<String> = engines_data
                                 .read()
                                 .as_ref()
@@ -691,7 +698,7 @@ pub(super) fn handle_normal_key(
                             crate::components::engines_params::adjust(&field, draft, -1, &models);
                         }
                         KeyCode::Char('x') => {
-                            let field = fields[engines_params_cursor.get()];
+                            let field = fields[focused];
                             let mut drafts = engines_params_drafts.write();
                             let draft = drafts
                                 .entry(engine.id.clone())

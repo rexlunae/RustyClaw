@@ -1633,10 +1633,12 @@ pub(super) fn apply_gw_event(
         }
         // ── Engines ──────────────────────────────────────────────────────
         GwEvent::ShowEngines => {
-            // A fresh open starts in normal mode with no stale drafts.
+            // A fresh open starts in normal mode with no stale drafts and
+            // no leftover Load/Unload result row.
             if !show_engines_dialog.get() {
                 engines_params_edit.set(false);
                 engines_params_drafts.write().clear();
+                engines_action_result.set(None);
             }
             show_engines_dialog.set(true);
         }

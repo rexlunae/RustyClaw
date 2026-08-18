@@ -20,46 +20,57 @@ pub struct ParamField {
     pub step: u32,
 }
 
+/// Context window in tokens (engine flag: `--n-ctx` / `--ctx-size` /
+/// `--num-ctx`).  First +/- from unset lands on 4096; steps by 256.
 pub const CONTEXT_LENGTH: ParamField = ParamField {
     key: "context_length",
     label: "Context window",
     step: 256,
 };
+/// Compute backend (`--device`): auto, cpu, metal, cuda.
 pub const DEVICE: ParamField = ParamField {
     key: "device",
     label: "Device",
     step: 1,
 };
+/// Huge-page strategy (`--huge-pages`): off, transparent, 2mb, 1gb, huge.
 pub const HUGE_PAGES: ParamField = ParamField {
     key: "huge_pages",
     label: "Huge pages",
     step: 1,
 };
+/// Require the model file to be memory-mappable (`--mmap`).
 pub const MMAP: ParamField = ParamField {
     key: "mmap",
     label: "Mmap",
     step: 1,
 };
+/// Optimise mapping for a model far larger than RAM (`--lazy-weights`).
 pub const LAZY_WEIGHTS: ParamField = ParamField {
     key: "lazy_weights",
     label: "Lazy weights",
     step: 1,
 };
+/// Cap on generated tokens per request (`--max-output-tokens`).  First
+/// +/- from unset lands on 4096; steps by 128.
 pub const MAX_OUTPUT_TOKENS: ParamField = ParamField {
     key: "max_output_tokens",
     label: "Max output tokens",
     step: 128,
 };
+/// Max concurrent generations (`--max-concurrency`).  Steps by 1.
 pub const MAX_CONCURRENCY: ParamField = ParamField {
     key: "max_concurrency",
     label: "Max concurrency",
     step: 1,
 };
+/// The model served at startup; cycles through the local model list.
 pub const DEFAULT_MODEL: ParamField = ParamField {
     key: "default_model",
     label: "Default model",
     step: 1,
 };
+/// Start the engine with the gateway.
 pub const AUTO_START: ParamField = ParamField {
     key: "auto_start",
     label: "Auto-start",
