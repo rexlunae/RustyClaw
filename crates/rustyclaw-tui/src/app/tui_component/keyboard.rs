@@ -166,6 +166,7 @@ pub(super) fn apply_key_event(
         engines_params_cursor: _,
         engines_params_drafts: _,
         engines_action_result: _,
+        engines_configs_received: _,
         show_cron_dialog: _,
         cron_data: _,
         show_memory_dialog: _,

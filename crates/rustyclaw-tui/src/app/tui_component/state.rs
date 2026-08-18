@@ -225,6 +225,11 @@ pub(super) struct Ui {
     /// Outcome of the last engine model action (engine, ok, message), shown
     /// in the engines dialog so Load/Unload always answer visibly.
     pub engines_action_result: State<Option<(String, bool, String)>>,
+    /// Whether the gateway's `EngineConfigList` snapshot has arrived for the
+    /// current connection.  Until it does, the panel's engine configs are
+    /// placeholders, so saving parameters would overwrite the real
+    /// endpoint/port/models_dir/extra_args with blanks.
+    pub engines_configs_received: State<bool>,
     pub show_cron_dialog: State<bool>,
     pub cron_data: State<Option<rustyclaw_view::CronPanelData>>,
     pub show_memory_dialog: State<bool>,

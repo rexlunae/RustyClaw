@@ -373,6 +373,7 @@ pub(super) fn apply_gw_event(
         mut engines_params_cursor,
         mut engines_params_drafts,
         mut engines_action_result,
+        mut engines_configs_received,
         mut show_cron_dialog,
         mut cron_data,
         mut show_memory_dialog,
@@ -1643,6 +1644,10 @@ pub(super) fn apply_gw_event(
             show_engines_dialog.set(true);
         }
         GwEvent::EngineListResult { engines } => {
+            // A fresh exchange: the EngineConfigList snapshot that patches
+            // the panel's configs follows this frame and has not arrived
+            // yet — until it does, saving parameters must stay disabled.
+            engines_configs_received.set(false);
             // The configs came from the gateway; drafts seeded from an older
             // snapshot are stale, so drop them (p re-seeds from the fresh
             // config when the user next enters edit mode).
@@ -1664,6 +1669,9 @@ pub(super) fn apply_gw_event(
             engines_data.set(Some(data));
         }
         GwEvent::EngineConfigList { configs } => {
+            // The real config snapshot is here: the panel entries are no
+            // longer placeholders, so saving parameters is safe again.
+            engines_configs_received.set(true);
             let mut data = engines_data.read().clone().unwrap_or_default();
             for engine in &mut data.engines {
                 if let Some(cfg) = configs.get(&engine.id) {

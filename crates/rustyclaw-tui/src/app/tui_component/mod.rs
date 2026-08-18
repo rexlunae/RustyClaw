@@ -267,6 +267,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         std::collections::HashMap<String, rustyclaw_core::engines::EngineConfig>,
     > = hooks.use_state(std::collections::HashMap::new);
     let engines_action_result: State<Option<(String, bool, String)>> = hooks.use_state(|| None);
+    let engines_configs_received = hooks.use_state(|| false);
     let show_cron_dialog = hooks.use_state(|| false);
     let cron_data: State<Option<rustyclaw_view::CronPanelData>> = hooks.use_state(|| None);
     let show_memory_dialog = hooks.use_state(|| false);
@@ -443,6 +444,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         engines_params_cursor,
         engines_params_drafts,
         engines_action_result,
+        engines_configs_received,
         show_cron_dialog,
         cron_data,
         show_memory_dialog,

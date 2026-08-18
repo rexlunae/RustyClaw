@@ -180,7 +180,8 @@ pub(super) fn handle_normal_key(
         mut engines_params_edit,
         mut engines_params_cursor,
         mut engines_params_drafts,
-        engines_action_result: _,
+        mut engines_action_result,
+        mut engines_configs_received,
         mut show_cron_dialog,
         mut cron_data,
         mut show_memory_dialog,
@@ -673,9 +674,17 @@ pub(super) fn handle_normal_key(
                         // +/- adjust; x clears back to default.
                         KeyCode::Char('+') | KeyCode::Char('=') => {
                             let field = fields[focused];
+                            // Only cycle through the edited engine's own
+                            // model list: the panel's `models` belongs to
+                            // whatever engine was last inspected, and
+                            // assigning another engine's model to this one
+                            // would configure it to serve a name it lacks.
                             let models: Vec<String> = engines_data
                                 .read()
                                 .as_ref()
+                                .filter(|d| {
+                                    d.selected_engine.as_deref() == Some(engine.id.as_str())
+                                })
                                 .map(|d| d.models.iter().map(|m| m.name.clone()).collect())
                                 .unwrap_or_default();
                             let mut drafts = engines_params_drafts.write();
@@ -689,6 +698,9 @@ pub(super) fn handle_normal_key(
                             let models: Vec<String> = engines_data
                                 .read()
                                 .as_ref()
+                                .filter(|d| {
+                                    d.selected_engine.as_deref() == Some(engine.id.as_str())
+                                })
                                 .map(|d| d.models.iter().map(|m| m.name.clone()).collect())
                                 .unwrap_or_default();
                             let mut drafts = engines_params_drafts.write();
@@ -706,6 +718,22 @@ pub(super) fn handle_normal_key(
                             crate::components::engines_params::clear(&field, draft);
                         }
                         KeyCode::Enter => {
+                            if !engines_configs_received.get() {
+                                // The EngineConfigList snapshot has not
+                                // arrived: the base config here is a
+                                // placeholder, so saving would overwrite the
+                                // engine's real endpoint/port/models_dir/
+                                // extra_args with blanks.  Refuse, keep the
+                                // draft, and say why.
+                                engines_action_result.set(Some((
+                                    engine.id.clone(),
+                                    false,
+                                    "Engine settings not loaded from the gateway yet; \
+                                     saving disabled (Esc to cancel)"
+                                        .into(),
+                                )));
+                                return;
+                            }
                             // Save the draft and refresh engine + model lists.
                             let config = engines_params_drafts
                                 .read()
