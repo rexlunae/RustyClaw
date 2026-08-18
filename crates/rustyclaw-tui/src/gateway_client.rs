@@ -434,7 +434,9 @@ pub(crate) fn gateway_event_to_gw_event(
                         can_load: e.capabilities.can_load,
                         can_unload: e.capabilities.can_unload,
                     },
-                    config: e.config,
+                    // The full engine config arrives in the EngineConfigList
+                    // frame right after the list (patched in the TUI PR).
+                    config: Default::default(),
                 })
                 .collect(),
         },

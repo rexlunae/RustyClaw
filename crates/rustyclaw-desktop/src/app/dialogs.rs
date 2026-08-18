@@ -809,6 +809,15 @@ pub(super) fn Dialogs(sig: AppSignals) -> Element {
                     state
                         .write()
                         .engine_model_action_pending = Some((engine.clone(), model.clone()));
+                    // A Load should honour the context window saved in the
+                    // engine's parameters (the gateway maps it per engine:
+                    // --n-ctx / --ctx-size / --num-ctx).
+                    let saved_ctx = state
+                        .read()
+                        .engines_data
+                        .as_ref()
+                        .and_then(|d| d.engine(&engine))
+                        .and_then(|e| e.config.context_length);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -817,7 +826,7 @@ pub(super) fn Dialogs(sig: AppSignals) -> Element {
                                     engine,
                                     model,
                                     action,
-                                    context_length: None,
+                                    context_length: saved_ctx,
                                     extra_args: Vec::new(),
                                 })
                                 .await

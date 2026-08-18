@@ -910,7 +910,6 @@ pub(crate) fn handle_gateway_event(
             provider,
             models,
             error,
-            loaded,
         } => {
             if let Some(err) = error {
                 // Keep the static fallback in the picker.  The provider
@@ -923,15 +922,27 @@ pub(crate) fn handle_gateway_event(
                 // user-driven and bounded.
                 tracing::warn!(provider = %provider, error = %err, "Live provider model fetch failed");
             } else {
-                let mut s = state.write();
-                s.provider_models.insert(provider.clone(), models);
-                s.provider_loaded_models.insert(provider, loaded);
+                state.write().provider_models.insert(provider, models);
             }
         }
-        // The loaded/running markers and full engine configs arrive in their
-        // own frames (new capabilities, new frames); the desktop surfaces
-        // them once the enriched-payload handling lands with the UI work.
-        GatewayEvent::ProviderModelLoadedList { .. } | GatewayEvent::EngineConfigList { .. } => {}
+        // Loaded/running markers arrive in their own frame (new capability,
+        // new frame); the picker marks these models as running.
+        GatewayEvent::ProviderModelLoadedList { provider, loaded } => {
+            state.write().provider_loaded_models.insert(provider, loaded);
+        }
+        // Full engine configs arrive in their own frame right after the
+        // engine list; patch them onto the panel's engine entries so the
+        // parameters editor can round-trip them.
+        GatewayEvent::EngineConfigList { configs } => {
+            let mut s = state.write();
+            if let Some(panel) = s.engines_data.as_mut() {
+                for engine in &mut panel.engines {
+                    if let Some(cfg) = configs.get(&engine.id) {
+                        engine.config = cfg.clone();
+                    }
+                }
+            }
+        }
         GatewayEvent::EnginePullProgress {
             engine,
             model,
@@ -1173,7 +1184,9 @@ fn dto_to_engine_data(
             can_load: dto.capabilities.can_load,
             can_unload: dto.capabilities.can_unload,
         },
-        config: dto.config,
+        // The engine config arrives in the EngineConfigList frame right
+        // after the list; it is patched onto the panel entry there.
+        config: Default::default(),
     }
 }
 
