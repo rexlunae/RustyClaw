@@ -181,19 +181,30 @@ impl JoshuaEngine {
         // (process gone): the former is not an error — large models can
         // take minutes to come up on a busy machine — while the latter
         // deserves a real error with a way forward.
-        if Self::server_process_alive(port).await {
-            return Ok(format!(
-                "joshua start command issued; the model may still be loading on {}.",
-                endpoint
-            ));
+        #[cfg(target_os = "linux")]
+        {
+            if Self::server_process_alive(port).await {
+                return Ok(format!(
+                    "joshua start command issued; the model may still be loading on {}.",
+                    endpoint
+                ));
+            }
+            anyhow::bail!(
+                "joshua serve did not answer on {} and its process exited — the model file may \
+                 be invalid or joshua failed at load. Run `joshua serve --model '{}'` manually \
+                 to see the error.",
+                endpoint,
+                model_path.display()
+            )
         }
-        anyhow::bail!(
-            "joshua serve did not answer on {} and its process exited — the model file may be \
-             invalid or joshua failed at load. Run `joshua serve --model '{}'` manually to see \
-             the error.",
-            endpoint,
-            model_path.display()
-        )
+        // No process inspection on this platform: a slow load must not be
+        // reported as a failure just because we cannot tell it apart from a
+        // crashed process.
+        #[cfg(not(target_os = "linux"))]
+        return Ok(format!(
+            "joshua start command issued; the model may still be loading on {}.",
+            endpoint
+        ));
     }
 
     /// Whether a `joshua serve` process for the given port is still running
@@ -565,18 +576,11 @@ impl LocalEngine for JoshuaEngine {
         let path = find_model_file(&dir, model)
             .ok_or_else(|| anyhow::anyhow!("Model '{}' not found in {}", model, dir.display()))?;
 
-        // If a running server (managed or detected) already serves this
-        // model, there is nothing to do — say so instead of respawning.
-        let running = Self::running_servers().await;
-        if let Some((name, port)) = running.iter().find(|(n, _)| n == model) {
-            return Ok(format!(
-                "Model '{}' is already loaded (running on port {})",
-                name,
-                port.unwrap_or(8080)
-            ));
-        }
-
-        let endpoint = Self::effective_endpoint(cfg).await;
+        // "Already loaded" means the server the engine actually talks to
+        // (the configured endpoint) serves this model — a joshua started
+        // outside RustyClaw on another port must not make Load claim
+        // success while the configured server has nothing loaded.
+        let endpoint = Self::endpoint(cfg);
         if Self::is_running(&endpoint).await {
             let already = Self::loaded_model_ids(&endpoint).await;
             if already.iter().any(|id| id == model) {

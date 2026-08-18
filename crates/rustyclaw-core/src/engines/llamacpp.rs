@@ -209,7 +209,7 @@ impl LocalEngine for LlamaCppEngine {
         let port = cfg.port.unwrap_or(8080);
         let mut cmd = format!("nohup llama-server --port {}", port);
         if let Some(ref dir) = cfg.models_dir {
-            cmd.push_str(&format!(" --models-dir '{}'", dir));
+            cmd.push_str(&format!(" --models-dir {}", sh_quote(dir)));
         }
         // The typed context window applies to manual starts too (it already
         // applies to auto-start via `engine_start_command`).
@@ -236,21 +236,28 @@ impl LocalEngine for LlamaCppEngine {
         // actually happened instead of always claiming success.
         let port = cfg.port.unwrap_or(8080);
         let pattern = format!("llama-server .*--port {}", port);
-        let running = crate::engines::running_server_cmdlines(&pattern)
-            .await
-            .iter()
-            .any(|line| line.contains("llama-server"));
-        if !running {
-            return Ok(format!(
-                "no llama-server is running on port {} (nothing to stop)",
-                port
-            ));
+        #[cfg(target_os = "linux")]
+        {
+            let running = crate::engines::running_server_cmdlines(&pattern)
+                .await
+                .iter()
+                .any(|line| line.contains("llama-server"));
+            if !running {
+                return Ok(format!(
+                    "no llama-server is running on port {} (nothing to stop)",
+                    port
+                ));
+            }
+            return Self::sh(&format!(
+                "pkill -f '{}' 2>/dev/null; echo 'stopped'",
+                pattern
+            ))
+            .await;
         }
-        Self::sh(&format!(
-            "pkill -f '{}' 2>/dev/null; echo 'stopped'",
-            pattern
-        ))
-        .await
+        // No process inspection on this platform: fall back to stopping
+        // every llama-server rather than claiming success while one runs.
+        #[cfg(not(target_os = "linux"))]
+        Self::sh("pkill -f 'llama-server' 2>/dev/null; echo 'stopped'").await
     }
 
     async fn list_models(&self, cfg: &EngineConfig) -> Result<Vec<LocalModel>> {

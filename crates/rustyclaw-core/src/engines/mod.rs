@@ -586,6 +586,7 @@ pub fn scan_gguf_models(dir: &Path) -> Vec<PathBuf> {
 /// already running on the host — including ones started manually outside
 /// RustyClaw — so the UI can say *which models are running* rather than only
 /// what the configured endpoint answers.
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
 pub async fn running_server_cmdlines(pattern: &str) -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
@@ -952,9 +953,10 @@ fn engine_start_command(id: &str, cfg: &EngineConfig) -> (String, Vec<String>) {
         }
         "llamacpp" => {
             let cmd = "llama-server".to_string();
-            if let Some(port) = cfg.port {
-                args.extend(["--port".to_string(), port.to_string()]);
-            }
+            // Always pass the resolved port (not only when configured), so
+            // the port-scoped stop can identify auto-started servers.
+            let port = cfg.port.unwrap_or(8080);
+            args.extend(["--port".to_string(), port.to_string()]);
             if let Some(ref models_dir) = cfg.models_dir {
                 args.extend(["--model-store".to_string(), models_dir.clone()]);
             }
