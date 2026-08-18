@@ -177,6 +177,11 @@ pub(super) fn handle_normal_key(
         mut show_engines_dialog,
         mut engines_data,
         mut engines_cursor,
+        mut engines_params_edit,
+        mut engines_params_cursor,
+        mut engines_params_drafts,
+        mut engines_action_result,
+        mut engines_configs_received,
         mut show_cron_dialog,
         mut cron_data,
         mut show_memory_dialog,
@@ -632,6 +637,142 @@ pub(super) fn handle_normal_key(
             .read()
             .as_ref()
             .and_then(|d| d.engines.get(engines_cursor.get()).cloned());
+
+        // ── Parameter-edit mode (p toggles) ─────────────────────────
+        if engines_params_edit.get() {
+            if let Some(engine) = selected_engine {
+                let fields = crate::components::engines_params::fields_for(&engine);
+                if !fields.is_empty() {
+                    // The active engine can change under the editor: an
+                    // EngineModelListResult for another engine moves
+                    // `engines_cursor`, so the focused field index may now
+                    // exceed this engine's field list.  Clamp before use —
+                    // indexing past the end would panic the terminal app.
+                    let focused = engines_params_cursor.get().min(fields.len() - 1);
+                    engines_params_cursor.set(focused);
+                    match code {
+                        KeyCode::Esc => {
+                            // Discard the draft: without this, the dialog
+                            // keeps showing the cancelled values (it renders
+                            // the draft even outside edit mode).
+                            engines_params_drafts.write().remove(&engine.id);
+                            engines_params_edit.set(false);
+                        }
+                        // ←/→ (and Tab) move the focused field.
+                        KeyCode::Left | KeyCode::Up => {
+                            let cur = engines_params_cursor.get();
+                            engines_params_cursor.set(if cur == 0 {
+                                fields.len() - 1
+                            } else {
+                                cur - 1
+                            });
+                        }
+                        KeyCode::Right | KeyCode::Down | KeyCode::Tab => {
+                            let cur = engines_params_cursor.get();
+                            engines_params_cursor.set((cur + 1).min(fields.len() - 1));
+                        }
+                        // +/- adjust; x clears back to default.
+                        KeyCode::Char('+') | KeyCode::Char('=') => {
+                            let field = fields[focused];
+                            // Only cycle through the edited engine's own
+                            // model list: the panel's `models` belongs to
+                            // whatever engine was last inspected, and
+                            // assigning another engine's model to this one
+                            // would configure it to serve a name it lacks.
+                            let models: Vec<String> = engines_data
+                                .read()
+                                .as_ref()
+                                .filter(|d| {
+                                    d.selected_engine.as_deref() == Some(engine.id.as_str())
+                                })
+                                .map(|d| d.models.iter().map(|m| m.name.clone()).collect())
+                                .unwrap_or_default();
+                            let mut drafts = engines_params_drafts.write();
+                            let draft = drafts
+                                .entry(engine.id.clone())
+                                .or_insert_with(|| engine.config.clone());
+                            crate::components::engines_params::adjust(&field, draft, 1, &models);
+                        }
+                        KeyCode::Char('-') | KeyCode::Char('_') => {
+                            let field = fields[focused];
+                            let models: Vec<String> = engines_data
+                                .read()
+                                .as_ref()
+                                .filter(|d| {
+                                    d.selected_engine.as_deref() == Some(engine.id.as_str())
+                                })
+                                .map(|d| d.models.iter().map(|m| m.name.clone()).collect())
+                                .unwrap_or_default();
+                            let mut drafts = engines_params_drafts.write();
+                            let draft = drafts
+                                .entry(engine.id.clone())
+                                .or_insert_with(|| engine.config.clone());
+                            crate::components::engines_params::adjust(&field, draft, -1, &models);
+                        }
+                        KeyCode::Char('x') => {
+                            let field = fields[focused];
+                            let mut drafts = engines_params_drafts.write();
+                            let draft = drafts
+                                .entry(engine.id.clone())
+                                .or_insert_with(|| engine.config.clone());
+                            crate::components::engines_params::clear(&field, draft);
+                        }
+                        KeyCode::Enter => {
+                            if !engines_configs_received.get() {
+                                // The EngineConfigList snapshot has not
+                                // arrived: the base config here is a
+                                // placeholder, so saving would overwrite the
+                                // engine's real endpoint/port/models_dir/
+                                // extra_args with blanks.  Refuse, keep the
+                                // draft, and say why.
+                                engines_action_result.set(Some((
+                                    engine.id.clone(),
+                                    false,
+                                    "Engine settings not loaded from the gateway yet; \
+                                     saving disabled (Esc to cancel)"
+                                        .into(),
+                                )));
+                                return;
+                            }
+                            // Save the draft and refresh engine + model lists.
+                            let config = engines_params_drafts
+                                .read()
+                                .get(&engine.id)
+                                .cloned()
+                                .unwrap_or_else(|| engine.config.clone());
+                            engines_params_drafts.write().remove(&engine.id);
+                            engines_params_edit.set(false);
+                            // Keep the client's copy of the config in sync
+                            // with what the gateway just persisted: a later
+                            // edit seeds its draft from `engine.config`, so a
+                            // stale copy would let an unrelated save silently
+                            // revert this one.  (The EngineRefresh round-trip
+                            // below re-confirms it from the gateway.)
+                            let mut data = engines_data.read().clone().unwrap_or_default();
+                            if let Some(e) = data.engines.iter_mut().find(|e| e.id == engine.id) {
+                                e.config = config.clone();
+                            }
+                            engines_data.set(Some(data));
+                            send_input(UserInput::MessengerCommand(
+                                rustyclaw_core::gateway::client_types::GatewayCommand::EngineConfigSet {
+                                    engine: engine.id.clone(),
+                                    config,
+                                },
+                            ));
+                            send_input(UserInput::EngineRefresh);
+                            send_input(UserInput::EngineSelect(engine.id));
+                        }
+                        _ => {}
+                    }
+                } else {
+                    engines_params_edit.set(false);
+                }
+            } else {
+                engines_params_edit.set(false);
+            }
+            return;
+        }
+
         match code {
             KeyCode::Esc => {
                 show_engines_dialog.set(false);
@@ -657,6 +798,20 @@ pub(super) fn handle_normal_key(
             KeyCode::Enter => {
                 if let Some(engine) = selected_engine {
                     send_input(UserInput::EngineSelect(engine.id));
+                }
+            }
+            KeyCode::Char('p') => {
+                // Enter parameter-edit mode for the active engine, seeded
+                // from the config the gateway last reported.
+                if let Some(engine) = selected_engine {
+                    let fields = crate::components::engines_params::fields_for(&engine);
+                    if !fields.is_empty() {
+                        engines_params_drafts
+                            .write()
+                            .insert(engine.id.clone(), engine.config.clone());
+                        engines_params_cursor.set(0);
+                        engines_params_edit.set(true);
+                    }
                 }
             }
             KeyCode::Char('s') => {

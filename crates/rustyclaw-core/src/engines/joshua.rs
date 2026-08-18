@@ -370,7 +370,13 @@ impl LocalEngine for JoshuaEngine {
             let detected_endpoint = port
                 .map(|port| format!("http://127.0.0.1:{}", port))
                 .unwrap_or(endpoint);
-            let loaded = detected.len() as u32;
+            // Count only servers on this engine's own port — servers on
+            // other ports belong to other engines and must not inflate
+            // this engine's loaded-model count.
+            let loaded = detected
+                .iter()
+                .filter(|(_, port)| *port == Some(configured_port))
+                .count() as u32;
             EngineRunStatus::Running {
                 endpoint: detected_endpoint,
                 loaded_models: loaded,

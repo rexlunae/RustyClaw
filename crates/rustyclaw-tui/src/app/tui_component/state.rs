@@ -214,6 +214,22 @@ pub(super) struct Ui {
     pub show_engines_dialog: State<bool>,
     pub engines_data: State<Option<rustyclaw_view::EnginesPanelData>>,
     pub engines_cursor: State<usize>,
+    /// Parameter-edit mode for the engines dialog (p toggles).
+    pub engines_params_edit: State<bool>,
+    /// Focused field index within the active engine's parameter list.
+    pub engines_params_cursor: State<usize>,
+    /// In-progress parameter edits per engine id, seeded from the config the
+    /// gateway last reported; Enter saves the active engine's draft.
+    pub engines_params_drafts:
+        State<std::collections::HashMap<String, rustyclaw_core::engines::EngineConfig>>,
+    /// Outcome of the last engine model action (engine, ok, message), shown
+    /// in the engines dialog so Load/Unload always answer visibly.
+    pub engines_action_result: State<Option<(String, bool, String)>>,
+    /// Whether the gateway's `EngineConfigList` snapshot has arrived for the
+    /// current connection.  Until it does, the panel's engine configs are
+    /// placeholders, so saving parameters would overwrite the real
+    /// endpoint/port/models_dir/extra_args with blanks.
+    pub engines_configs_received: State<bool>,
     pub show_cron_dialog: State<bool>,
     pub cron_data: State<Option<rustyclaw_view::CronPanelData>>,
     pub show_memory_dialog: State<bool>,

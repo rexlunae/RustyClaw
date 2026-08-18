@@ -492,6 +492,7 @@ impl App {
                 }
                 Ok(UserInput::FetchModelCompletions { provider }) => {
                     let base_url = config.model.as_ref().and_then(|m| m.base_url.clone());
+                    let engine_configs = config.engines.clone();
                     let api_key = rustyclaw_core::providers::secret_key_for_provider(&provider)
                         .and_then(|key_name| {
                             secrets_manager
@@ -502,28 +503,28 @@ impl App {
                         });
                     let gw_tx2 = gw_tx.clone();
                     tokio::spawn(async move {
-                        match rustyclaw_core::providers::fetch_models(
+                        let fetched = rustyclaw_core::engines::provider_models_with_local_fallback(
                             &provider,
                             api_key.as_deref(),
                             base_url.as_deref(),
+                            &engine_configs,
                         )
-                        .await
-                        {
-                            Ok(models) => {
+                        .await;
+                        let rustyclaw_core::engines::ProviderModels { models, error, .. } = fetched;
+                        match error {
+                            None => {
                                 gw_tx2
                                     .send(GwEvent::ModelCompletionsLoaded { provider, models })
                                     .ignore();
                             }
-                            Err(e) => {
+                            Some(e) => {
                                 gw_tx2
                                     .send(GwEvent::Warning {
-                                        summary: format!(
-                                            "Failed to load model completions: {:#}",
-                                            e
-                                        ),
-                                        details: Some(
-                                            rustyclaw_core::error_details::render_extended(&e),
-                                        ),
+                                        summary: format!("Failed to load model completions: {e}"),
+                                        // The error string (built with the
+                                        // cause chain upstream) goes into the
+                                        // expandable detail view.
+                                        details: Some(e),
                                     })
                                     .ignore();
                             }
@@ -822,15 +823,22 @@ impl App {
                                 );
                                 let gw_tx2 = gw_tx.clone();
                                 let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                                let engine_configs = config.engines.clone();
                                 tokio::spawn(async move {
-                                    match rustyclaw_core::providers::fetch_models(
+                                    let fetched = rustyclaw_core::engines::provider_models_with_local_fallback(
                                         &pid,
                                         None,
                                         base.as_deref(),
+                                        &engine_configs,
                                     )
-                                    .await
-                                    {
-                                        Ok(models) => {
+                                    .await;
+                                    let rustyclaw_core::engines::ProviderModels {
+                                        models,
+                                        error,
+                                        ..
+                                    } = fetched;
+                                    match error {
+                                        None => {
                                             gw_tx2
                                                 .send(GwEvent::ShowModelSelector {
                                                     provider: pid,
@@ -839,15 +847,13 @@ impl App {
                                                 })
                                                 .ignore();
                                         }
-                                        Err(e) => {
-                                            gw_tx2.send(GwEvent::Error {
-                                                summary: format!("Failed to fetch models: {:#}", e),
-                                                details: Some(
-                                                    rustyclaw_core::error_details::render_extended(
-                                                        &e,
-                                                    ),
-                                                ),
-                                            }).ignore();
+                                        Some(e) => {
+                                            gw_tx2
+                                                .send(GwEvent::Error {
+                                                    summary: format!("Failed to fetch models: {e}"),
+                                                    details: None,
+                                                })
+                                                .ignore();
                                         }
                                     }
                                 });
@@ -906,15 +912,22 @@ impl App {
                                     let gw_tx2 = gw_tx.clone();
                                     let base =
                                         config.model.as_ref().and_then(|m| m.base_url.clone());
+                                    let engine_configs = config.engines.clone();
                                     tokio::spawn(async move {
-                                        match rustyclaw_core::providers::fetch_models(
-                                            &pid,
-                                            key.as_deref(),
-                                            base.as_deref(),
-                                        )
-                                        .await
-                                        {
-                                            Ok(models) => {
+                                        let fetched = rustyclaw_core::engines::provider_models_with_local_fallback(
+    &pid,
+    key.as_deref(),
+    base.as_deref(),
+    &engine_configs,
+)
+.await;
+                                        let rustyclaw_core::engines::ProviderModels {
+                                            models,
+                                            error,
+                                            ..
+                                        } = fetched;
+                                        match error {
+                                            None => {
                                                 gw_tx2
                                                     .send(GwEvent::ShowModelSelector {
                                                         provider: pid,
@@ -923,11 +936,15 @@ impl App {
                                                     })
                                                     .ignore();
                                             }
-                                            Err(e) => {
-                                                gw_tx2.send(GwEvent::Error {
-                                                summary: format!("Failed to fetch models: {:#}", e),
-                                                details: Some(rustyclaw_core::error_details::render_extended(&e)),
-                                            }).ignore();
+                                            Some(e) => {
+                                                gw_tx2
+                                                    .send(GwEvent::Error {
+                                                        summary: format!(
+                                                            "Failed to fetch models: {e}"
+                                                        ),
+                                                        details: None,
+                                                    })
+                                                    .ignore();
                                             }
                                         }
                                     });
@@ -995,15 +1012,22 @@ impl App {
                                     let gw_tx2 = gw_tx.clone();
                                     let base =
                                         config.model.as_ref().and_then(|m| m.base_url.clone());
+                                    let engine_configs = config.engines.clone();
                                     tokio::spawn(async move {
-                                        match rustyclaw_core::providers::fetch_models(
-                                            &pid,
-                                            token.as_deref(),
-                                            base.as_deref(),
-                                        )
-                                        .await
-                                        {
-                                            Ok(models) => {
+                                        let fetched = rustyclaw_core::engines::provider_models_with_local_fallback(
+    &pid,
+    token.as_deref(),
+    base.as_deref(),
+    &engine_configs,
+)
+.await;
+                                        let rustyclaw_core::engines::ProviderModels {
+                                            models,
+                                            error,
+                                            ..
+                                        } = fetched;
+                                        match error {
+                                            None => {
                                                 gw_tx2
                                                     .send(GwEvent::ShowModelSelector {
                                                         provider: pid,
@@ -1012,11 +1036,15 @@ impl App {
                                                     })
                                                     .ignore();
                                             }
-                                            Err(e) => {
-                                                gw_tx2.send(GwEvent::Error {
-                                                summary: format!("Failed to fetch models: {:#}", e),
-                                                details: Some(rustyclaw_core::error_details::render_extended(&e)),
-                                            }).ignore();
+                                            Some(e) => {
+                                                gw_tx2
+                                                    .send(GwEvent::Error {
+                                                        summary: format!(
+                                                            "Failed to fetch models: {e}"
+                                                        ),
+                                                        details: None,
+                                                    })
+                                                    .ignore();
                                             }
                                         }
                                     });
@@ -1184,15 +1212,18 @@ impl App {
                     let gw_tx2 = gw_tx.clone();
                     let api_key = Some(key);
                     let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                    let engine_configs = config.engines.clone();
                     tokio::spawn(async move {
-                        match rustyclaw_core::providers::fetch_models(
+                        let fetched = rustyclaw_core::engines::provider_models_with_local_fallback(
                             &pid,
                             api_key.as_deref(),
                             base.as_deref(),
+                            &engine_configs,
                         )
-                        .await
-                        {
-                            Ok(models) => {
+                        .await;
+                        let rustyclaw_core::engines::ProviderModels { models, error, .. } = fetched;
+                        match error {
+                            None => {
                                 gw_tx2
                                     .send(GwEvent::ShowModelSelector {
                                         provider: pid,
@@ -1201,13 +1232,11 @@ impl App {
                                     })
                                     .ignore();
                             }
-                            Err(e) => {
+                            Some(e) => {
                                 gw_tx2
                                     .send(GwEvent::Error {
-                                        summary: format!("Failed to fetch models: {:#}", e),
-                                        details: Some(
-                                            rustyclaw_core::error_details::render_extended(&e),
-                                        ),
+                                        summary: format!("Failed to fetch models: {e}"),
+                                        details: None,
                                     })
                                     .ignore();
                             }

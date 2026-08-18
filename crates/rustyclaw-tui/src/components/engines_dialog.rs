@@ -4,20 +4,34 @@
 // every detected engine (active one highlighted), and the body shows the
 // active engine's status, models, live install output, and pull progress.
 // ←/→ (or Tab) switches engines.
+//
+// The body also renders the engine's parameter fields (context window,
+// device, huge pages, …).  Pressing p enters parameter-edit mode: ←/→ cycles
+// the focused field, +/- adjusts it (x clears it back to default), Enter
+// saves the draft via EngineConfigSet, Esc discards it.
 
+use std::collections::HashMap;
+
+use crate::components::engines_params;
 use crate::theme;
 use iocraft::prelude::*;
 
-#[allow(dead_code)]
 #[derive(Default, Props)]
 pub struct EnginesDialogProps {
     pub data: Option<rustyclaw_view::EnginesPanelData>,
+    pub params_edit: bool,
+    pub params_cursor: usize,
+    pub params_drafts: HashMap<String, rustyclaw_core::engines::EngineConfig>,
+    /// Outcome of the last engine model action (engine, ok, message).
+    pub action_result: Option<(String, bool, String)>,
 }
 
 /// One label/value detail row in the active engine's body.
 struct Row {
     label: String,
     value: String,
+    /// Highlight the row (the focused parameter field in edit mode).
+    highlighted: bool,
 }
 
 impl Row {
@@ -25,7 +39,13 @@ impl Row {
         Self {
             label: label.into(),
             value: value.into(),
+            highlighted: false,
         }
+    }
+
+    fn highlight(mut self) -> Self {
+        self.highlighted = true;
+        self
     }
 }
 
@@ -101,6 +121,38 @@ pub fn EnginesDialog(props: &EnginesDialogProps) -> impl Into<AnyElement<'static
                     rows.push(Row::new("Actions", actions.join(" | ")));
                 }
 
+                // ── Parameters ─────────────────────────────────────────
+                let fields = engines_params::fields_for(engine);
+                if !fields.is_empty() {
+                    rows.push(Row::new("", ""));
+                    let draft = props
+                        .params_drafts
+                        .get(&engine.id)
+                        .unwrap_or(&engine.config);
+                    let models: Vec<String> = data.models.iter().map(|m| m.name.clone()).collect();
+                    rows.push(Row::new(
+                        "Parameters",
+                        if props.params_edit {
+                            "(edit mode \u{2014} see footer)"
+                        } else {
+                            "p to edit"
+                        }
+                        .to_string(),
+                    ));
+                    for (i, field) in fields.iter().enumerate() {
+                        let focused = props.params_edit && i == props.params_cursor;
+                        let marker = if focused { "\u{2192}" } else { " " };
+                        let mut row = Row::new(
+                            format!(" {marker} {}", field.label),
+                            engines_params::field_value(field, draft, &models),
+                        );
+                        if focused {
+                            row = row.highlight();
+                        }
+                        rows.push(row);
+                    }
+                }
+
                 // Models for the active (selected) engine.
                 if data.selected_engine.as_deref() == Some(engine.id.as_str()) {
                     rows.push(Row::new("", ""));
@@ -120,6 +172,18 @@ pub fn EnginesDialog(props: &EnginesDialogProps) -> impl Into<AnyElement<'static
                                 rows.push(Row::new("   \u{26a0}", warning.to_string()));
                             }
                         }
+                    }
+                }
+
+                // Outcome of the last Load/Unload on this engine, so the
+                // action always answers visibly.
+                if let Some((result_engine, ok, message)) = &props.action_result {
+                    if result_engine == &engine.id {
+                        rows.push(Row::new("", ""));
+                        rows.push(Row::new(
+                            if *ok { "Result" } else { "Error" },
+                            message.clone(),
+                        ));
                     }
                 }
 
@@ -219,8 +283,14 @@ pub fn EnginesDialog(props: &EnginesDialogProps) -> impl Into<AnyElement<'static
                                     Text(
                                         content: if row.label.is_empty() { String::new() } else { format!("{:<16} ", row.label) },
                                         color: theme::ACCENT_BRIGHT,
+                                        weight: if row.highlighted { Weight::Bold } else { Weight::Normal },
                                     )
-                                    Text(content: row.value, color: theme::TEXT, wrap: TextWrap::Wrap)
+                                    Text(
+                                        content: row.value,
+                                        color: if row.highlighted { theme::ACCENT_BRIGHT } else { theme::TEXT },
+                                        wrap: TextWrap::Wrap,
+                                        weight: if row.highlighted { Weight::Bold } else { Weight::Normal },
+                                    )
                                 }
                             }))
                         }
@@ -243,19 +313,38 @@ pub fn EnginesDialog(props: &EnginesDialogProps) -> impl Into<AnyElement<'static
 
                 View(height: 1)
 
-                View(flex_direction: FlexDirection::Row) {
+                View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
                     Text(content: "Esc ", color: theme::ACCENT_BRIGHT)
-                    Text(content: "close  ", color: theme::MUTED)
+                    Text(content: if props.params_edit { "cancel  " } else { "close  " }, color: theme::MUTED)
                     Text(content: "\u{2190}/\u{2192} ", color: theme::ACCENT_BRIGHT)
-                    Text(content: "switch engine  ", color: theme::MUTED)
-                    Text(content: "Enter ", color: theme::ACCENT_BRIGHT)
-                    Text(content: "models  ", color: theme::MUTED)
-                    Text(content: "s ", color: theme::ACCENT_BRIGHT)
-                    Text(content: "start/stop  ", color: theme::MUTED)
-                    Text(content: "i ", color: theme::ACCENT_BRIGHT)
-                    Text(content: "install  ", color: theme::MUTED)
-                    Text(content: "r ", color: theme::ACCENT_BRIGHT)
-                    Text(content: "refresh", color: theme::MUTED)
+                    Text(content: if props.params_edit { "field  " } else { "switch engine  " }, color: theme::MUTED)
+                    #(if props.params_edit {
+                        element! {
+                            View(flex_direction: FlexDirection::Row) {
+                                Text(content: "Enter ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "save  ", color: theme::MUTED)
+                                Text(content: "+/- ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "adjust  ", color: theme::MUTED)
+                                Text(content: "x ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "clear  ", color: theme::MUTED)
+                            }
+                        }.into_any()
+                    } else {
+                        element! {
+                            View(flex_direction: FlexDirection::Row) {
+                                Text(content: "Enter ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "models  ", color: theme::MUTED)
+                                Text(content: "s ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "start/stop  ", color: theme::MUTED)
+                                Text(content: "p ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "params  ", color: theme::MUTED)
+                                Text(content: "i ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "install  ", color: theme::MUTED)
+                                Text(content: "r ", color: theme::ACCENT_BRIGHT)
+                                Text(content: "refresh", color: theme::MUTED)
+                            }
+                        }.into_any()
+                    })
                 }
             }
         }

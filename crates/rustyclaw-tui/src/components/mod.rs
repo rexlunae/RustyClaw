@@ -11,6 +11,7 @@ pub mod details_dialog;
 pub mod device_flow_dialog;
 pub mod downloads_dialog;
 pub mod engines_dialog;
+pub mod engines_params;
 pub mod hatching_dialog;
 pub mod input_bar;
 pub mod logs_dialog;

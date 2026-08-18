@@ -349,6 +349,11 @@ pub(crate) enum GwEvent {
     EngineListResult {
         engines: Vec<rustyclaw_view::LocalEngineData>,
     },
+    /// Full per-engine configuration, keyed by engine id (arrives right
+    /// after `EngineListResult`; patches the engine entries' configs).
+    EngineConfigList {
+        configs: std::collections::HashMap<String, rustyclaw_core::engines::EngineConfig>,
+    },
     /// Engine model list result received.
     EngineModelListResult {
         engine: String,
