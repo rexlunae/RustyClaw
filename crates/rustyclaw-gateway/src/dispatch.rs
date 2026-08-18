@@ -865,7 +865,17 @@ pub(crate) async fn dispatch_text_message(
             });
         }
 
-        let model_timeout = std::time::Duration::from_secs(180);
+        // How long a single model call may run before the turn gives up.
+        // The default suits hosted APIs; local engines on a loaded machine
+        // can need far longer to prefill a large prompt, so the cap honours
+        // `RUSTYCLAW_MODEL_TIMEOUT_SECS` (e.g. 900) for those setups.
+        let model_timeout = std::time::Duration::from_secs(
+            std::env::var("RUSTYCLAW_MODEL_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|s| *s > 0)
+                .unwrap_or(180),
+        );
         let result = await_model_with_cancel(
             providers::call_with_tools(http, &resolved, Some(writer)),
             tool_cancel,

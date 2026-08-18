@@ -19,6 +19,10 @@ pub struct EngineInfoDto {
     pub available_models: u32,
     pub loaded_models: u32,
     pub capabilities: EngineInfoCaps,
+    /// Full per-engine configuration (parameters, default model, extra
+    /// args).  Clients round-trip this back via `EngineConfigSet`; appended
+    /// last per the positional bincode rule.
+    pub config: crate::engines::EngineConfig,
 }
 
 /// Capability flags exposed to the client.

@@ -89,7 +89,7 @@ impl LocalEngine for LmStudioEngine {
         anyhow::bail!("LM Studio manages its own lifecycle; start it from the app")
     }
 
-    async fn stop(&self) -> Result<String> {
+    async fn stop(&self, _cfg: &EngineConfig) -> Result<String> {
         anyhow::bail!("LM Studio manages its own lifecycle; stop it from the app")
     }
 

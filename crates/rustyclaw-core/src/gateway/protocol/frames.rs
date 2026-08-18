@@ -1640,6 +1640,11 @@ pub enum ServerPayload {
         provider: String,
         models: Vec<String>,
         error: Option<String>,
+        /// Models the local engine reports as loaded/running (a subset of
+        /// `models`); pickers use it to mark running models.  Appended last
+        /// (positional bincode); empty for cloud providers.
+        #[serde(default)]
+        loaded: Vec<String>,
     },
     /// The full plugin list with each plugin's current state. Sent on connect,
     /// on request, and after a refresh.

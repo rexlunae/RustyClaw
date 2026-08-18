@@ -190,7 +190,7 @@ impl LocalEngine for OllamaEngine {
         }
     }
 
-    async fn stop(&self) -> Result<String> {
+    async fn stop(&self, _cfg: &EngineConfig) -> Result<String> {
         let os = std::env::consts::OS;
         match os {
             "macos" => Self::sh("brew services stop ollama 2>/dev/null; pkill -f 'ollama serve' 2>/dev/null; echo 'stopped'").await,

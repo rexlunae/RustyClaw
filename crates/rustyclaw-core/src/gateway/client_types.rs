@@ -354,6 +354,8 @@ pub enum GatewayEvent {
         provider: String,
         models: Vec<String>,
         error: Option<String>,
+        /// Models the local engine reports as loaded/running (picker markers).
+        loaded: Vec<String>,
     },
     /// Engine pull progress (streaming).
     EnginePullProgress {
@@ -772,6 +774,14 @@ pub enum GatewayCommand {
         context_length: Option<u32>,
         #[serde(default)]
         extra_args: Vec<String>,
+    },
+
+    /// Replace the full configuration for an engine (parameters, default
+    /// model, extra args).  The gateway persists it to config.toml.
+    #[serde(rename = "engine_config_set")]
+    EngineConfigSet {
+        engine: String,
+        config: crate::engines::EngineConfig,
     },
 
     // ── Panel commands ─────────────────────────────────────────────────
@@ -1428,6 +1438,10 @@ impl GatewayCommand {
                     extra_args,
                 },
             },
+            GatewayCommand::EngineConfigSet { engine, config } => ClientFrame {
+                frame_type: ClientFrameType::EngineConfigSet,
+                payload: ClientPayload::EngineConfigSet { engine, config },
+            },
             // ── Panels ───────────────────────────────────────────────
             GatewayCommand::CronList => ClientFrame {
                 frame_type: ClientFrameType::CronListRequest,
@@ -2068,10 +2082,12 @@ impl GatewayEvent {
                 provider,
                 models,
                 error,
+                loaded,
             } => Some(GatewayEvent::ProviderModelListResult {
                 provider,
                 models,
                 error,
+                loaded,
             }),
             ServerPayload::EnginePullProgress {
                 engine,

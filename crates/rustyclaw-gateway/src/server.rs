@@ -2338,7 +2338,13 @@ pub(crate) async fn handle_connection(
                                     ).await?;
                                 }
                                 ClientPayload::ProviderModelList { provider } => {
-                                    handle_provider_model_list(&mut *writer, &provider, &config, &vault).await?;
+                                    handle_provider_model_list(
+                                        &mut *writer,
+                                        &provider,
+                                        &config,
+                                        &vault,
+                                    )
+                                    .await?;
                                 }
                                 ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } | ClientPayload::ProcessControl { .. } => {
                                     // AuthChallenge/AuthResponse handled in auth phase.
@@ -2740,6 +2746,14 @@ pub(crate) async fn handle_connection(
 /// cloud provider using the gateway's vault-held API key (falling back to
 /// the provider's env var), replying with a `ProviderModelListResult`
 /// frame that carries either the model ids or an error string.
+///
+/// Local engine providers (Ollama, llama.cpp, LM Studio, exo, Joshua) get a
+/// second source: the engine registry's own model list, which for the
+/// file-based engines (Joshua, llama.cpp) is a scan of the models directory
+/// and therefore works even when the engine server is not running.  The
+/// live API list is merged in when present (deduped), and the error is
+/// cleared whenever local models could be listed — the whole point of the
+/// fallback is that the picker shows what is available locally.
 async fn handle_provider_model_list(
     writer: &mut dyn rustyclaw_core::gateway::TransportWriter,
     provider: &str,
@@ -2763,16 +2777,15 @@ async fn handle_provider_model_list(
         .filter(|m| m.provider == provider)
         .and_then(|m| m.base_url.clone());
 
-    let (models, error) = match crate_providers::fetch_models(
+    // Live API list, merged with the engine's own model list for local
+    // engine providers (see `provider_models_with_local_fallback`).
+    let fetched = rustyclaw_core::engines::provider_models_with_local_fallback(
         provider,
         api_key.as_deref(),
         base_url.as_deref(),
+        &config.engines,
     )
-    .await
-    {
-        Ok(models) => (models, None),
-        Err(e) => (Vec::new(), Some(format!("{:#}", e))),
-    };
+    .await;
 
     send_frame(
         writer,
@@ -2780,8 +2793,9 @@ async fn handle_provider_model_list(
             frame_type: ServerFrameType::ProviderModelListResult,
             payload: ServerPayload::ProviderModelListResult {
                 provider: provider.to_string(),
-                models,
-                error,
+                models: fetched.models,
+                error: fetched.error,
+                loaded: fetched.loaded,
             },
         },
     )

@@ -131,6 +131,7 @@ async fn handle_engine_list(
             available_models: available,
             loaded_models: loaded,
             capabilities: engine.capabilities().into(),
+            config: cfg,
         });
     }
     let frame = ServerFrame {
@@ -210,7 +211,7 @@ async fn handle_engine_action(
             result
         }
         EngineActionKind::Start => eng.start(&cfg).await,
-        EngineActionKind::Stop => eng.stop().await,
+        EngineActionKind::Stop => eng.stop(&cfg).await,
     };
 
     let (ok, message) = match result {
@@ -369,6 +370,10 @@ async fn handle_engine_model_action(
             "ollama" => cfg.extra_args.push(format!("--num-ctx={ctx}")),
             "llamacpp" => {
                 cfg.extra_args.push("--ctx-size".to_string());
+                cfg.extra_args.push(ctx.to_string());
+            }
+            "joshua" => {
+                cfg.extra_args.push("--n-ctx".to_string());
                 cfg.extra_args.push(ctx.to_string());
             }
             _ => {}

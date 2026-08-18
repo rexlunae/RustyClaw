@@ -86,6 +86,32 @@ impl JoshuaEngine {
             .unwrap_or_default()
     }
 
+    /// `(model name, port)` for every `joshua serve` process running on the
+    /// host — including servers started manually outside RustyClaw — so the
+    /// UI can show which models are actually running.  Best-effort (Linux);
+    /// empty elsewhere.
+    async fn running_servers() -> Vec<(String, Option<u16>)> {
+        let lines = crate::engines::running_server_cmdlines("joshua serve").await;
+        crate::engines::parse_server_cmdlines(&lines, &["--model", "-m"], &["--addr", "-a"], 8080)
+    }
+
+    /// The endpoint the engine should actually talk to: the configured one
+    /// when it answers, otherwise the first `joshua serve` detected on the
+    /// host — so the engine genuinely reaches a joshua that was started
+    /// outside RustyClaw instead of pretending it is unreachable.
+    async fn effective_endpoint(cfg: &EngineConfig) -> String {
+        let configured = Self::endpoint(cfg);
+        if Self::is_running(&configured).await {
+            return configured;
+        }
+        Self::running_servers()
+            .await
+            .first()
+            .and_then(|(_, port)| *port)
+            .map(|port| format!("http://127.0.0.1:{}", port))
+            .unwrap_or(configured)
+    }
+
     async fn sh(script: &str) -> Result<String> {
         let output = tokio::process::Command::new("sh")
             .arg("-c")
@@ -109,12 +135,25 @@ impl JoshuaEngine {
 
     /// Start `joshua serve` for the given GGUF file.
     async fn spawn_server(cfg: &EngineConfig, model_path: &Path) -> Result<String> {
+        if !Self::is_installed().await {
+            anyhow::bail!(
+                "joshua is not installed. Install it from the engines dialog, or \
+                 `cargo install --git https://github.com/rexlunae/joshua joshua`."
+            );
+        }
         let port = cfg.port.unwrap_or(DEFAULT_PORT);
         let mut cmd = format!(
             "nohup joshua serve --model '{}' --addr 127.0.0.1:{}",
             model_path.display(),
             port
         );
+        // Typed parameters (context window, device, huge pages, …) become
+        // flags first; raw extra_args come after so an explicit flag in
+        // extra_args still wins (clap takes the last occurrence).
+        for arg in joshua_serve_flags(cfg) {
+            cmd.push(' ');
+            cmd.push_str(&arg);
+        }
         for arg in &cfg.extra_args {
             cmd.push(' ');
             cmd.push_str(arg);
@@ -124,7 +163,7 @@ impl JoshuaEngine {
 
         // GGUF loading is mmap-based and fast, but give it a moment.
         let endpoint = Self::endpoint(cfg);
-        for _ in 0..10 {
+        for _ in 0..20 {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if Self::is_running(&endpoint).await {
                 return Ok(format!(
@@ -137,7 +176,14 @@ impl JoshuaEngine {
                 ));
             }
         }
-        Ok("joshua start command issued; the model may still be loading.".into())
+        // The server never answered: report it as a real failure with a way
+        // forward, instead of a forever "may still be loading".
+        anyhow::bail!(
+            "joshua serve did not answer on {} within 10s. The model file may be invalid or \
+             joshua failed at load — run `joshua serve --model '{}'` manually to see the error.",
+            endpoint,
+            model_path.display()
+        )
     }
 }
 
@@ -148,32 +194,6 @@ pub fn default_models_dir() -> PathBuf {
         .join(".rustyclaw")
         .join("models")
         .join("joshua")
-}
-
-/// Scan a directory (recursively, one level of subdirectories) for GGUF files.
-pub fn scan_gguf_models(dir: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return found;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            // HF downloads land in per-repo subdirectories.
-            if let Ok(sub) = std::fs::read_dir(&path) {
-                for sub_entry in sub.flatten() {
-                    let sub_path = sub_entry.path();
-                    if sub_path.extension().is_some_and(|e| e == "gguf") {
-                        found.push(sub_path);
-                    }
-                }
-            }
-        } else if path.extension().is_some_and(|e| e == "gguf") {
-            found.push(path);
-        }
-    }
-    found.sort();
-    found
 }
 
 /// Resolve which GGUF file to serve, in priority order:
@@ -287,11 +307,27 @@ impl LocalEngine for JoshuaEngine {
         let presence = self.detect().await;
         let endpoint = Self::endpoint(cfg);
         let available = scan_gguf_models(&Self::models_dir(cfg)).len() as u32;
+        let detected = Self::running_servers().await;
 
         let run_status = if Self::is_running(&endpoint).await {
             let loaded = Self::loaded_model_ids(&endpoint).await.len() as u32;
             EngineRunStatus::Running {
                 endpoint,
+                loaded_models: loaded,
+                available_models: available.max(loaded),
+            }
+        } else if !detected.is_empty() {
+            // Joshua servers are running on the host outside the configured
+            // endpoint (started manually, or another instance).  Report them
+            // so the UI reflects reality instead of "stopped".
+            let detected_endpoint = detected
+                .first()
+                .and_then(|(_, port)| *port)
+                .map(|port| format!("http://127.0.0.1:{}", port))
+                .unwrap_or(endpoint);
+            let loaded = detected.len() as u32;
+            EngineRunStatus::Running {
+                endpoint: detected_endpoint,
                 loaded_models: loaded,
                 available_models: available.max(loaded),
             }
@@ -331,21 +367,47 @@ impl LocalEngine for JoshuaEngine {
         if Self::is_running(&endpoint).await {
             return Ok("joshua is already running.".into());
         }
+        // A joshua started outside RustyClaw is running on another port —
+        // don't spawn a second server; point the user at the running one.
+        if let Some((_, port)) = Self::running_servers().await.first() {
+            return Ok(format!(
+                "joshua is already running outside RustyClaw (detected on port {}). \
+                 Configure the engine's port to that server to manage it.",
+                port.unwrap_or(8080)
+            ));
+        }
         let model_path = resolve_model_path(cfg)?;
         Self::spawn_server(cfg, &model_path).await
     }
 
-    async fn stop(&self) -> Result<String> {
-        Self::sh("pkill -f 'joshua serve' 2>/dev/null; echo 'stopped'").await
+    async fn stop(&self, cfg: &EngineConfig) -> Result<String> {
+        // Scoped to the configured port: `pkill -f 'joshua serve'` would
+        // also kill servers started manually on other ports.
+        let port = cfg.port.unwrap_or(DEFAULT_PORT);
+        Self::sh(&format!(
+            "pkill -f 'joshua serve .*127.0.0.1:{}' 2>/dev/null; echo 'stopped'",
+            port
+        ))
+        .await
     }
 
     async fn list_models(&self, cfg: &EngineConfig) -> Result<Vec<LocalModel>> {
-        let endpoint = Self::endpoint(cfg);
-        let loaded_ids = if Self::is_running(&endpoint).await {
+        // Talk to the configured endpoint when it answers, otherwise to the
+        // first server detected on the host — the loaded set should reflect
+        // the joshua the engine can actually reach.
+        let endpoint = Self::effective_endpoint(cfg).await;
+        let mut loaded_ids = if Self::is_running(&endpoint).await {
             Self::loaded_model_ids(&endpoint).await
         } else {
             Vec::new()
         };
+        // Mark models served by running joshua processes (even ones started
+        // outside RustyClaw) as loaded, so the UI shows what is running.
+        for (name, _) in Self::running_servers().await {
+            if !loaded_ids.iter().any(|id| id == &name) {
+                loaded_ids.push(name);
+            }
+        }
 
         let dir = Self::models_dir(cfg);
         let mut models: Vec<LocalModel> = scan_gguf_models(&dir)
@@ -477,21 +539,47 @@ impl LocalEngine for JoshuaEngine {
         let path = find_model_file(&dir, model)
             .ok_or_else(|| anyhow::anyhow!("Model '{}' not found in {}", model, dir.display()))?;
 
-        let endpoint = Self::endpoint(cfg);
+        // If a running server (managed or detected) already serves this
+        // model, there is nothing to do — say so instead of respawning.
+        let running = Self::running_servers().await;
+        if let Some((name, port)) = running.iter().find(|(n, _)| n == model) {
+            return Ok(format!(
+                "Model '{}' is already loaded (running on port {})",
+                name,
+                port.unwrap_or(8080)
+            ));
+        }
+
+        let endpoint = Self::effective_endpoint(cfg).await;
         if Self::is_running(&endpoint).await {
             let already = Self::loaded_model_ids(&endpoint).await;
             if already.iter().any(|id| id == model) {
                 return Ok(format!("Model '{}' is already loaded", model));
             }
-            self.stop().await.ignore();
+            self.stop(cfg).await.ignore();
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
         Self::spawn_server(cfg, &path).await
     }
 
-    async fn unload(&self, model: &str, _cfg: &EngineConfig) -> Result<String> {
+    async fn unload(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
+        // A model served by a joshua started outside RustyClaw is not ours
+        // to kill — stopping it would surprise the person who started it.
+        let configured_port = cfg.port.unwrap_or(DEFAULT_PORT);
+        if let Some((_, port)) = Self::running_servers()
+            .await
+            .iter()
+            .find(|(n, p)| n == model && *p != Some(configured_port))
+        {
+            anyhow::bail!(
+                "Model '{}' is served by a joshua started outside RustyClaw (port {}). \
+                 Stop it manually to unload it.",
+                model,
+                port.unwrap_or(8080)
+            );
+        }
         // One process serves one model: unloading stops the server.
-        self.stop().await.ignore();
+        self.stop(cfg).await.ignore();
         Ok(format!("Model '{}' unloaded (joshua stopped)", model))
     }
 

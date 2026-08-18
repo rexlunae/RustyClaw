@@ -21,6 +21,14 @@ impl LlamaCppEngine {
         })
     }
 
+    /// `(model name, port)` for every `llama-server` process running on the
+    /// host — including ones started manually outside RustyClaw.  Best-effort
+    /// (Linux); empty elsewhere.
+    async fn running_servers() -> Vec<(String, Option<u16>)> {
+        let lines = crate::engines::running_server_cmdlines("llama-server").await;
+        crate::engines::parse_server_cmdlines(&lines, &["--model", "-m"], &["--port"], 8080)
+    }
+
     async fn api(endpoint: &str, method: &str, path: &str, body: Option<&Value>) -> Result<String> {
         let url = format!("{}{}", endpoint, path);
         let client = reqwest::Client::new();
@@ -116,6 +124,7 @@ impl LocalEngine for LlamaCppEngine {
     async fn status(&self, cfg: &EngineConfig) -> EngineStatus {
         let presence = self.detect().await;
         let endpoint = Self::endpoint(cfg);
+        let detected = Self::running_servers().await;
 
         let run_status = if !presence.installed {
             EngineRunStatus::Stopped
@@ -131,6 +140,20 @@ impl LocalEngine for LlamaCppEngine {
                 endpoint,
                 loaded_models: available, // llama-server only shows loaded models
                 available_models: available,
+            }
+        } else if !detected.is_empty() {
+            // llama-server processes are running outside the configured
+            // endpoint; report them so the UI reflects reality.
+            let detected_endpoint = detected
+                .first()
+                .and_then(|(_, port)| *port)
+                .map(|port| format!("http://127.0.0.1:{}", port))
+                .unwrap_or(endpoint);
+            let loaded = detected.len() as u32;
+            EngineRunStatus::Running {
+                endpoint: detected_endpoint,
+                loaded_models: loaded,
+                available_models: loaded,
             }
         } else {
             EngineRunStatus::Stopped
@@ -202,38 +225,88 @@ impl LocalEngine for LlamaCppEngine {
         }
     }
 
-    async fn stop(&self) -> Result<String> {
-        Self::sh("pkill -f 'llama-server' 2>/dev/null; echo 'stopped'").await
+    async fn stop(&self, cfg: &EngineConfig) -> Result<String> {
+        // Scoped to the configured port: `pkill -f 'llama-server'` would
+        // also kill servers started manually on other ports.
+        let port = cfg.port.unwrap_or(8080);
+        Self::sh(&format!(
+            "pkill -f 'llama-server .*--port {}' 2>/dev/null; echo 'stopped'",
+            port
+        ))
+        .await
     }
 
     async fn list_models(&self, cfg: &EngineConfig) -> Result<Vec<LocalModel>> {
+        // A running llama-server reports only the model it is serving.  For
+        // "what is available locally" we merge in every GGUF in the models
+        // directory (configured `models_dir`, or the llama.cpp cache dir),
+        // so models on disk show up even before the server is started.
+        let mut names: Vec<String> = Vec::new();
+        let mut loaded: Vec<String> = Vec::new();
         let endpoint = Self::endpoint(cfg);
-        let resp = Self::api(&endpoint, "GET", "/v1/models", None).await?;
-        let parsed: Value = serde_json::from_str(&resp)?;
-        let models = parsed
-            .get("data")
-            .and_then(|d| d.as_array())
-            .cloned()
-            .unwrap_or_default();
+        if let Ok(resp) = Self::api(&endpoint, "GET", "/v1/models", None).await {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&resp) {
+                if let Some(arr) = parsed.get("data").and_then(|d| d.as_array()) {
+                    for m in arr {
+                        if let Some(id) = m.get("id").and_then(|n| n.as_str()) {
+                            names.push(id.to_string());
+                            loaded.push(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Mark models served by running llama-server processes (even ones
+        // started outside RustyClaw) as loaded.
+        for (name, _) in Self::running_servers().await {
+            if !loaded.iter().any(|l| l == &name) {
+                loaded.push(name);
+            }
+        }
 
-        Ok(models
-            .iter()
-            .map(|m| {
-                let name = m
-                    .get("id")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("?")
-                    .to_string();
+        let models_dir = cfg.models_dir.clone().unwrap_or_else(|| {
+            dirs::cache_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join("llama.cpp")
+                .to_string_lossy()
+                .to_string()
+        });
+        // (name, path) for every GGUF on disk, deduped against the API list.
+        let mut on_disk: Vec<(String, std::path::PathBuf)> = Vec::new();
+        for path in crate::engines::scan_gguf_models(std::path::Path::new(&models_dir)) {
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            if !names.iter().any(|n| n == &name) {
+                names.push(name.clone());
+                on_disk.push((name, path));
+            }
+        }
+
+        Ok(names
+            .into_iter()
+            .map(|name| {
+                let is_loaded = loaded.iter().any(|l| l == &name);
+                let (size_bytes, modified_at) = on_disk
+                    .iter()
+                    .find(|(n, _)| n == &name)
+                    .and_then(|(_, p)| std::fs::metadata(p).ok())
+                    .map(|m| (m.len(), m.modified().ok()))
+                    .unwrap_or((0, None));
+                let modified_at = modified_at
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs().to_string());
                 LocalModel {
                     name,
-                    size_bytes: 0,
+                    size_bytes,
                     quantization: None,
                     context_length: None,
-                    loaded: true, // if listed by llama-server, it's loaded
+                    loaded: is_loaded,
                     vram_bytes: None,
                     family: None,
                     format: Some("gguf".into()),
-                    modified_at: None,
+                    modified_at,
                 }
             })
             .collect())
