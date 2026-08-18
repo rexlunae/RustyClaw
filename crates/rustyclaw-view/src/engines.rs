@@ -154,9 +154,30 @@ pub struct LocalEngineData {
     pub available_models: u32,
     pub loaded_models: u32,
     pub caps: EngineCapsData,
+    /// The engine's full configuration (parameters, default model, extra
+    /// args), as persisted by the gateway.  The parameters panel edits
+    /// this and sends it back via `EngineConfigSet`.
+    pub config: rustyclaw_core::engines::EngineConfig,
 }
 
 impl LocalEngineData {
+    /// Whether the engine's config exposes a context-window parameter.
+    pub fn supports_context_length(&self) -> bool {
+        matches!(self.id.as_str(), "joshua" | "llamacpp" | "ollama")
+    }
+
+    /// Whether the engine's config exposes Joshua-style serve parameters
+    /// (device, huge pages, mmap, …).
+    pub fn supports_joshua_parameters(&self) -> bool {
+        self.id == "joshua"
+    }
+
+    /// Whether the engine uses `default_model` to pick a single model at
+    /// startup (one-model-per-process engines).
+    pub fn supports_default_model(&self) -> bool {
+        self.id == "joshua"
+    }
+
     /// Status badge string for display.
     pub fn status_badge(&self) -> &'static str {
         if !self.installed {
@@ -237,9 +258,10 @@ impl LocalModelData {
         }
     }
 
-    /// Load status badge.
+    /// Load status badge: "running" when the model is loaded/served (the
+    /// wording the UI uses for the engines panel), "on disk" otherwise.
     pub fn load_badge(&self) -> &'static str {
-        if self.loaded { "loaded" } else { "on disk" }
+        if self.loaded { "running" } else { "on disk" }
     }
 
     /// Warning message if model doesn't fit (returns the detailed message
@@ -309,6 +331,7 @@ mod tests {
             available_models: 0,
             loaded_models: 0,
             caps: EngineCapsData::default(),
+            config: rustyclaw_core::engines::EngineConfig::default(),
         }
     }
 

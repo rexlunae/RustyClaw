@@ -780,7 +780,18 @@ pub(super) fn Dialogs(sig: AppSignals) -> Element {
             EnginesDialog {
                 visible: state.read().show_engines_dialog,
                 data: state.read().engines_data.clone(),
-                on_close: move |_| state.write().show_engines_dialog = false,
+                on_close: move |_| {
+                    let mut s = state.write();
+                    s.show_engines_dialog = false;
+                    // The inline action result belongs to the dialog; don't
+                    // let it linger into the next open.
+                    s.engine_action_result = None;
+                },
+                action_pending: state.read().engine_model_action_pending.clone(),
+                action_result: state.read().engine_action_result.clone(),
+                on_clear_action_result: move |_| {
+                    state.write().engine_action_result = None;
+                },
                 on_engine_action: move |(engine, action): (String, EngineActionKind)| {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
@@ -795,6 +806,9 @@ pub(super) fn Dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_model_action: move |(engine, model, action): (String, String, ModelActionKind)| {
+                    state
+                        .write()
+                        .engine_model_action_pending = Some((engine.clone(), model.clone()));
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -868,6 +882,19 @@ pub(super) fn Dialogs(sig: AppSignals) -> Element {
                         MessageRole::Success,
                         format!("Switched to {} / {}", engine, model_for_state),
                     );
+                },
+                on_config_save: move |(engine, config): (String, rustyclaw_core::engines::EngineConfig)| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client
+                                .send(GatewayCommand::EngineConfigSet { engine, config })
+                                .await
+                            {
+                                tracing::error!("Failed to save engine config: {}", e);
+                            }
+                        });
+                    }
                 },
                 on_refresh: move |_| {
                     let gw = gateway.read().clone();

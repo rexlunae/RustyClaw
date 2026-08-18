@@ -434,6 +434,7 @@ pub(crate) fn gateway_event_to_gw_event(
                         can_load: e.capabilities.can_load,
                         can_unload: e.capabilities.can_unload,
                     },
+                    config: e.config,
                 })
                 .collect(),
         },

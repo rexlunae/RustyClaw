@@ -888,9 +888,15 @@ pub(crate) fn handle_gateway_event(
             if panel.selected_engine.is_none() {
                 panel.selected_engine = panel.engines.first().map(|e| e.id.clone());
             }
+            // The dialog is open: fetch the selected engine's models without
+            // requiring a tab click.
+            if s.show_engines_dialog {
+                s.engines_models_pending = true;
+            }
         }
         GatewayEvent::EngineModelListResult { engine, models } => {
             let mut s = state.write();
+            s.engines_models_pending = false;
             let panel = s
                 .engines_data
                 .get_or_insert_with(rustyclaw_view::EnginesPanelData::default);
@@ -904,7 +910,7 @@ pub(crate) fn handle_gateway_event(
             provider,
             models,
             error,
-            ..
+            loaded,
         } => {
             if let Some(err) = error {
                 // Keep the static fallback in the picker.  The provider
@@ -917,7 +923,9 @@ pub(crate) fn handle_gateway_event(
                 // user-driven and bounded.
                 tracing::warn!(provider = %provider, error = %err, "Live provider model fetch failed");
             } else {
-                state.write().provider_models.insert(provider, models);
+                let mut s = state.write();
+                s.provider_models.insert(provider.clone(), models);
+                s.provider_loaded_models.insert(provider, loaded);
             }
         }
         // The loaded/running markers and full engine configs arrive in their
@@ -964,6 +972,17 @@ pub(crate) fn handle_gateway_event(
             message,
         } => {
             let mut s = state.write();
+            // A model action finished: clear the in-flight marker and keep
+            // the outcome for the dialog's inline feedback.
+            if model.is_some() {
+                if s.engine_model_action_pending
+                    .as_ref()
+                    .is_some_and(|(e, _)| e == &engine)
+                {
+                    s.engine_model_action_pending = None;
+                }
+                s.engine_action_result = Some((engine.clone(), ok, message.clone()));
+            }
             if let Some(ref mut panel) = s.engines_data {
                 // A pull just finished (successfully or not) — clear the bar.
                 if model.is_some() {
@@ -1154,6 +1173,7 @@ fn dto_to_engine_data(
             can_load: dto.capabilities.can_load,
             can_unload: dto.capabilities.can_unload,
         },
+        config: dto.config,
     }
 }
 

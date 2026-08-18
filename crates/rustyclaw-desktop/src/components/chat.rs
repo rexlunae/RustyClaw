@@ -33,6 +33,9 @@ pub struct ChatProps {
     /// Live model lists fetched from provider APIs, keyed by provider id.
     /// The model picker prefers these over the static catalogue.
     pub provider_models: std::collections::HashMap<String, Vec<String>>,
+    /// Live "loaded/running" model ids per provider (a subset of
+    /// `provider_models`); the picker marks those models as running.
+    pub provider_loaded: std::collections::HashMap<String, Vec<String>>,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
     pub on_prompt_respond: EventHandler<(String, PromptResponseValue)>,
@@ -127,6 +130,7 @@ pub fn Chat(props: ChatProps) -> Element {
             current_provider: props.bottom_bar.composer.current_provider.clone(),
             current_model: props.bottom_bar.composer.current_model.clone(),
             provider_models: props.provider_models.clone(),
+            provider_loaded: props.provider_loaded.clone(),
             directory_selector: props.bottom_bar.directory_selector.clone(),
             on_model_change: props.on_model_change,
             on_add_provider: props.on_add_provider,

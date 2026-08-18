@@ -409,6 +409,34 @@ pub fn App() -> Element {
         }
     });
 
+    // The engines dialog auto-loads the selected engine's models: whenever
+    // the dialog is open and the engine list (re)arrived, fetch the models
+    // for the active tab without requiring a click.
+    use_effect(move || {
+        if !state.read().engines_models_pending {
+            return;
+        }
+        state.write().engines_models_pending = false;
+        if !state.read().show_engines_dialog {
+            return;
+        }
+        let selected = state
+            .read()
+            .engines_data
+            .as_ref()
+            .and_then(|d| d.selected_engine.clone());
+        let gw = gateway.read().clone();
+        if let (Some(client), Some(engine)) = (gw, selected) {
+            spawn_reporting("load engine models", async move {
+                client
+                    .send(GatewayCommand::EngineModelList { engine })
+                    .await
+                    .context("sending EngineModelList")?;
+                Ok(())
+            });
+        }
+    });
+
     // Re-fetch panel lists after a mutation result marks them stale, so the
     // cron/memory/MCP/channels/tool dialogs reflect the change.
     use_effect(move || {
@@ -1736,6 +1764,7 @@ pub fn App() -> Element {
                     agent_name: state.read().agent_name.clone(),
                     pending_prompt: state.read().visible_user_prompt(),
                     provider_models: state.read().provider_models.clone(),
+                    provider_loaded: state.read().provider_loaded_models.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
                     on_delete_message: on_delete_message,
