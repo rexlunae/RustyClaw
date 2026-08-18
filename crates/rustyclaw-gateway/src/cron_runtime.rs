@@ -475,6 +475,10 @@ async fn run_agent_turn(
         let mut final_response = String::new();
         // The final turn's reasoning (thinking-mode providers require it to
         // be echoed back if this thread is ever continued with a chat turn).
+        // The persisted assistant message is one merged turn, so only the
+        // last round's reasoning is attached — concatenating every round
+        // would attribute R1R2R3… to a single message, which is not what
+        // the API returned for any one turn.
         let mut final_reasoning = String::new();
 
         for _round in 0..MAX_TOOL_ROUNDS {
@@ -494,7 +498,9 @@ async fn run_agent_turn(
                 final_response.push_str(&model_resp.text);
             }
             if !model_resp.reasoning.is_empty() {
-                final_reasoning.push_str(&model_resp.reasoning);
+                // Assign, not append: only the last round's reasoning
+                // matches the single persisted assistant message.
+                final_reasoning = model_resp.reasoning.clone();
             }
             if model_resp.tool_calls.is_empty() {
                 break;
