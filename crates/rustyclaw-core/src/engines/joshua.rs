@@ -176,14 +176,34 @@ impl JoshuaEngine {
                 ));
             }
         }
-        // The server never answered: report it as a real failure with a way
-        // forward, instead of a forever "may still be loading".
+        // The server has not answered yet.  Distinguish a model that is
+        // still loading (process alive) from one that failed outright
+        // (process gone): the former is not an error — large models can
+        // take minutes to come up on a busy machine — while the latter
+        // deserves a real error with a way forward.
+        if Self::server_process_alive(port).await {
+            return Ok(format!(
+                "joshua start command issued; the model may still be loading on {}.",
+                endpoint
+            ));
+        }
         anyhow::bail!(
-            "joshua serve did not answer on {} within 10s. The model file may be invalid or \
-             joshua failed at load — run `joshua serve --model '{}'` manually to see the error.",
+            "joshua serve did not answer on {} and its process exited — the model file may be \
+             invalid or joshua failed at load. Run `joshua serve --model '{}'` manually to see \
+             the error.",
             endpoint,
             model_path.display()
         )
+    }
+
+    /// Whether a `joshua serve` process for the given port is still running
+    /// (best-effort; Linux only).  Used to tell "still loading" apart from
+    /// "crashed" when the health probe has not answered yet.
+    async fn server_process_alive(port: u16) -> bool {
+        crate::engines::running_server_cmdlines("joshua serve")
+            .await
+            .iter()
+            .any(|line| line.contains(&format!("127.0.0.1:{}", port)))
     }
 }
 

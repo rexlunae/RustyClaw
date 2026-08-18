@@ -384,11 +384,30 @@ impl LocalEngine for LlamaCppEngine {
                 .to_string_lossy()
                 .to_string()
         });
-        Self::sh(&format!(
-            "rm -f {} 2>&1",
-            sh_quote(&format!("{}/{}", models_dir, model))
-        ))
-        .await
+        // `list_models` names on-disk GGUFs by their file stem (no .gguf
+        // extension, possibly inside a per-repo subdirectory), so resolve
+        // the name back to the actual scanned path before deleting — a bare
+        // `rm -f {dir}/{model}` would point at nothing and silently report
+        // success while the file stays on disk.
+        let dir = std::path::Path::new(&models_dir);
+        let matched = crate::engines::scan_gguf_models(dir).into_iter().find(|p| {
+            p.file_stem().is_some_and(|s| s.to_string_lossy() == model)
+                || p.file_name().is_some_and(|s| s.to_string_lossy() == model)
+        });
+        let Some(path) = matched else {
+            anyhow::bail!(
+                "Model '{}' not found in {} (available: {})",
+                model,
+                models_dir,
+                crate::engines::scan_gguf_models(dir)
+                    .iter()
+                    .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        };
+        std::fs::remove_file(&path)?;
+        Ok(format!("Removed {}", path.display()))
     }
 
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
