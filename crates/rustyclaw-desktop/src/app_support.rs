@@ -185,6 +185,14 @@ pub(crate) fn handle_gateway_event(
             s.pending_tool_approvals.clear();
             s.pending_credential_requests.clear();
             s.pending_device_flows.clear();
+            // An engine model action in flight died with the connection —
+            // its EngineActionResult can never arrive, so the dialog's
+            // "Loading…" buttons would stay stuck forever.
+            s.engine_model_action_pending = None;
+            s.engine_action_result = None;
+            // The next connection is a fresh exchange: the EngineConfigList
+            // snapshot for the engines panel has not arrived yet.
+            s.engine_configs_received = false;
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;
@@ -875,6 +883,10 @@ pub(crate) fn handle_gateway_event(
         // ── Engines ──────────────────────────────────────────────────────
         GatewayEvent::EngineListResult { engines } => {
             let mut s = state.write();
+            // A fresh exchange: the EngineConfigList snapshot that patches
+            // the panel's configs follows this frame, and has not arrived
+            // yet — until it does, saving parameters must stay disabled.
+            s.engine_configs_received = false;
             let (host_ram, host_vram, host_gpu) = host_resources(&s);
             let panel = s
                 .engines_data
@@ -888,9 +900,15 @@ pub(crate) fn handle_gateway_event(
             if panel.selected_engine.is_none() {
                 panel.selected_engine = panel.engines.first().map(|e| e.id.clone());
             }
+            // The dialog is open: fetch the selected engine's models without
+            // requiring a tab click.
+            if s.show_engines_dialog {
+                s.engines_models_pending = true;
+            }
         }
         GatewayEvent::EngineModelListResult { engine, models } => {
             let mut s = state.write();
+            s.engines_models_pending = false;
             let panel = s
                 .engines_data
                 .get_or_insert_with(rustyclaw_view::EnginesPanelData::default);
@@ -920,10 +938,30 @@ pub(crate) fn handle_gateway_event(
                 state.write().provider_models.insert(provider, models);
             }
         }
-        // The loaded/running markers and full engine configs arrive in their
-        // own frames (new capabilities, new frames); the desktop surfaces
-        // them once the enriched-payload handling lands with the UI work.
-        GatewayEvent::ProviderModelLoadedList { .. } | GatewayEvent::EngineConfigList { .. } => {}
+        // Loaded/running markers arrive in their own frame (new capability,
+        // new frame); the picker marks these models as running.
+        GatewayEvent::ProviderModelLoadedList { provider, loaded } => {
+            state
+                .write()
+                .provider_loaded_models
+                .insert(provider, loaded);
+        }
+        // Full engine configs arrive in their own frame right after the
+        // engine list; patch them onto the panel's engine entries so the
+        // parameters editor can round-trip them.
+        GatewayEvent::EngineConfigList { configs } => {
+            let mut s = state.write();
+            // The real config snapshot is here: the panel entries are no
+            // longer placeholders, so saving parameters is safe again.
+            s.engine_configs_received = true;
+            if let Some(panel) = s.engines_data.as_mut() {
+                for engine in &mut panel.engines {
+                    if let Some(cfg) = configs.get(&engine.id) {
+                        engine.config = cfg.clone();
+                    }
+                }
+            }
+        }
         GatewayEvent::EnginePullProgress {
             engine,
             model,
@@ -964,6 +1002,17 @@ pub(crate) fn handle_gateway_event(
             message,
         } => {
             let mut s = state.write();
+            // A model action finished: clear the in-flight marker and keep
+            // the outcome for the dialog's inline feedback.
+            if model.is_some() {
+                if s.engine_model_action_pending
+                    .as_ref()
+                    .is_some_and(|(e, _)| e == &engine)
+                {
+                    s.engine_model_action_pending = None;
+                }
+                s.engine_action_result = Some((engine.clone(), ok, message.clone()));
+            }
             if let Some(ref mut panel) = s.engines_data {
                 // A pull just finished (successfully or not) — clear the bar.
                 if model.is_some() {
@@ -1154,6 +1203,9 @@ fn dto_to_engine_data(
             can_load: dto.capabilities.can_load,
             can_unload: dto.capabilities.can_unload,
         },
+        // The engine config arrives in the EngineConfigList frame right
+        // after the list; it is patched onto the panel entry there.
+        config: Default::default(),
     }
 }
 

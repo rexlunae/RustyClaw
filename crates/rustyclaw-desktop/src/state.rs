@@ -244,6 +244,10 @@ pub struct AppState {
     /// Set when an engine action completed and the engine/model lists
     /// should be re-fetched from the gateway.
     pub engines_stale: bool,
+    /// Set when the engines dialog is open and the selected engine's model
+    /// list should be (re)fetched — the dialog auto-loads contents instead
+    /// of waiting for a tab click.
+    pub engines_models_pending: bool,
 
     /// Whether the scheduled-jobs dialog is visible.
     pub show_cron_dialog: bool,
@@ -303,9 +307,24 @@ pub struct AppState {
     /// keyed by provider id.  The model picker prefers these over the
     /// static catalogue fallback.
     pub provider_models: HashMap<String, Vec<String>>,
+    /// Live "loaded/running" model ids per provider (a subset of
+    /// `provider_models`), used by the picker to mark running models.
+    pub provider_loaded_models: HashMap<String, Vec<String>>,
     /// Providers whose live model list has already been requested this
     /// session (guards against duplicate in-flight requests).
     pub provider_models_requested: HashSet<String>,
+
+    /// (engine, model) whose load/unload action is currently in flight, so
+    /// the engines dialog can show "Loading…" on the right button.
+    pub engine_model_action_pending: Option<(String, String)>,
+    /// Outcome of the last engine model action (engine, ok, message), shown
+    /// inline in the engines dialog until the next action or dialog close.
+    pub engine_action_result: Option<(String, bool, String)>,
+    /// Whether the `EngineConfigList` snapshot has arrived for the current
+    /// connection.  Until it does, the panel's engine configs are placeholders
+    /// (`Default::default()`), so saving parameters would overwrite the real
+    /// enabled/endpoint/port/models_dir/extra_args with blanks.
+    pub engine_configs_received: bool,
 }
 
 impl Default for AppState {
@@ -395,6 +414,7 @@ impl Default for AppState {
             show_engines_dialog: false,
             engines_data: None,
             engines_stale: false,
+            engines_models_pending: false,
             show_cron_dialog: false,
             cron_data: None,
             cron_stale: false,
@@ -418,7 +438,11 @@ impl Default for AppState {
             show_logs_dialog: false,
             logs_data: None,
             provider_models: HashMap::new(),
+            provider_loaded_models: HashMap::new(),
             provider_models_requested: HashSet::new(),
+            engine_model_action_pending: None,
+            engine_action_result: None,
+            engine_configs_received: false,
         }
     }
 }

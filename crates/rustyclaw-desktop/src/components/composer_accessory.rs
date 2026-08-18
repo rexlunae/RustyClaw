@@ -21,6 +21,9 @@ pub struct ComposerAccessoryProps {
     pub current_model: Option<String>,
     /// Live model lists fetched from provider APIs, keyed by provider id.
     pub provider_models: HashMap<String, Vec<String>>,
+    /// Live "loaded/running" model ids per provider (a subset of
+    /// `provider_models`); the picker marks those models as running.
+    pub provider_loaded: HashMap<String, Vec<String>>,
     pub directory_selector: rustyclaw_view::DirectorySelectorState,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
@@ -35,6 +38,7 @@ pub fn ComposerAccessory(props: ComposerAccessoryProps) -> Element {
             current_provider: props.current_provider.clone(),
             current_model: props.current_model.clone(),
             provider_models: props.provider_models.clone(),
+            provider_loaded: props.provider_loaded.clone(),
             on_model_change: props.on_model_change,
             on_add_provider: props.on_add_provider,
         }
@@ -97,6 +101,8 @@ struct ModelBarProps {
     current_model: Option<String>,
     /// Live model lists fetched from provider APIs, keyed by provider id.
     provider_models: HashMap<String, Vec<String>>,
+    /// Live "loaded/running" model ids per provider.
+    provider_loaded: HashMap<String, Vec<String>>,
     on_model_change: EventHandler<ModelSelection>,
     on_add_provider: EventHandler<()>,
 }
@@ -148,6 +154,13 @@ fn ModelBar(props: ModelBarProps) -> Element {
     if !current_model.is_empty() && !model_options.iter().any(|m| m == &current_model) {
         model_options.insert(0, current_model.clone());
     }
+    // Which of the listed models are loaded/running on the local engine, so
+    // the picker can say so instead of showing a flat list of names.
+    let loaded_set: std::collections::HashSet<&String> = props
+        .provider_loaded
+        .get(&provider_for_models)
+        .map(|v| v.iter().collect())
+        .unwrap_or_default();
 
     rsx! {
         div { class: "model-bar",
@@ -227,7 +240,7 @@ fn ModelBar(props: ModelBarProps) -> Element {
                     option {
                         value: "{mid}",
                         selected: *mid == current_model,
-                        "{mid}"
+                        if loaded_set.contains(mid) { "{mid} ● running" } else { "{mid}" }
                     }
                 }
             }
