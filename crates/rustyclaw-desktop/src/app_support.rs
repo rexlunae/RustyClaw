@@ -922,6 +922,7 @@ pub(crate) fn handle_gateway_event(
             provider,
             models,
             error,
+            ..
         } => {
             if let Some(err) = error {
                 // Keep the static fallback in the picker.  The provider
