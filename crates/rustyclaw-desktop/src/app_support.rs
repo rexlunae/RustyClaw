@@ -928,7 +928,10 @@ pub(crate) fn handle_gateway_event(
         // Loaded/running markers arrive in their own frame (new capability,
         // new frame); the picker marks these models as running.
         GatewayEvent::ProviderModelLoadedList { provider, loaded } => {
-            state.write().provider_loaded_models.insert(provider, loaded);
+            state
+                .write()
+                .provider_loaded_models
+                .insert(provider, loaded);
         }
         // Full engine configs arrive in their own frame right after the
         // engine list; patch them onto the panel's engine entries so the
