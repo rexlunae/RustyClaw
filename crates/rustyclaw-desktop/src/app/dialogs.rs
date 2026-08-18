@@ -905,6 +905,7 @@ pub(super) fn Dialogs(sig: AppSignals) -> Element {
                         });
                     }
                 },
+                configs_received: state.read().engine_configs_received,
                 on_refresh: move |_| {
                     let gw = gateway.read().clone();
                     let selected = state

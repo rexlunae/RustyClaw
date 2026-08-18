@@ -320,6 +320,11 @@ pub struct AppState {
     /// Outcome of the last engine model action (engine, ok, message), shown
     /// inline in the engines dialog until the next action or dialog close.
     pub engine_action_result: Option<(String, bool, String)>,
+    /// Whether the `EngineConfigList` snapshot has arrived for the current
+    /// connection.  Until it does, the panel's engine configs are placeholders
+    /// (`Default::default()`), so saving parameters would overwrite the real
+    /// enabled/endpoint/port/models_dir/extra_args with blanks.
+    pub engine_configs_received: bool,
 }
 
 impl Default for AppState {
@@ -437,6 +442,7 @@ impl Default for AppState {
             provider_models_requested: HashSet::new(),
             engine_model_action_pending: None,
             engine_action_result: None,
+            engine_configs_received: false,
         }
     }
 }

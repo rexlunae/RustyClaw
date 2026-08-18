@@ -38,6 +38,11 @@ pub struct EnginesDialogProps {
     /// Save the full configuration for an engine (parameters, default model,
     /// auto-start, extra args) — sent as `EngineConfigSet`.
     pub on_config_save: EventHandler<(String, EngineConfig)>,
+    /// Whether the gateway's `EngineConfigList` snapshot has arrived.  Until
+    /// it does, the engine configs shown here are placeholders and saving
+    /// would overwrite the real settings with blanks — the Save button is
+    /// disabled instead.
+    pub configs_received: bool,
     /// Re-fetch the engine list (and selected engine's models).
     pub on_refresh: EventHandler<()>,
 }
@@ -388,6 +393,11 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                     dioxus_bulma::prelude::Button {
                                                         color: BulmaColor::Primary,
                                                         size: dioxus_bulma::prelude::BulmaSize::Small,
+                                                        // Until the gateway's config snapshot arrives, the
+                                                        // base config here is a placeholder: saving would
+                                                        // blank out enabled/endpoint/port/models_dir/
+                                                        // extra_args, so the button stays disabled.
+                                                        disabled: !props.configs_received,
                                                         onclick: {
                                                             let eid_save = eid.clone();
                                                             let fallback = fallback_config.clone();
@@ -412,7 +422,11 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                             }
                                         }
                                         p { class: "is-size-7 has-text-grey mb-3",
-                                            "Applied on the next Start or model Load."
+                                            if props.configs_received {
+                                                "Applied on the next Start or model Load."
+                                            } else {
+                                                "Loading engine settings from the gateway… (saving disabled until they arrive)"
+                                            }
                                         }
                                         div { class: "columns is-multiline is-variable is-2",
                                             if engine.supports_context_length() {

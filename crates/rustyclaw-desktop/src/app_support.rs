@@ -185,6 +185,14 @@ pub(crate) fn handle_gateway_event(
             s.pending_tool_approvals.clear();
             s.pending_credential_requests.clear();
             s.pending_device_flows.clear();
+            // An engine model action in flight died with the connection —
+            // its EngineActionResult can never arrive, so the dialog's
+            // "Loading…" buttons would stay stuck forever.
+            s.engine_model_action_pending = None;
+            s.engine_action_result = None;
+            // The next connection is a fresh exchange: the EngineConfigList
+            // snapshot for the engines panel has not arrived yet.
+            s.engine_configs_received = false;
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;
@@ -875,6 +883,10 @@ pub(crate) fn handle_gateway_event(
         // ── Engines ──────────────────────────────────────────────────────
         GatewayEvent::EngineListResult { engines } => {
             let mut s = state.write();
+            // A fresh exchange: the EngineConfigList snapshot that patches
+            // the panel's configs follows this frame, and has not arrived
+            // yet — until it does, saving parameters must stay disabled.
+            s.engine_configs_received = false;
             let (host_ram, host_vram, host_gpu) = host_resources(&s);
             let panel = s
                 .engines_data
@@ -938,6 +950,9 @@ pub(crate) fn handle_gateway_event(
         // parameters editor can round-trip them.
         GatewayEvent::EngineConfigList { configs } => {
             let mut s = state.write();
+            // The real config snapshot is here: the panel entries are no
+            // longer placeholders, so saving parameters is safe again.
+            s.engine_configs_received = true;
             if let Some(panel) = s.engines_data.as_mut() {
                 for engine in &mut panel.engines {
                     if let Some(cfg) = configs.get(&engine.id) {
