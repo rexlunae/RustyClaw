@@ -742,6 +742,17 @@ pub(super) fn handle_normal_key(
                                 .unwrap_or_else(|| engine.config.clone());
                             engines_params_drafts.write().remove(&engine.id);
                             engines_params_edit.set(false);
+                            // Keep the client's copy of the config in sync
+                            // with what the gateway just persisted: a later
+                            // edit seeds its draft from `engine.config`, so a
+                            // stale copy would let an unrelated save silently
+                            // revert this one.  (The EngineRefresh round-trip
+                            // below re-confirms it from the gateway.)
+                            let mut data = engines_data.read().clone().unwrap_or_default();
+                            if let Some(e) = data.engines.iter_mut().find(|e| e.id == engine.id) {
+                                e.config = config.clone();
+                            }
+                            engines_data.set(Some(data));
                             send_input(UserInput::MessengerCommand(
                                 rustyclaw_core::gateway::client_types::GatewayCommand::EngineConfigSet {
                                     engine: engine.id.clone(),

@@ -521,7 +521,10 @@ impl App {
                                 gw_tx2
                                     .send(GwEvent::Warning {
                                         summary: format!("Failed to load model completions: {e}"),
-                                        details: None,
+                                        // The error string (built with the
+                                        // cause chain upstream) goes into the
+                                        // expandable detail view.
+                                        details: Some(e),
                                     })
                                     .ignore();
                             }
