@@ -211,6 +211,11 @@ impl LocalEngine for LlamaCppEngine {
         if let Some(ref dir) = cfg.models_dir {
             cmd.push_str(&format!(" --models-dir '{}'", dir));
         }
+        // The typed context window applies to manual starts too (it already
+        // applies to auto-start via `engine_start_command`).
+        if let Some(ctx) = cfg.context_length {
+            cmd.push_str(&format!(" --ctx-size {}", ctx));
+        }
         for arg in &cfg.extra_args {
             cmd.push(' ');
             cmd.push_str(arg);
@@ -227,11 +232,23 @@ impl LocalEngine for LlamaCppEngine {
 
     async fn stop(&self, cfg: &EngineConfig) -> Result<String> {
         // Scoped to the configured port: `pkill -f 'llama-server'` would
-        // also kill servers started manually on other ports.
+        // also kill servers started manually on other ports.  Report what
+        // actually happened instead of always claiming success.
         let port = cfg.port.unwrap_or(8080);
+        let pattern = format!("llama-server .*--port {}", port);
+        let running = crate::engines::running_server_cmdlines(&pattern)
+            .await
+            .iter()
+            .any(|line| line.contains("llama-server"));
+        if !running {
+            return Ok(format!(
+                "no llama-server is running on port {} (nothing to stop)",
+                port
+            ));
+        }
         Self::sh(&format!(
-            "pkill -f 'llama-server .*--port {}' 2>/dev/null; echo 'stopped'",
-            port
+            "pkill -f '{}' 2>/dev/null; echo 'stopped'",
+            pattern
         ))
         .await
     }

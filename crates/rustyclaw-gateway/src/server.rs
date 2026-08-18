@@ -2795,6 +2795,18 @@ async fn handle_provider_model_list(
                 provider: provider.to_string(),
                 models: fetched.models,
                 error: fetched.error,
+            },
+        },
+    )
+    .await?;
+    // The loaded/running markers ride in their own frame (new capability,
+    // new frame — the wire format is positional bincode).
+    send_frame(
+        writer,
+        &ServerFrame {
+            frame_type: ServerFrameType::ProviderModelLoadedList,
+            payload: ServerPayload::ProviderModelLoadedList {
+                provider: provider.to_string(),
                 loaded: fetched.loaded,
             },
         },

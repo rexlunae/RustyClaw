@@ -354,8 +354,17 @@ pub enum GatewayEvent {
         provider: String,
         models: Vec<String>,
         error: Option<String>,
-        /// Models the local engine reports as loaded/running (picker markers).
+    },
+    /// Which of a provider's models are loaded/running (sent after
+    /// `ProviderModelListResult`; pickers use it to mark running models).
+    ProviderModelLoadedList {
+        provider: String,
         loaded: Vec<String>,
+    },
+    /// Full per-engine configuration keyed by engine id (sent after
+    /// `EngineListResult`).
+    EngineConfigList {
+        configs: std::collections::HashMap<String, crate::engines::EngineConfig>,
     },
     /// Engine pull progress (streaming).
     EnginePullProgress {
@@ -2082,13 +2091,17 @@ impl GatewayEvent {
                 provider,
                 models,
                 error,
-                loaded,
             } => Some(GatewayEvent::ProviderModelListResult {
                 provider,
                 models,
                 error,
-                loaded,
             }),
+            ServerPayload::ProviderModelLoadedList { provider, loaded } => {
+                Some(GatewayEvent::ProviderModelLoadedList { provider, loaded })
+            }
+            ServerPayload::EngineConfigList { configs } => {
+                Some(GatewayEvent::EngineConfigList { configs })
+            }
             ServerPayload::EnginePullProgress {
                 engine,
                 model,

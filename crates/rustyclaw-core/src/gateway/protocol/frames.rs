@@ -408,6 +408,14 @@ pub enum ServerFrameType {
     /// encodes these enums by declaration order, so new types go last even
     /// though the `= N` values already diverge from the indices.
     ToolGroupsResult = 95,
+    /// Full per-engine configuration, sent right after `EngineListResult`
+    /// (new frame rather than a widened `EngineInfoDto`: the wire format is
+    /// positional bincode, so adding a field to an existing payload breaks
+    /// older peers — see `docs/PLUGIN_ARCHITECTURE.md`).
+    EngineConfigList = 96,
+    /// Which models a provider's list reports as loaded/running, sent right
+    /// after `ProviderModelListResult`.  New frame for the same reason.
+    ProviderModelLoadedList = 97,
 }
 
 /// Status frame sub-types.
@@ -1640,11 +1648,6 @@ pub enum ServerPayload {
         provider: String,
         models: Vec<String>,
         error: Option<String>,
-        /// Models the local engine reports as loaded/running (a subset of
-        /// `models`); pickers use it to mark running models.  Appended last
-        /// (positional bincode); empty for cloud providers.
-        #[serde(default)]
-        loaded: Vec<String>,
     },
     /// The full plugin list with each plugin's current state. Sent on connect,
     /// on request, and after a refresh.
@@ -1696,6 +1699,18 @@ pub enum ServerPayload {
     /// `ToolGroupsList` and `ToolGroupSetEnabled`.
     ToolGroupsResult {
         groups: Vec<ToolGroupDto>,
+    },
+    /// Full per-engine configuration (parameters, default model, extra
+    /// args), keyed by engine id.  Sent after `EngineListResult`.
+    EngineConfigList {
+        configs: std::collections::HashMap<String, crate::engines::EngineConfig>,
+    },
+    /// Models the local engine reports as loaded/running, sent after
+    /// `ProviderModelListResult` (a subset of that frame's `models`; empty
+    /// for cloud providers).
+    ProviderModelLoadedList {
+        provider: String,
+        loaded: Vec<String>,
     },
 }
 

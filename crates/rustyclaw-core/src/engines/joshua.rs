@@ -387,13 +387,19 @@ impl LocalEngine for JoshuaEngine {
         if Self::is_running(&endpoint).await {
             return Ok("joshua is already running.".into());
         }
-        // A joshua started outside RustyClaw is running on another port —
-        // don't spawn a second server; point the user at the running one.
-        if let Some((_, port)) = Self::running_servers().await.first() {
+        // Only a server on this engine's own port counts as "already
+        // running": a joshua started outside RustyClaw on another port must
+        // not prevent the configured server from starting.
+        let configured_port = cfg.port.unwrap_or(DEFAULT_PORT);
+        if let Some((_, port)) = Self::running_servers()
+            .await
+            .iter()
+            .find(|(_, port)| *port == Some(configured_port))
+        {
             return Ok(format!(
-                "joshua is already running outside RustyClaw (detected on port {}). \
-                 Configure the engine's port to that server to manage it.",
-                port.unwrap_or(8080)
+                "joshua is already running on port {} (detected outside RustyClaw). \
+                 Stop it manually or choose another port for this engine.",
+                port.unwrap_or(configured_port)
             ));
         }
         let model_path = resolve_model_path(cfg)?;

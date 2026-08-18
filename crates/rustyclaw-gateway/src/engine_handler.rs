@@ -131,14 +131,28 @@ async fn handle_engine_list(
             available_models: available,
             loaded_models: loaded,
             capabilities: engine.capabilities().into(),
-            config: cfg,
         });
     }
-    let frame = ServerFrame {
-        frame_type: ServerFrameType::EngineListResult,
-        payload: ServerPayload::EngineListResult { engines },
-    };
-    send_frame(writer, &frame).await
+    send_frame(
+        writer,
+        &ServerFrame {
+            frame_type: ServerFrameType::EngineListResult,
+            payload: ServerPayload::EngineListResult { engines },
+        },
+    )
+    .await?;
+    // The full per-engine configuration rides in its own frame (new
+    // capability, new frame — the wire format is positional bincode).
+    send_frame(
+        writer,
+        &ServerFrame {
+            frame_type: ServerFrameType::EngineConfigList,
+            payload: ServerPayload::EngineConfigList {
+                configs: configs.clone(),
+            },
+        },
+    )
+    .await
 }
 
 /// Build and send an `EngineActionProgress` frame carrying one output line.
