@@ -237,6 +237,20 @@ esac
 
 has() { command -v "$1" &>/dev/null; }
 
+# Whether libxdo can actually be linked against — which is all rustyclaw-desktop
+# needs of it (muda → libxdo-sys, whose entire build script is
+# `cargo:rustc-link-lib=xdo`; no headers are probed, no pkg-config consulted).
+# Several distros ship no libxdo.pc for pkg-config to find — notably
+# Debian/Ubuntu, where libxdo-dev installs only xdo.h and the .so — so when
+# pkg-config comes up empty, ask the compiler whether `-lxdo` resolves.
+have_libxdo() {
+    if pkg-config --exists "libxdo" 2>/dev/null; then
+        return 0
+    fi
+    has cc || return 1
+    printf 'int main(void){return 0;}\n' | cc -xc - -o /dev/null -lxdo 2>/dev/null
+}
+
 # ── Desktop launcher integration ────────────────────────────────────────────
 # Register the desktop client with the OS application launcher, with the app
 # icon: a .desktop entry + hicolor icon on Linux, a ~/Applications/RustyClaw.app
@@ -757,17 +771,26 @@ if should_install rustyclaw; then
             if has apt-get; then
                 info "Installing Debian/Ubuntu build deps..."
                 sudo apt-get update -qq
+                # libjavascriptcoregtk-4.1-dev is a Depends of
+                # libwebkit2gtk-4.1-dev today, but it owns the
+                # javascriptcoregtk-4.1.pc file the build's system-deps probe
+                # needs, so it is named explicitly rather than hoped for.
                 sudo apt-get install -y -qq \
                     build-essential pkg-config libssl-dev \
-                    libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
+                    libglib2.0-dev libgtk-3-dev \
+                    libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libxdo-dev \
                     2>/dev/null || true
                 success "Debian/Ubuntu build deps ready"
             elif has dnf; then
                 info "Installing Fedora/RHEL build deps..."
                 sudo dnf install -y -q \
                     gcc pkg-config openssl-devel \
-                    glib2-devel gtk3-devel webkit2gtk4.1-devel xdotool-devel \
+                    glib2-devel gtk3-devel webkit2gtk4.1-devel \
                     2>/dev/null || true
+                # Newer Fedora releases split xdotool and ship the xdo dev
+                # files as libxdo-devel; older ones called it xdotool-devel.
+                sudo dnf install -y -q libxdo-devel 2>/dev/null \
+                    || sudo dnf install -y -q xdotool-devel 2>/dev/null || true
                 success "Fedora/RHEL build deps ready"
             elif has pacman; then
                 info "Installing Arch build deps..."
@@ -818,16 +841,31 @@ if should_install rustyclaw; then
                     # JavaScriptCore + WebKitGTK 4.1 + libxdo; if they're
                     # missing the cargo build fails only after several minutes
                     # of compile time, so fail fast here with install
-                    # instructions instead.
-                    if pkg-config --exists "javascriptcoregtk-4.1" && pkg-config --exists "libxdo"; then
+                    # instructions instead. The two probes are reported
+                    # separately: Debian/Ubuntu's libxdo-dev ships no
+                    # libxdo.pc, so a single combined pkg-config check would
+                    # call a perfectly buildable machine incomplete.
+                    jsc_found=false
+                    pkg-config --exists "javascriptcoregtk-4.1" && jsc_found=true
+                    xdo_found=false
+                    have_libxdo && xdo_found=true
+
+                    if [[ "$jsc_found" == true && "$xdo_found" == true ]]; then
                         success "JavaScriptCore + libxdo development packages detected"
                     else
-                        err "WebKitGTK/JavaScriptCore 4.1 and libxdo dev packages not found — rustyclaw-desktop cannot build without them"
-                        err "Install them, e.g.:"
-                        err "  Debian/Ubuntu: sudo apt-get install libwebkit2gtk-4.1-dev libxdo-dev"
-                        err "  Fedora:        sudo dnf install webkit2gtk4.1-devel xdotool-devel"
-                        err "  Arch:          sudo pacman -S webkit2gtk-4.1 xdotool"
-                        err "  Alpine:        sudo apk add webkit2gtk-dev xdotool-dev"
+                        if [[ "$jsc_found" == false ]]; then
+                            err "JavaScriptCore 4.1 development files not found — rustyclaw-desktop cannot build without them"
+                            err "  Debian/Ubuntu: sudo apt-get install libjavascriptcoregtk-4.1-dev"
+                            err "  Fedora:        sudo dnf install javascriptcoregtk4.1-devel"
+                            err "  Arch/Alpine:   included in webkit2gtk-4.1 / webkit2gtk-dev"
+                        fi
+                        if [[ "$xdo_found" == false ]]; then
+                            err "libxdo development files not found (no linker-visible -lxdo) — rustyclaw-desktop cannot build without it"
+                            err "  Debian/Ubuntu: sudo apt-get install libxdo-dev"
+                            err "  Fedora:        sudo dnf install libxdo-devel"
+                            err "  Arch:          sudo pacman -S xdotool"
+                            err "  Alpine:        sudo apk add xdotool-dev"
+                        fi
                         err ""
                         err "Or build without the GUI client: --clients cli gateway tui"
                         exit 1

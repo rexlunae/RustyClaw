@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **setup.sh no longer refuses to build the desktop client on Debian/Ubuntu.**
+  The WebKitGTK/JavaScriptCore/libxdo pre-flight gate checked all three with
+  pkg-config, but Debian and Ubuntu's `libxdo-dev` package ships no
+  `libxdo.pc` at all (just `xdo.h` and the `.so`) — so on an Ubuntu box with
+  every required package correctly installed, setup still aborted with "dev
+  packages not found" even though `cargo build` would have succeeded: the
+  actual link requirement is plain `-lxdo` (`libxdo-sys`'s entire build script
+  is `cargo:rustc-link-lib=xdo`; no pkg-config involved). libxdo is now
+  detected by asking the compiler whether `-lxdo` resolves when pkg-config has
+  nothing to say, which also covers distros that ship the pc file under a
+  different name. The combined check was split into per-package probes, so a
+  failure now names the missing piece (JavaScriptCore 4.1 vs libxdo) with its
+  own install line instead of lumping both together. Two adjacent latent bugs
+  fixed in passing: `libjavascriptcoregtk-4.1-dev` — which owns the
+  `javascriptcoregtk-4.1.pc` file the build's system-deps probe needs — is now
+  installed explicitly instead of being relied on as a transitive Depends of
+  `libwebkit2gtk-4.1-dev`; and Fedora's xdo dev package is installed as its
+  current name `libxdo-devel` (falling back to `xdotool-devel`, since the
+  rename left older releases with no match for the new name).
+
 ### Added
 
 - **Configurable model-call deadline.** The gateway's per-turn model call
