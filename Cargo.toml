@@ -89,7 +89,7 @@ openssl-sys = { version = "0.9", features = ["vendored"] }
 totp-rs = { version = "5.7", features = ["gen_secret", "otpauth"] }
 
 # QR code generation for TOTP enrollment
-qrcode = { version = "0.14", default-features = false }
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
 
 # SSH key generation (Ed25519)
 ssh-key = { version = "0.7.0-rc.10", features = ["ed25519", "std", "rand_core"] }
